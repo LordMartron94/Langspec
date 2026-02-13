@@ -104,7 +104,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 	p := pratt.PrattParserCreate[rune, Token, TokenRole, NodeKind, LexerState]()
 
-	p.RegisterPrefix(NumberTok, func(ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
+	p.RegisterPrefix(NumberTok, func(ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
 		lex := ctx.Consume()
 		n := ctx.CreateASTNode()
 		n.NodeKind = NumberExpr
@@ -112,7 +112,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 		return n
 	})
 
-	p.RegisterPrefix(IdentTok, func(ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
+	p.RegisterPrefix(IdentTok, func(ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
 		lex := ctx.Consume()
 		n := ctx.CreateASTNode()
 		n.NodeKind = IdentExpr
@@ -120,7 +120,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 		return n
 	})
 
-	p.RegisterPrefix(LParenTok, func(ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
+	p.RegisterPrefix(LParenTok, func(ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
 		ctx.Consume()
 		e := p.ParseExpr(ctx, 0)
 		ctx.Match(RParenTok)
@@ -128,7 +128,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 	})
 
 	parseBinary := func(
-		ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind],
 		left *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind],
 		rbp int,
 	) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
@@ -150,7 +150,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 	p.RegisterInfix(StarTok, 20, pratt.Left, parseBinary)
 
 	p.RegisterPostfix(LParenTok, 30, func(
-		ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind],
+		ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind],
 		left *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind],
 	) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
 
@@ -166,12 +166,11 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 	// ---------- Grammar (IDENTICAL to Syntaxa test) ----------
 
-	selector := func(ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind]) syntaxa.ParserRule[rune, Token, TokenRole, LexerState, NodeKind] {
-		ctx.PushSkipRoles(TriviaRole)
-		// defer ctx.PopSkipRoles()
-
-		expr := func(ctx syntaxa.RuleContext[rune, Token, TokenRole, LexerState, NodeKind]) (*syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind], bool) {
-			n := p.ParseExpr(ctx, 0)
+	selector := func(selectCtx syntaxa.SelectRuleContext[rune, Token, TokenRole]) syntaxa.ParserRule[rune, Token, TokenRole, LexerState, NodeKind] {
+		expr := func(execCtx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) (*syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind], bool) {
+			execCtx.PushSkipRoles(TriviaRole)
+			defer execCtx.PopSkipRoles()
+			n := p.ParseExpr(execCtx, 0)
 			return n, n != nil
 		}
 

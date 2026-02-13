@@ -466,7 +466,7 @@ func LangParserParseFile[
 	}
 	syntaxErrors := &syntaxa.SyntaxErrors{Errors: make([]syntaxa.SyntaxError, 0)}
 
-	var parsingContext syntaxa.RuleContext[
+	var parsingContext syntaxa.ExecRuleContext[
 		TObservation,
 		TToken,
 		TTokenRole,
@@ -516,12 +516,12 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	mapFn func([]byte) ([]TObservation, error),
 	syntaxErrors *syntaxa.SyntaxErrors,
 ) (
-	syntaxa.RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	error,
 ) {
 	sourceInput, err := getSourceInput(sourceFile, mapFn)
 	if err != nil {
-		var zero syntaxa.RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+		var zero syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		return zero, fmt.Errorf("could not decode source-file: %w", err)
 	}
 
@@ -531,7 +531,7 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 		langParser.config.spec.Lexer.newlineDetect,
 	)
 
-	parsingContext := syntaxa.BuildRuleContextFromLexerSession(
+	parsingContext := syntaxa.BuildExecRuleContextFromLexerSession(
 		langParser.parser,
 		langParser.lexer,
 		lexingSession,
@@ -552,7 +552,7 @@ func buildStreamingParsingContext[
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
 	syntaxErrors *syntaxa.SyntaxErrors,
-) (syntaxa.RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
+) (syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
 	producer, err := newFileObservationProducer(
 		sourceFile,
 		mapFn,
@@ -560,7 +560,7 @@ func buildStreamingParsingContext[
 	)
 
 	if err != nil {
-		var zero syntaxa.RuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+		var zero syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 		return zero, fmt.Errorf("FS: open failed: %w", err)
 	}
 
@@ -572,7 +572,7 @@ func buildStreamingParsingContext[
 		langParser.config.streaming.MaxBuffered,
 	)
 
-	parsingContext := syntaxa.BuildRuleContextFromStreamingSession(
+	parsingContext := syntaxa.BuildExecRuleContextFromStreamingSession(
 		langParser.parser,
 		langParser.lexer,
 		lexingSession,
