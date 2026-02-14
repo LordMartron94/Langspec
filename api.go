@@ -57,8 +57,9 @@ type ParserSpec[
 	TLexerState,
 	TNodeKind comparable,
 ] struct {
-	ruleSelector syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	rootNodeKind TNodeKind
+	ruleSelector  syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	rootNodeKind  TNodeKind
+	errorNodeKind TNodeKind
 }
 
 /* ParserSpecCreate constructs a parser specification. */
@@ -69,12 +70,13 @@ func ParserSpecCreate[
 	TLexerState,
 	TNodeKind comparable,
 ](
-	rootNodeKind TNodeKind,
+	rootNodeKind, errorNodeKind TNodeKind,
 	selector syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		ruleSelector: selector,
-		rootNodeKind: rootNodeKind,
+		ruleSelector:  selector,
+		rootNodeKind:  rootNodeKind,
+		errorNodeKind: errorNodeKind,
 	}
 }
 
@@ -400,6 +402,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 	parser := syntaxa.SyntaxaParserCreate(
 		config.spec.Parser.ruleSelector,
 		config.spec.Parser.rootNodeKind,
+		config.spec.Parser.errorNodeKind,
 	)
 
 	return &LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind]{
@@ -460,11 +463,9 @@ func LangParserParseFile[
 		return nil, nil, fmt.Errorf("source file non-existent: %s", sourceFile)
 	}
 
-	rootNode := &syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]{
-		NodeKind: langParser.config.spec.Parser.rootNodeKind,
-		Children: make([]*syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind], 0),
+	syntaxErrors := &syntaxa.SyntaxErrors{
+		Errors: make([]syntaxa.SyntaxError, 0),
 	}
-	syntaxErrors := &syntaxa.SyntaxErrors{Errors: make([]syntaxa.SyntaxError, 0)}
 
 	var parsingContext syntaxa.ExecRuleContext[
 		TObservation,
@@ -497,6 +498,10 @@ func LangParserParseFile[
 		}
 		parsingContext = ctx
 	}
+
+	rootNode := parsingContext.Editor.NewNode(
+		langParser.config.spec.Parser.rootNodeKind,
+	)
 
 	syntaxa.SyntaxaParserParseWithContext(
 		langParser.parser,

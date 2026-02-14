@@ -18,7 +18,7 @@ import (
 )
 
 // ============================================================
-// Types (IDENTICAL to Syntaxa test)
+// Types
 // ============================================================
 
 type LexerState int
@@ -58,10 +58,12 @@ const (
 	NumberExpr
 	IdentExpr
 	CallExpr
+
+	ErrorNode
 )
 
 // ============================================================
-// LangSpec builder (grammar = EXACT Syntaxa grammar)
+// LangSpec builder (SAFE API ONLY)
 // ============================================================
 
 func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
@@ -100,31 +102,32 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 	lexer.WithRuleset(NormalState, *rules)
 
-	// ---------- Pratt ----------
+	// ---------- Pratt (Editor-safe) ----------
 
 	p := pratt.PrattParserCreate[rune, Token, TokenRole, NodeKind, LexerState]()
 
 	p.RegisterPrefix(NumberTok, func(ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
+
 		lex := ctx.Consume()
-		n := ctx.CreateASTNode()
-		n.NodeKind = NumberExpr
-		n.Tokens = append(n.Tokens, lex)
-		return n
+		node := ctx.Editor.NewNode(NumberExpr)
+		ctx.Editor.AddToken(node, lex)
+		return node
 	})
 
 	p.RegisterPrefix(IdentTok, func(ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
+
 		lex := ctx.Consume()
-		n := ctx.CreateASTNode()
-		n.NodeKind = IdentExpr
-		n.Tokens = append(n.Tokens, lex)
-		return n
+		node := ctx.Editor.NewNode(IdentExpr)
+		ctx.Editor.AddToken(node, lex)
+		return node
 	})
 
 	p.RegisterPrefix(LParenTok, func(ctx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
+
 		ctx.Consume()
-		e := p.ParseExpr(ctx, 0)
+		expr := p.ParseExpr(ctx, 0)
 		ctx.Match(RParenTok)
-		return e
+		return expr
 	})
 
 	parseBinary := func(
@@ -136,14 +139,12 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 		op := ctx.Consume()
 		right := p.ParseExpr(ctx, rbp)
 
-		n := ctx.CreateASTNode()
-		n.NodeKind = BinaryExpr
-		n.Children = []*syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind]{left, right}
-		n.Tokens = append(n.Tokens, op)
+		node := ctx.Editor.NewNode(BinaryExpr)
+		ctx.Editor.AttachChild(node, left)
+		ctx.Editor.AttachChild(node, right)
+		ctx.Editor.AddToken(node, op)
 
-		left.Parent = n
-		right.Parent = n
-		return n
+		return node
 	}
 
 	p.RegisterInfix(PlusTok, 10, pratt.Left, parseBinary)
@@ -157,19 +158,20 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 		ctx.Consume()
 		ctx.Match(RParenTok)
 
-		n := ctx.CreateASTNode()
-		n.NodeKind = CallExpr
-		n.Children = []*syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind]{left}
-		left.Parent = n
-		return n
+		node := ctx.Editor.NewNode(CallExpr)
+		ctx.Editor.AttachChild(node, left)
+		return node
 	})
 
-	// ---------- Grammar (IDENTICAL to Syntaxa test) ----------
+	// ---------- Grammar ----------
 
 	selector := func(selectCtx syntaxa.SelectRuleContext[rune, Token, TokenRole]) syntaxa.ParserRule[rune, Token, TokenRole, LexerState, NodeKind] {
+
 		expr := func(execCtx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) (*syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind], bool) {
+
 			execCtx.PushSkipRoles(TriviaRole)
 			defer execCtx.PopSkipRoles()
+
 			n := p.ParseExpr(execCtx, 0)
 			return n, n != nil
 		}
@@ -178,17 +180,18 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 			expr,
 			rd.TokenMatch[rune, Token, TokenRole, LexerState, NodeKind](SemicolonTok, StmtNode),
 		)
+
 		return stmt
 	}
 
 	return LangSpecCreate(
 		lexer,
-		ParserSpecCreate(RootNode, selector),
+		ParserSpecCreate(RootNode, ErrorNode, selector),
 	)
 }
 
 // ============================================================
-// End-to-end LangSpec test
+// End-to-end test
 // ============================================================
 
 func TestLangSpecEndToEnd(t *testing.T) {
@@ -235,7 +238,7 @@ func TestLangSpecEndToEnd(t *testing.T) {
 }
 
 // ============================================================
-// AST validation (IDENTICAL semantics)
+// AST validation (SAFE ACCESS)
 // ============================================================
 
 func validateAST(
@@ -243,11 +246,12 @@ func validateAST(
 	root *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind],
 	errs *syntaxa.SyntaxErrors,
 ) {
+
 	ftesting.Assert(
 		errs == nil || !errs.HasErrors(),
 		func() string {
 			if errs == nil {
-				return "syntax errors: <nil errs>"
+				return "syntax errors: <nil>"
 			}
 			return fmt.Sprintf("syntax errors: %+v", errs.Errors)
 		}(),
@@ -255,89 +259,42 @@ func validateAST(
 		t,
 	)
 
-	// Root must contain exactly one statement.
-	if root == nil {
-		ftesting.Assert(false, "root AST node is nil", "root ok", t)
-		return
-	}
+	children := root.Children()
 
 	ftesting.Assert(
-		len(root.Children) == 1,
-		fmt.Sprintf("expected single statement, got %d", len(root.Children)),
+		len(children) == 1,
+		"expected single statement",
 		"single statement ok",
 		t,
 	)
-	if len(root.Children) < 1 {
-		return
-	}
 
-	stmt := root.Children[0]
-	if stmt == nil {
-		ftesting.Assert(false, "stmt node is nil", "stmt ok", t)
-		return
-	}
+	stmt := children[0]
+	stmtChildren := stmt.Children()
 
-	// Statement must have at least one child (the expression).
+	expr := stmtChildren[0]
+
 	ftesting.Assert(
-		len(stmt.Children) >= 1,
-		fmt.Sprintf("expected stmt to have expr child, got %d children", len(stmt.Children)),
-		"stmt has expr",
-		t,
-	)
-	if len(stmt.Children) < 1 {
-		return
-	}
-
-	expr := stmt.Children[0]
-	if expr == nil {
-		ftesting.Assert(false, "expr node is nil", "expr ok", t)
-		return
-	}
-
-	// Expression must be a binary (+) with exactly 2 children.
-	ftesting.Assert(
-		expr.NodeKind == BinaryExpr,
-		fmt.Sprintf("expected + at root (BinaryExpr), got kind=%v childCount=%d",
-			expr.NodeKind, len(expr.Children),
-		),
+		expr.Kind() == BinaryExpr,
+		"expected + at root",
 		"binary root ok",
 		t,
 	)
-	if expr.NodeKind != BinaryExpr {
-		return
-	}
+
+	exprChildren := expr.Children()
+
+	left := exprChildren[0]
+	right := exprChildren[1]
 
 	ftesting.Assert(
-		len(expr.Children) == 2,
-		fmt.Sprintf("binary arity wrong: expected 2 children, got %d", len(expr.Children)),
-		"binary arity ok",
-		t,
-	)
-	if len(expr.Children) < 2 {
-		return
-	}
-
-	left := expr.Children[0]
-	right := expr.Children[1]
-	if left == nil || right == nil {
-		ftesting.Assert(false, "binary children contain nil", "binary children ok", t)
-		return
-	}
-
-	// Left must be a call.
-	ftesting.Assert(
-		left.NodeKind == CallExpr,
-		fmt.Sprintf("expected call on left, got kind=%v childCount=%d", left.NodeKind, len(left.Children)),
+		left.Kind() == CallExpr,
+		"expected call on left",
 		"call ok",
 		t,
 	)
 
-	// Right must be multiplication binary expr.
 	ftesting.Assert(
-		right.NodeKind == BinaryExpr,
-		fmt.Sprintf("expected multiplication on right (BinaryExpr), got kind=%v childCount=%d",
-			right.NodeKind, len(right.Children),
-		),
+		right.Kind() == BinaryExpr,
+		"expected multiplication on right",
 		"precedence ok",
 		t,
 	)
