@@ -165,20 +165,35 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 	// ---------- Grammar ----------
 
-	selector := func(selectCtx syntaxa.SelectRuleContext[rune, Token, TokenRole]) syntaxa.ParserRule[rune, Token, TokenRole, LexerState, NodeKind] {
+	selector := func(
+		selectCtx syntaxa.SelectRuleContext[rune, Token, TokenRole],
+	) syntaxa.ParserRule[rune, Token, TokenRole, LexerState, NodeKind] {
 
-		expr := func(execCtx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind]) (*syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind], bool) {
+		// ---------------- Expression ----------------
+
+		expr := func(
+			execCtx syntaxa.ExecRuleContext[rune, Token, TokenRole, LexerState, NodeKind],
+		) (syntaxa.RuleResult[rune, Token, TokenRole, NodeKind], bool) {
 
 			execCtx.PushSkipRoles(TriviaRole)
 			defer execCtx.PopSkipRoles()
 
 			n := p.ParseExpr(execCtx, 0)
-			return n, n != nil
+			if n == nil {
+				return rd.NoNode[rune, Token, TokenRole, NodeKind](), false
+			}
+
+			return rd.NodeResult[rune, Token, TokenRole, NodeKind](n), true
 		}
 
-		stmt := rd.Sequence(
-			expr,
-			rd.TokenMatch[rune, Token, TokenRole, LexerState, NodeKind](SemicolonTok, StmtNode),
+		// ---------------- Statement ----------------
+
+		stmt := rd.TopLevel(
+			rd.SequenceAs(
+				StmtNode,
+				expr,
+				rd.Tok[rune, Token, TokenRole, LexerState, NodeKind](SemicolonTok),
+			),
 		)
 
 		return stmt
