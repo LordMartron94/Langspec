@@ -60,6 +60,8 @@ type ParserSpec[
 	ruleSelector  syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
+
+	freezeAfterParse bool
 }
 
 /* ParserSpecCreate constructs a parser specification. */
@@ -72,11 +74,13 @@ func ParserSpecCreate[
 ](
 	rootNodeKind, errorNodeKind TNodeKind,
 	selector syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	freezeAfterParse bool,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		ruleSelector:  selector,
-		rootNodeKind:  rootNodeKind,
-		errorNodeKind: errorNodeKind,
+		ruleSelector:     selector,
+		rootNodeKind:     rootNodeKind,
+		errorNodeKind:    errorNodeKind,
+		freezeAfterParse: freezeAfterParse,
 	}
 }
 
@@ -403,6 +407,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		config.spec.Parser.ruleSelector,
 		config.spec.Parser.rootNodeKind,
 		config.spec.Parser.errorNodeKind,
+		config.spec.Parser.freezeAfterParse,
 	)
 
 	return &LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind]{

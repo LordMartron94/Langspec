@@ -201,7 +201,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 	return LangSpecCreate(
 		lexer,
-		ParserSpecCreate(RootNode, ErrorNode, selector),
+		ParserSpecCreate(RootNode, ErrorNode, selector, true),
 	)
 }
 
