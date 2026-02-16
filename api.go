@@ -50,6 +50,9 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRuleset(
 
 // ------------------------------------------------------------ PARSER SPEC
 
+/* ParserSyntaxErrorHook is an optional hook that runs post-parsing to process syntax errors. */
+type ParserSyntaxErrorHook func(errors *syntaxa.SyntaxErrors) error
+
 /* ParserSpec defines the grammar and AST contract. */
 type ParserSpec[
 	TObservation cmp.Ordered,
@@ -61,6 +64,8 @@ type ParserSpec[
 	ruleSelector  syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
+
+	errorHook ParserSyntaxErrorHook
 
 	freezeAfterParse bool
 }
@@ -82,7 +87,16 @@ func ParserSpecCreate[
 		rootNodeKind:     rootNodeKind,
 		errorNodeKind:    errorNodeKind,
 		freezeAfterParse: freezeAfterParse,
+		errorHook:        nil,
 	}
+}
+
+/* WithErrorHook configures the post-processor for the error hook. */
+func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithErrorHook(
+	hook ParserSyntaxErrorHook,
+) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	p.errorHook = hook
+	return p
 }
 
 // ------------------------------------------------------------ LANGUAGE SPEC
@@ -543,6 +557,13 @@ func LangParserParseFile[
 		rootNode,
 		langParser.config.spec.Lexer.eofToken,
 	)
+
+	errorHook := langParser.config.spec.Parser.errorHook
+	if errorHook != nil {
+		if err := errorHook(syntaxErrors); err != nil {
+			return rootNode, syntaxErrors, err
+		}
+	}
 
 	return rootNode, syntaxErrors, nil
 }
