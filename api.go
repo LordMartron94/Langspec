@@ -387,6 +387,9 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 	lexer  *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole]
 	parser *syntaxa.SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 
+	lexingSessionCache          *lexarch.LexerSession[TObservation, TLexerState]
+	lexingStreamingSessionCache *lexarch.StreamingLexerSession[TObservation, TLexerState]
+
 	destroyed atomic.Bool
 }
 
@@ -548,11 +551,7 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 		return zero, fmt.Errorf("could not decode source-file: %w", err)
 	}
 
-	lexingSession := lexarch.LexerSessionCreate(
-		langParser.config.spec.Lexer.initialState,
-		sourceInput,
-		langParser.config.spec.Lexer.newlineDetect,
-	)
+	lexingSession := getLexerSession(langParser, sourceInput)
 
 	parsingContext := syntaxa.BuildExecRuleContextFromLexerSession(
 		langParser.parser,
@@ -562,6 +561,24 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	)
 
 	return parsingContext, nil
+}
+
+func getLexerSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
+	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
+	sourceInput []TObservation,
+) *lexarch.LexerSession[TObservation, TLexerState] {
+	if langParser.lexingSessionCache == nil {
+		session := lexarch.LexerSessionCreate(
+			langParser.config.spec.Lexer.initialState,
+			sourceInput,
+			langParser.config.spec.Lexer.newlineDetect,
+		)
+		langParser.lexingSessionCache = session
+		return session
+	}
+
+	langParser.lexingSessionCache.Reset(sourceInput, langParser.config.spec.Lexer.initialState)
+	return langParser.lexingSessionCache
 }
 
 func buildStreamingParsingContext[
@@ -587,13 +604,7 @@ func buildStreamingParsingContext[
 		return zero, fmt.Errorf("FS: open failed: %w", err)
 	}
 
-	lexingSession := lexarch.StreamingLexerSessionCreate(
-		langParser.config.spec.Lexer.initialState,
-		producer,
-		langParser.config.spec.Lexer.newlineDetect,
-		langParser.config.streaming.ReadChunkSize,
-		langParser.config.streaming.MaxBuffered,
-	)
+	lexingSession := getLexerStreamingSession(langParser, producer)
 
 	parsingContext := syntaxa.BuildExecRuleContextFromStreamingSession(
 		langParser.parser,
@@ -603,6 +614,26 @@ func buildStreamingParsingContext[
 	)
 
 	return parsingContext, nil
+}
+
+func getLexerStreamingSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
+	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
+	producer lexarch.ObservationProducerFn[TObservation],
+) *lexarch.StreamingLexerSession[TObservation, TLexerState] {
+	if langParser.lexingStreamingSessionCache == nil {
+		session := lexarch.StreamingLexerSessionCreate(
+			langParser.config.spec.Lexer.initialState,
+			producer,
+			langParser.config.spec.Lexer.newlineDetect,
+			langParser.config.streaming.ReadChunkSize,
+			langParser.config.streaming.MaxBuffered,
+		)
+		langParser.lexingStreamingSessionCache = session
+		return session
+	}
+
+	langParser.lexingStreamingSessionCache.Reset(producer, langParser.config.spec.Lexer.initialState)
+	return langParser.lexingStreamingSessionCache
 }
 
 func newFileObservationProducer[TObservation cmp.Ordered](

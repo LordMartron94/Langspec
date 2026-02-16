@@ -233,11 +233,10 @@ func TestLangSpecEndToEnd(t *testing.T) {
 	tmp.WriteString(source)
 	tmp.Close()
 
+	parser := LangParserCreate(cfg)
+	defer LangParserDestroy(parser)
+
 	for _, streaming := range []bool{false, true} {
-
-		parser := LangParserCreate(cfg)
-		defer LangParserDestroy(parser)
-
 		root, errs, err := LangParserParseFile(
 			parser,
 			tmp.Name(),
