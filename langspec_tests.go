@@ -236,12 +236,18 @@ func TestLangSpecEndToEnd(t *testing.T) {
 	parser := LangParserCreate(cfg)
 	defer LangParserDestroy(parser)
 
+	session := LangParserSessionCreate[rune](
+		tmp.Name(),
+		nil,
+		false,
+	)
+
 	for _, streaming := range []bool{false, true} {
+		session.Reset(tmp.Name(), nil, streaming)
+
 		root, errs, err := LangParserParseFile(
 			parser,
-			tmp.Name(),
-			nil,
-			streaming,
+			session,
 		)
 
 		if err != nil {
