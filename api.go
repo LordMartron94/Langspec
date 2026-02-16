@@ -472,36 +472,9 @@ func LangParserParseFile[
 		Errors: make([]syntaxa.SyntaxError, 0),
 	}
 
-	var parsingContext syntaxa.ExecRuleContext[
-		TObservation,
-		TToken,
-		TTokenRole,
-		TLexerState,
-		TNodeKind,
-	]
-
-	if !streaming {
-		ctx, err := buildSequentialParsingContext(
-			langParser,
-			sourceFile,
-			mapFn,
-			syntaxErrors,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		parsingContext = ctx
-	} else {
-		ctx, err := buildStreamingParsingContext(
-			langParser,
-			sourceFile,
-			mapFn,
-			syntaxErrors,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		parsingContext = ctx
+	parsingContext, err := getParsingContext(langParser, sourceFile, mapFn, syntaxErrors, streaming)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	rootNode := parsingContext.Editor.NewNode(
@@ -519,6 +492,48 @@ func LangParserParseFile[
 }
 
 // ---------------------------------------------------------------- PRIVATE HELPERS
+
+func getParsingContext[
+	TObservation cmp.Ordered,
+	TLexerState,
+	TToken,
+	TTokenRole,
+	TNodeKind comparable,
+](
+	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
+	sourceFile string,
+	mapFn func([]byte) ([]TObservation, error),
+	syntaxErrors *syntaxa.SyntaxErrors,
+	streaming bool,
+) (syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
+	var parsingContext syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+
+	if !streaming {
+		ctx, err := buildSequentialParsingContext(
+			langParser,
+			sourceFile,
+			mapFn,
+			syntaxErrors,
+		)
+		if err != nil {
+			return parsingContext, err
+		}
+		parsingContext = ctx
+	} else {
+		ctx, err := buildStreamingParsingContext(
+			langParser,
+			sourceFile,
+			mapFn,
+			syntaxErrors,
+		)
+		if err != nil {
+			return parsingContext, err
+		}
+		parsingContext = ctx
+	}
+
+	return parsingContext, nil
+}
 
 func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
