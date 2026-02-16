@@ -70,7 +70,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 	// ---------- Lexer ----------
 
-	lexer := LexerSpecCreate[rune, Token, TokenRole, LexerState](
+	lexer := LexerSpecCreate[rune, Token, TokenRole](
 		ErrorTok,
 		EOFToken,
 		NormalState,
@@ -183,7 +183,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 				return rd.NoNode[rune, Token, TokenRole, NodeKind](), false
 			}
 
-			return rd.NodeResult[rune, Token, TokenRole, NodeKind](n), true
+			return rd.NodeResult(n), true
 		}
 
 		// ---------------- Statement ----------------
@@ -213,18 +213,74 @@ func TestLangSpecEndToEnd(t *testing.T) {
 
 	spec := buildLangSpec()
 
+	// ---------------- Add AST validation stage ----------------
+
+	spec.Parser.WithValidationStages(
+		ASTValidationStageCreate(
+			"ast-structure",
+			"Validates expression tree shape and precedence",
+			0,
+			func(ctx *ASTValidationStageContext[rune, Token, TokenRole, NodeKind]) {
+
+				root := ctx.RootNode
+				children := root.Children()
+
+				if len(children) != 1 {
+					ctx.ReportFatal("AST001", "expected single statement", root)
+					return
+				}
+
+				stmt := children[0]
+				stmtChildren := stmt.Children()
+
+				expr := stmtChildren[0]
+
+				if expr.Kind() != BinaryExpr {
+					ctx.ReportFatal("AST002", "expected + at root", expr)
+					return
+				}
+
+				exprChildren := expr.Children()
+				left := exprChildren[0]
+				right := exprChildren[1]
+
+				if left.Kind() != CallExpr {
+					ctx.ReportError("AST003", "expected call on left", left)
+				}
+
+				if right.Kind() != BinaryExpr {
+					ctx.ReportError("AST004", "expected multiplication on right", right)
+				}
+			},
+		),
+	)
+
+	// ---------------- Allocator ----------------
+
 	alloc := memforge.DynamicLinearAllocatorCreateFunction(
 		uint64(memcore.KiloByte),
 		func(c, n uint64) uint64 { return max(c*2, n) },
 	)
 	defer memforge.DynamicLinearAllocatorDestroy(alloc)
 
+	// ---------------- Stage reporter ----------------
+
+	var reportedStages = make(map[string][]ValidationEntry[rune, Token, TokenRole, NodeKind])
+
 	cfg := LangParserConfigurationCreate(
 		spec,
 		func(sz, align uint64) memcore.MarkRaw {
 			return memforge.DynamicLinearAllocatorMallocUnsafe(alloc, sz, align)
 		},
+		func(
+			stage *ASTValidationStage[rune, Token, TokenRole, NodeKind],
+			entries []ValidationEntry[rune, Token, TokenRole, NodeKind],
+		) {
+			reportedStages[stage.Name] = entries
+		},
 	)
+
+	// ---------------- Source ----------------
 
 	source := "foo() + 2 * 3;"
 
@@ -242,10 +298,14 @@ func TestLangSpecEndToEnd(t *testing.T) {
 		false,
 	)
 
+	// ---------------- Run both modes ----------------
+
 	for _, streaming := range []bool{false, true} {
+		reportedStages = make(map[string][]ValidationEntry[rune, Token, TokenRole, NodeKind])
+
 		session.Reset(tmp.Name(), nil, streaming)
 
-		root, errs, err := LangParserParseFile(
+		_, syntaxErrs, validation, err := LangParserParseFile(
 			parser,
 			session,
 		)
@@ -254,69 +314,42 @@ func TestLangSpecEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		validateAST(t, root, errs)
+		// ---- Syntax must be clean ----
+
+		ftesting.Assert(
+			syntaxErrs == nil || !syntaxErrs.HasErrors(),
+			"syntax errors occurred",
+			"syntax ok",
+			t,
+		)
+
+		// ---- Validation must be clean ----
+
+		ftesting.Assert(
+			validation != nil && !validation.HasErrors(),
+			func() string {
+				return fmt.Sprintf("validation errors: %+v", validation.Results)
+			}(),
+			"validation ok",
+			t,
+		)
+
+		// ---- Stage reporter must have run ----
+
+		entries := reportedStages["ast-structure"]
+
+		ftesting.Assert(
+			entries != nil,
+			"stage not reported",
+			"stage executed",
+			t,
+		)
+
+		ftesting.Assert(
+			len(entries) == 0,
+			"unexpected AST validation entries",
+			"no AST issues",
+			t,
+		)
 	}
-}
-
-// ============================================================
-// AST validation (SAFE ACCESS)
-// ============================================================
-
-func validateAST(
-	t *testing.T,
-	root *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind],
-	errs *syntaxa.SyntaxErrors,
-) {
-
-	ftesting.Assert(
-		errs == nil || !errs.HasErrors(),
-		func() string {
-			if errs == nil {
-				return "syntax errors: <nil>"
-			}
-			return fmt.Sprintf("syntax errors: %+v", errs.Errors)
-		}(),
-		"no syntax errors",
-		t,
-	)
-
-	children := root.Children()
-
-	ftesting.Assert(
-		len(children) == 1,
-		"expected single statement",
-		"single statement ok",
-		t,
-	)
-
-	stmt := children[0]
-	stmtChildren := stmt.Children()
-
-	expr := stmtChildren[0]
-
-	ftesting.Assert(
-		expr.Kind() == BinaryExpr,
-		"expected + at root",
-		"binary root ok",
-		t,
-	)
-
-	exprChildren := expr.Children()
-
-	left := exprChildren[0]
-	right := exprChildren[1]
-
-	ftesting.Assert(
-		left.Kind() == CallExpr,
-		"expected call on left",
-		"call ok",
-		t,
-	)
-
-	ftesting.Assert(
-		right.Kind() == BinaryExpr,
-		"expected multiplication on right",
-		"precedence ok",
-		t,
-	)
 }

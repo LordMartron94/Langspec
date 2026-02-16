@@ -3,6 +3,7 @@ package langspec
 import (
 	"cmp"
 	"fmt"
+	"foundation/extensions"
 	"foundation/system"
 	"lexarch"
 	"memarch"
@@ -50,8 +51,190 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRuleset(
 
 // ------------------------------------------------------------ PARSER SPEC
 
+type ValidationSeverity uint8
+
+const (
+	VALIDATION_SEVERITY_DIAGNOSTIC ValidationSeverity = iota + 1
+	VALIDATION_SEVERITY_INFO
+	VALIDATION_SEVERITY_WARNING
+	VALIDATION_SEVERITY_ERROR
+	VALIDATION_SEVERITY_FATAL
+)
+
 /* ParserSyntaxErrorHook is an optional hook that runs post-parsing to process syntax errors. */
 type ParserSyntaxErrorHook func(errors *syntaxa.SyntaxErrors) error
+
+/* ValidationEntry is a single validation error. */
+type ValidationEntry[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	// Stable identifier (for tooling, tests, suppression, docs)
+	Code string
+
+	// Human message
+	Message string
+
+	// How serious this is
+	Severity ValidationSeverity
+
+	// Where it happened (prefer AST node — spans can be derived)
+	Node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+
+	// Optional explicit span override (for tokens, ranges, etc.)
+	Start int
+	End   int
+
+	// Optional extra context
+	Notes []string
+}
+
+/* StageValidationResult encapsulates a result of stage validation. */
+type StageValidationResult[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	StageName string
+	Order     int
+	Entries   []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]
+}
+
+/* ValidationEntries encapsulates the errors during validation. */
+type ValidationEntries[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	Results []StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind]
+}
+
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) getStageResult(stageName string) *StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind] {
+	for i := range v.Results {
+		if v.Results[i].StageName == stageName {
+			return &v.Results[i]
+		}
+	}
+
+	return nil
+}
+
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) beginStage(stage *ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]) {
+	v.Results = append(v.Results, StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind]{
+		StageName: stage.Name,
+		Order:     stage.Order,
+		Entries:   []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]{},
+	})
+}
+
+/*
+GetStageEntries returns the entries for a given stage.
+
+If the stage does not exist or doesn't have a result struct associated, it will return nil.
+*/
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) GetStageEntries(stageName string) []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind] {
+	if result := v.getStageResult(stageName); result != nil {
+		return result.Entries
+	}
+
+	return nil
+}
+
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) reportForStage(stage *ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind], entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]) {
+	result := v.getStageResult(stage.Name)
+	result.Entries = append(result.Entries, entry)
+}
+
+/* CountBySeverity shows the amount of entries having this severity. */
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) CountBySeverity(severity ValidationSeverity) int {
+	amount := 0
+
+	for _, result := range v.Results {
+		for _, entry := range result.Entries {
+			if entry.Severity == severity {
+				amount++
+			}
+		}
+	}
+
+	return amount
+}
+
+/* HasErrors checks if there are errors (including fatals). */
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasErrors() bool {
+	for _, result := range v.Results {
+		for _, entry := range result.Entries {
+			if entry.Severity >= VALIDATION_SEVERITY_ERROR {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+/* HasFatal checks if there are fatal errors. */
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasFatal() bool {
+	for _, result := range v.Results {
+		for _, entry := range result.Entries {
+			if entry.Severity == VALIDATION_SEVERITY_FATAL {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+/* ASTValidationStageContext encapsulates the available functions for a validation stage. */
+type ASTValidationStageContext[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	RootNode *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]
+
+	NewValidationEntry func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]
+
+	ReportDiagnostic func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind])
+	ReportInfo       func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind])
+	ReportWarning    func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind])
+	ReportError      func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind])
+	ReportFatal      func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind])
+
+	ReportValidationEntry func(entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind])
+}
+
+/*
+ASTValidationStageProcessor processes a single validation stage.
+
+Errors encountered during validation should be reported using the context.
+*/
+type ASTValidationStageProcessor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
+	ctx *ASTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind],
+)
+
+/*
+ASTValidationStageSummarizer summarizes the validation errors from this stage.
+
+This is commonly used for logging and user feedback.
+*/
+type ASTValidationStageSummarizer[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
+	stage *ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind],
+	entries []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind],
+)
+
+/*
+ASTValidationStage encapsulates a single validation stage.
+
+Stages with a higher order are executed later (stage 0 executes before stage 100)
+*/
+type ASTValidationStage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+	Name        string
+	Description string
+
+	Order int
+
+	Processor ASTValidationStageProcessor[TObservation, TToken, TTokenRole, TNodeKind]
+}
+
+/* ASTValidationStageCreate creates an ASTValidationStage instance. */
+func ASTValidationStageCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable](
+	name, description string,
+	order int,
+	processor ASTValidationStageProcessor[TObservation, TToken, TTokenRole, TNodeKind],
+) *ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind] {
+	return &ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]{
+		Name:        name,
+		Description: description,
+		Processor:   processor,
+	}
+}
 
 /* ParserSpec defines the grammar and AST contract. */
 type ParserSpec[
@@ -66,6 +249,8 @@ type ParserSpec[
 	errorNodeKind TNodeKind
 
 	errorHook ParserSyntaxErrorHook
+
+	validationStages []*ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]
 
 	freezeAfterParse bool
 }
@@ -88,6 +273,7 @@ func ParserSpecCreate[
 		errorNodeKind:    errorNodeKind,
 		freezeAfterParse: freezeAfterParse,
 		errorHook:        nil,
+		validationStages: make([]*ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind], 0),
 	}
 }
 
@@ -97,6 +283,22 @@ func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) W
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	p.errorHook = hook
 	return p
+}
+
+/* WithValidationStages adds validation stages to the parser spec. */
+func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithValidationStages(
+	stages ...*ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind],
+) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	p.validationStages = append(p.validationStages, stages...)
+	return p
+}
+
+func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) getSortedStages() []*ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind] {
+	sorted := extensions.SortedCopyShallow(p.validationStages, func(a, b *ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]) int {
+		return cmp.Compare(a.Order, b.Order)
+	})
+
+	return sorted
 }
 
 // ------------------------------------------------------------ LANGUAGE SPEC
@@ -228,6 +430,9 @@ type LangParserConfiguration[
 	maxLexerAutomatonMemory memcore.MemoryUnitBytes
 
 	streaming StreamingConfig
+
+	forceValidation bool
+	stageReporter   ASTValidationStageSummarizer[TObservation, TToken, TTokenRole, TNodeKind]
 }
 
 /*
@@ -241,6 +446,8 @@ Defaults:
 
 The caller is expected to tune memory and streaming parameters
 for their workload when necessary.
+
+The stageReporter can be nil if the client does not want automatic stage validation reporting during the validation phase.
 */
 func LangParserConfigurationCreate[
 	TObservation cmp.Ordered,
@@ -251,18 +458,27 @@ func LangParserConfigurationCreate[
 ](
 	spec *LangSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	scratch memarch.AllocationFn,
+	stageReporter ASTValidationStageSummarizer[TObservation, TToken, TTokenRole, TNodeKind],
 ) *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		spec:                    spec,
 		scratchAllocationFn:     scratch,
 		maxLexerAutomatonMemory: 1 * memcore.GigaByte,
 		streaming:               DefaultStreamingConfig(),
+		stageReporter:           stageReporter,
+		forceValidation:         false,
 	}
 }
 
 // ============================================================
 // BUILDER API
 // ============================================================
+
+/* WithForceValidation configures whether to force AST validation. */
+func (c *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithForceValidation(v bool) *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	c.forceValidation = v
+	return c
+}
 
 /*
 WithMaxLexerAutomatonMemory configures the maximum memory allowed for
@@ -527,6 +743,7 @@ func LangParserParseFile[
 ) (
 	*syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	*syntaxa.SyntaxErrors,
+	*ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind],
 	error,
 ) {
 	ensureAlive(langParser)
@@ -535,7 +752,7 @@ func LangParserParseFile[
 	defer session.end()
 
 	if !system.FileExists(session.sourceFile) {
-		return nil, nil, fmt.Errorf("source file non-existent: %s", session.sourceFile)
+		return nil, nil, nil, fmt.Errorf("source file non-existent: %s", session.sourceFile)
 	}
 
 	syntaxErrors := &syntaxa.SyntaxErrors{
@@ -544,7 +761,7 @@ func LangParserParseFile[
 
 	parsingContext, err := getParsingContext(langParser, session.sourceFile, session.mapFn, syntaxErrors, session.streaming)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	rootNode := parsingContext.Editor.NewNode(
@@ -561,11 +778,36 @@ func LangParserParseFile[
 	errorHook := langParser.config.spec.Parser.errorHook
 	if errorHook != nil {
 		if err := errorHook(syntaxErrors); err != nil {
-			return rootNode, syntaxErrors, err
+			return rootNode, syntaxErrors, nil, err
 		}
 	}
 
-	return rootNode, syntaxErrors, nil
+	validationEntries := &ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]{
+		Results: make([]StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind], 0),
+	}
+
+	if !syntaxErrors.HasErrors() || langParser.config.forceValidation {
+		validationStages := langParser.config.spec.Parser.getSortedStages()
+		for _, stage := range validationStages {
+			validationEntries.beginStage(stage)
+
+			validationCtx := buildValidationContextForStage(stage, rootNode, validationEntries)
+			stage.Processor(validationCtx)
+
+			if langParser.config.stageReporter != nil {
+				result := validationEntries.GetStageEntries(stage.Name)
+				langParser.config.stageReporter(stage, result)
+			}
+
+			if validationEntries.HasFatal() {
+				return rootNode, syntaxErrors, validationEntries,
+					fmt.Errorf("stopped because of a fatal validation stage")
+			}
+		}
+
+	}
+
+	return rootNode, syntaxErrors, validationEntries, nil
 }
 
 /*
@@ -587,6 +829,56 @@ func LangParserDestroy[
 }
 
 // ---------------------------------------------------------------- PRIVATE HELPERS
+
+func buildValidationContextForStage[
+	TObservation cmp.Ordered,
+	TToken,
+	TTokenRole,
+	TNodeKind comparable,
+](
+	stage *ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind],
+	rootNode *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	sharedValidationEntries *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind],
+) *ASTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind] {
+	newValidationEntry := func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind] {
+		return ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]{
+			Code:     code,
+			Message:  message,
+			Severity: severity,
+			Node:     node,
+		}
+	}
+
+	reportValidationEntry := func(entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]) {
+		sharedValidationEntries.reportForStage(stage, entry)
+	}
+
+	return &ASTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind]{
+		RootNode:           rootNode,
+		NewValidationEntry: newValidationEntry,
+		ReportDiagnostic: func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_DIAGNOSTIC, node)
+			reportValidationEntry(entry)
+		},
+		ReportInfo: func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_INFO, node)
+			reportValidationEntry(entry)
+		},
+		ReportWarning: func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_WARNING, node)
+			reportValidationEntry(entry)
+		},
+		ReportError: func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_ERROR, node)
+			reportValidationEntry(entry)
+		},
+		ReportFatal: func(code, message string, node *syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_FATAL, node)
+			reportValidationEntry(entry)
+		},
+		ReportValidationEntry: reportValidationEntry,
+	}
+}
 
 func getParsingContext[
 	TObservation cmp.Ordered,
