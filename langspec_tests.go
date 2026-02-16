@@ -236,6 +236,7 @@ func TestLangSpecEndToEnd(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 
 		parser := LangParserCreate(cfg)
+		defer LangParserDestroy(parser)
 
 		root, errs, err := LangParserParseFile(
 			parser,

@@ -7,6 +7,7 @@ import (
 	"lexarch"
 	"memarch"
 	"memcore"
+	"sync/atomic"
 	"syntaxa"
 )
 
@@ -237,7 +238,6 @@ func LangParserConfigurationCreate[
 	spec *LangSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	scratch memarch.AllocationFn,
 ) *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
-
 	return &LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		spec:                    spec,
 		scratchAllocationFn:     scratch,
@@ -387,8 +387,7 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 	lexer  *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole]
 	parser *syntaxa.SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 
-	used      bool
-	destroyed bool
+	destroyed atomic.Bool
 }
 
 /* LangParserCreate constructs a language parser instance. */
@@ -411,11 +410,9 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 	)
 
 	return &LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind]{
-		config:    config,
-		lexer:     lexer,
-		parser:    parser,
-		used:      false,
-		destroyed: false,
+		config: config,
+		lexer:  lexer,
+		parser: parser,
 	}
 }
 
@@ -445,24 +442,7 @@ func LangParserParseFile[
 	*syntaxa.SyntaxErrors,
 	error,
 ) {
-	if langParser.destroyed {
-		return nil, nil, fmt.Errorf("LangParser already destroyed")
-	}
-
-	if langParser.used {
-		return nil, nil, fmt.Errorf(
-			"LangParser is single-use; create a new instance per parse",
-		)
-	}
-
-	langParser.used = true
-
-	defer func() {
-		if !langParser.destroyed {
-			lexarch.LexerClose(langParser.lexer)
-			langParser.destroyed = true
-		}
-	}()
+	ensureAlive(langParser)
 
 	if !system.FileExists(sourceFile) {
 		return nil, nil, fmt.Errorf("source file non-existent: %s", sourceFile)
@@ -489,6 +469,24 @@ func LangParserParseFile[
 	)
 
 	return rootNode, syntaxErrors, nil
+}
+
+/*
+LangParserDestroy cleans up manually allocated resources, invalidating further use of this LangParser instance.
+
+Forgetting to call this results in memory leaks.
+*/
+func LangParserDestroy[
+	TObservation cmp.Ordered,
+	TLexerState,
+	TToken,
+	TTokenRole,
+	TNodeKind comparable,
+](
+	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
+) {
+	lexarch.LexerClose(langParser.lexer)
+	langParser.destroyed.Store(true)
 }
 
 // ---------------------------------------------------------------- PRIVATE HELPERS
@@ -748,5 +746,19 @@ func getSourceInput[TObservation cmp.Ordered](
 			)
 		}
 		return system.FileReadAllAs(sourceFile, mapFn)
+	}
+}
+
+func ensureAlive[
+	TObservation cmp.Ordered,
+	TLexerState,
+	TToken,
+	TTokenRole,
+	TNodeKind comparable,
+](
+	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
+) {
+	if langParser.destroyed.Load() {
+		panic("LangParser re-used after destroy")
 	}
 }
