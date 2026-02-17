@@ -75,6 +75,9 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 		EOFToken,
 		NormalState,
 		lexarch.NewlineDetectorRune(),
+		lexarch.RuneFormatterDefault(),
+		lexarch.LexarchRuneSuccessorFn(),
+		nil,
 	)
 
 	rules := lexarch.LexingRulesetCreate[rune, Token, TokenRole](
@@ -126,7 +129,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 
 		ctx.Consume()
 		expr := p.ParseExpr(ctx, 0)
-		ctx.Match(RParenTok)
+		ctx.ConsumeIf(RParenTok)
 		return expr
 	})
 
@@ -156,7 +159,7 @@ func buildLangSpec() *LangSpec[rune, Token, TokenRole, LexerState, NodeKind] {
 	) *syntaxa.SyntaxaASTNode[rune, Token, TokenRole, NodeKind] {
 
 		ctx.Consume()
-		ctx.Match(RParenTok)
+		ctx.ConsumeIf(RParenTok)
 
 		node := ctx.Editor.NewNode(CallExpr)
 		ctx.Editor.AttachChild(node, left)
@@ -305,7 +308,7 @@ func TestLangSpecEndToEnd(t *testing.T) {
 
 		session.Reset(tmp.Name(), nil, streaming)
 
-		_, syntaxErrs, validation, err := LangParserParseFile(
+		_, _, syntaxErrs, validation, err := LangParserParseFile(
 			parser,
 			session,
 		)
