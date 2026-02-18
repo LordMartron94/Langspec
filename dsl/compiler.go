@@ -8,7 +8,7 @@ import (
 	"lexarch"
 	"memarch"
 	"syntaxa"
-	"syntaxa/rd"
+	"syntaxa/rule"
 )
 
 // --------------------------------------------------------------- TYPES
@@ -23,29 +23,22 @@ type LangSpecLexerTokenType uint32
 
 const (
 	// Core
-	LANG_SPEC_LEXER_ERROR_TOKEN LangSpecLexerTokenType = iota + 1
-	LANG_SPEC_LEXER_EOF_TOKEN
+	LANG_SPEC_LEXER_EOF_TOKEN LangSpecLexerTokenType = iota + 1
 
 	LANG_SPEC_LEXER_WHITESPACE
 
 	// Header structure
-	LANG_SPEC_LEXER_HEADER_DASHES    // ---
-	LANG_SPEC_LEXER_HEADER_SEPARATOR // |
+	LANG_SPEC_LEXER_HEADER_DASHES
+	LANG_SPEC_LEXER_HEADER_SEPARATOR
 
-	// Language identity
-	LANG_SPEC_LEXER_LANGUAGE_NAME // "TEST LANGUAGE"
+	LANG_SPEC_LEXER_STRING_LITERAL
+	LANG_SPEC_LEXER_VERSION
 
-	// Versions
-	LANG_SPEC_LEXER_VERSION // v1.0.0 , v0.0.0
-
-	// DSL identifier
-	LANG_SPEC_LEXER_DSL_NAME // lspec
+	LANG_SPEC_LEXER_IDENTIFIER
 )
 
 func (l LangSpecLexerTokenType) String() string {
 	switch l {
-	case LANG_SPEC_LEXER_ERROR_TOKEN:
-		return "ERROR"
 	case LANG_SPEC_LEXER_EOF_TOKEN:
 		return "EOF"
 	case LANG_SPEC_LEXER_WHITESPACE:
@@ -54,12 +47,12 @@ func (l LangSpecLexerTokenType) String() string {
 		return "DASHES"
 	case LANG_SPEC_LEXER_HEADER_SEPARATOR:
 		return "HEADER SEPARATOR"
-	case LANG_SPEC_LEXER_LANGUAGE_NAME:
-		return "LNG NAME"
+	case LANG_SPEC_LEXER_STRING_LITERAL:
+		return "STRING LITERAL"
 	case LANG_SPEC_LEXER_VERSION:
 		return "VERSION"
-	case LANG_SPEC_LEXER_DSL_NAME:
-		return "DSL NAME"
+	case LANG_SPEC_LEXER_IDENTIFIER:
+		return "IDENTIFIER"
 	default:
 		return "UNKNOWN TOKEN TYPE"
 	}
@@ -90,7 +83,7 @@ type LangSpecParserNodeKind uint32
 
 const (
 	LANG_SPEC_ERROR_NODE LangSpecParserNodeKind = iota + 1
-	LANG_SPEC_ROOT_NODE
+	LANG_SPEC_PROGRAM_NODE
 
 	LANG_SPEC_HEADER_NODE
 
@@ -103,8 +96,8 @@ func (k LangSpecParserNodeKind) String() string {
 	switch k {
 	case LANG_SPEC_ERROR_NODE:
 		return "ERROR"
-	case LANG_SPEC_ROOT_NODE:
-		return "ROOT"
+	case LANG_SPEC_PROGRAM_NODE:
+		return "PROGRAM"
 	case LANG_SPEC_HEADER_NODE:
 		return "HEADER"
 	case LANG_SPEC_LANGUAGE_NAME_NODE:
@@ -117,6 +110,10 @@ func (k LangSpecParserNodeKind) String() string {
 		return "UNKNOWN NODE KIND"
 	}
 }
+
+type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
+type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
+type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 // --------------------------------------------------------------- CONFIGURATION
 
@@ -188,18 +185,18 @@ func LangSpecCompilerCompile(
 		return fmt.Errorf("file is not a .lspec file: %s", sourceFile)
 	}
 
-	dfaDUMP := compiler.parser.DebugDumpAllLexerDFAs()
+	// dfaDUMP := compiler.parser.DebugDumpAllLexerDFAs()
 
-	fmt.Println("\n===== DFA DEBUG DUMP =====")
-	fmt.Println(dfaDUMP)
-	fmt.Println("=========================")
+	// fmt.Println("\n===== DFA DEBUG DUMP =====")
+	// fmt.Println(dfaDUMP)
+	// fmt.Println("=========================")
 
 	contentRune, _ := system.FileReadAllRunes(sourceFile)
-	fmt.Printf("DEBUG: rune content (escaped):\n%q\n", string(contentRune))
-	fmt.Println("DEBUG: rune stream:")
-	for i, r := range contentRune {
-		fmt.Printf("[%04d] rune=%q  codepoint=U+%04X\n", i, r, r)
-	}
+	// fmt.Printf("DEBUG: rune content (escaped):\n%q\n", string(contentRune))
+	// fmt.Println("DEBUG: rune stream:")
+	// for i, r := range contentRune {
+	// 	fmt.Printf("[%04d] rune=%q  codepoint=U+%04X\n", i, r, r)
+	// }
 
 	session := getSession(compiler, sourceFile)
 
@@ -234,7 +231,7 @@ func LangSpecCompilerCompile(
 			contentRune,
 			syntaxErrors,
 		)
-		return fmt.Errorf(
+		err = fmt.Errorf(
 			"langspec parse failed with %d syntax errors",
 			len(syntaxErrors.Errors),
 		)
@@ -254,6 +251,7 @@ func LangSpecCompilerCompile(
 	if validationEntries != nil && len(validationEntries.Results) > 0 {
 		fmt.Println("\n===== VALIDATION =====")
 
+		errorAmount := 0
 		for _, stage := range validationEntries.Results {
 			fmt.Printf("\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
 
@@ -263,6 +261,10 @@ func LangSpecCompilerCompile(
 			}
 
 			for _, entry := range stage.Entries {
+				if entry.Severity >= langspec.VALIDATION_SEVERITY_INFO {
+					errorAmount++
+				}
+
 				fmt.Printf(
 					"  [%v] %s — %s\n",
 					entry.Severity,
@@ -273,6 +275,10 @@ func LangSpecCompilerCompile(
 		}
 
 		fmt.Println("=======================")
+
+		if errorAmount > 0 {
+			err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
+		}
 	}
 
 	// ============================================================
@@ -369,7 +375,6 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 		rune,
 		LangSpecLexerTokenType,
 		LangSpecLexerTokenRole](
-		LANG_SPEC_LEXER_ERROR_TOKEN,
 		LANG_SPEC_LEXER_EOF_TOKEN,
 		LANG_SPEC_LEXER_STATE_DEFAULT,
 		lexarch.NewlineDetectorRune(),
@@ -435,7 +440,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 
 	defaultRuleset.WithRulePriority(
 		quoted,
-		LANG_SPEC_LEXER_LANGUAGE_NAME,
+		LANG_SPEC_LEXER_STRING_LITERAL,
 		LANG_SPEC_STRUCTURAL_ROLE,
 		1,
 	)
@@ -468,7 +473,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 
 	defaultRuleset.WithRulePriority(
 		pattern.LiteralString[rune]("lspec"),
-		LANG_SPEC_LEXER_DSL_NAME,
+		LANG_SPEC_LEXER_IDENTIFIER,
 		LANG_SPEC_STRUCTURAL_ROLE,
 		1,
 	)
@@ -490,9 +495,12 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	LangSpecLexerState,
 	LangSpecParserNodeKind,
 ] {
+	ruleBuilder := rule.RuleBuilderCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
+		LangSpecLexerTokenType.String,
+	)
 
 	parserSpec := langspec.ParserSpecCreate(
-		LANG_SPEC_ROOT_NODE,
+		LANG_SPEC_PROGRAM_NODE,
 		LANG_SPEC_ERROR_NODE,
 
 		func(ctx syntaxa.SelectRuleContext[
@@ -509,8 +517,7 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 
 			// Only valid top-level construct for now = header
 			if ctx.Match(LANG_SPEC_LEXER_HEADER_DASHES) {
-				fmt.Println("matched dashes")
-				return rd.TopLevel(parseHeader())
+				return parseHeader(ruleBuilder)
 			}
 
 			return nil
@@ -580,94 +587,79 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	return parserSpec
 }
 
-func parseHeader() rd.Rule[
-	rune,
-	LangSpecLexerTokenType,
-	LangSpecLexerTokenRole,
-	LangSpecLexerState,
-	LangSpecParserNodeKind,
-] {
-	return rd.SequenceAs(
-		LANG_SPEC_HEADER_NODE,
+func parseHeader(
+	ruleBuilder *RuleBuilder,
+) Rule {
+	return ruleBuilder.Sequence(
+		func(
+			currentLexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+			ctx *syntaxa.FinalizationContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) Result {
+			node := ctx.CreateErrorNode("invalid header")
+			return Result{
+				Node: node,
+			}
+		},
+		func(
+			successResults []rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
+			ctx *syntaxa.FinalizationContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) Result {
+			headerNode := ctx.NewNode(LANG_SPEC_HEADER_NODE)
+			for _, child := range successResults {
+				ctx.AttachChild(headerNode, child.Node)
+			}
 
-		rd.Expect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState,
-			LangSpecParserNodeKind,
-		](
+			return Result{
+				Node: headerNode,
+			}
+		},
+		ruleBuilder.Expect(
 			LANG_SPEC_LEXER_HEADER_DASHES,
-			"expected header start '---'",
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_DASHES, "expected header start '---'"),
+			ruleBuilder.NilNodeSuccessBuilder(),
 		),
-
-		rd.TokenExpect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState](
-			LANG_SPEC_LEXER_LANGUAGE_NAME,
-			LANG_SPEC_LANGUAGE_NAME_NODE,
-			"expected language name",
+		ruleBuilder.Expect(
+			LANG_SPEC_LEXER_STRING_LITERAL,
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_STRING_LITERAL, "expected language name"),
+			ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_LANGUAGE_NAME_NODE),
 		),
-
-		rd.TokenExpect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState](
+		ruleBuilder.Expect(
 			LANG_SPEC_LEXER_VERSION,
-			LANG_SPEC_VERSION_NODE,
-			"expected language version",
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_VERSION, "expected language version"),
+			ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_VERSION_NODE),
 		),
-
-		rd.Expect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState,
-			LangSpecParserNodeKind,
-		](
+		ruleBuilder.Expect(
 			LANG_SPEC_LEXER_HEADER_SEPARATOR,
-			"expected '|' between language and DSL spec",
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_SEPARATOR, "expected '|' between language and DSL spec"),
+			ruleBuilder.NilNodeSuccessBuilder(),
 		),
-
-		rd.TokenExpect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState](
-			LANG_SPEC_LEXER_DSL_NAME,
-			LANG_SPEC_DSL_NAME_NODE,
-			"expected DSL name",
+		ruleBuilder.Choice(
+			ruleBuilder.ChoiceFailureBuilder("expected DSL name"),
+			ruleBuilder.Expect(
+				LANG_SPEC_LEXER_STRING_LITERAL,
+				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_STRING_LITERAL, "expected DSL name"),
+				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DSL_NAME_NODE),
+			),
+			ruleBuilder.Expect(
+				LANG_SPEC_LEXER_IDENTIFIER,
+				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_IDENTIFIER, "expected DSL name"),
+				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DSL_NAME_NODE),
+			),
 		),
-
-		rd.TokenExpect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState](
+		ruleBuilder.Expect(
 			LANG_SPEC_LEXER_VERSION,
-			LANG_SPEC_VERSION_NODE,
-			"expected DSL version",
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_VERSION, "expected DSL version"),
+			ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_VERSION_NODE),
 		),
-
-		rd.Expect[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState,
-			LangSpecParserNodeKind,
-		](
+		ruleBuilder.Expect(
 			LANG_SPEC_LEXER_HEADER_DASHES,
-			"expected header end '---'",
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_DASHES, "expected header end '---'"),
+			ruleBuilder.NilNodeSuccessBuilder(),
 		),
 	)
 }
 
 func renderSyntaxErrorsWithContext(
 	source []rune,
-	errors *syntaxa.SyntaxErrors,
+	errors *syntaxa.SyntaxErrors[rune],
 ) {
 	lines := splitLinesRunes(source)
 

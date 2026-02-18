@@ -35,7 +35,7 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 
 /* LexerSpecCreate constructs a lexer specification. */
 func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable](
-	errorToken, eofToken TToken,
+	eofToken TToken,
 	initialState TLexerState,
 	newlineDetect lexarch.NewlineDetector[TObservation],
 	observationFormatter lexarch.ObservationFormatter[TObservation],
@@ -82,7 +82,7 @@ const (
 )
 
 /* ParserSyntaxErrorHook is an optional hook that runs post-parsing to process syntax errors. */
-type ParserSyntaxErrorHook func(errors *syntaxa.SyntaxErrors) error
+type ParserSyntaxErrorHook[TObservation cmp.Ordered] func(errors *syntaxa.SyntaxErrors[TObservation]) error
 
 /* ValidationEntry is a single validation error. */
 type ValidationEntry[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
@@ -269,7 +269,7 @@ type ParserSpec[
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
 
-	errorHook ParserSyntaxErrorHook
+	errorHook ParserSyntaxErrorHook[TObservation]
 
 	defaultSkipRoles []TTokenRole
 
@@ -303,7 +303,7 @@ func ParserSpecCreate[
 
 /* WithErrorHook configures the post-processor for the error hook. */
 func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithErrorHook(
-	hook ParserSyntaxErrorHook,
+	hook ParserSyntaxErrorHook[TObservation],
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	p.errorHook = hook
 	return p
@@ -858,7 +858,7 @@ func LangParserParseFile[
 ) (
 	*syntaxa.ParseTrace[TToken],
 	*syntaxa.SyntaxaASTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	*syntaxa.SyntaxErrors,
+	*syntaxa.SyntaxErrors[TObservation],
 	*ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind],
 	error,
 ) {
@@ -871,8 +871,8 @@ func LangParserParseFile[
 		return nil, nil, nil, nil, fmt.Errorf("source file non-existent: %s", session.sourceFile)
 	}
 
-	syntaxErrors := &syntaxa.SyntaxErrors{
-		Errors: make([]syntaxa.SyntaxError, 0),
+	syntaxErrors := &syntaxa.SyntaxErrors[TObservation]{
+		Errors: make([]syntaxa.SyntaxError[TObservation], 0),
 	}
 
 	parsingContext, err := getParsingContext(langParser, session.sourceFile, session.mapFn, syntaxErrors, session.streaming)
@@ -1009,7 +1009,7 @@ func getParsingContext[
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
-	syntaxErrors *syntaxa.SyntaxErrors,
+	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
 	streaming bool,
 ) (syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
 	var parsingContext syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
@@ -1045,7 +1045,7 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
-	syntaxErrors *syntaxa.SyntaxErrors,
+	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
 ) (
 	syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	error,
@@ -1096,7 +1096,7 @@ func buildStreamingParsingContext[
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
-	syntaxErrors *syntaxa.SyntaxErrors,
+	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
 ) (syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
 	producer, err := newFileObservationProducer(
 		sourceFile,
