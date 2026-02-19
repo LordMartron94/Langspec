@@ -21,8 +21,10 @@ import (
 type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable] struct {
 	rulesets map[TLexerState]lexarch.LexingRuleset[TObservation, TToken, TTokenRole]
 
-	initialState  TLexerState
-	newlineDetect lexarch.NewlineDetector[TObservation]
+	initialState TLexerState
+
+	newlineDetect   lexarch.NewlineDetector[TObservation]
+	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation]
 
 	observationFormatter lexarch.ObservationFormatter[TObservation]
 	successorFn          pattern.SuccessorFn[TObservation]
@@ -38,6 +40,7 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 	eofToken TToken,
 	initialState TLexerState,
 	newlineDetect lexarch.NewlineDetector[TObservation],
+	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation],
 	observationFormatter lexarch.ObservationFormatter[TObservation],
 	successorFn pattern.SuccessorFn[TObservation],
 	tokenFormatter func(token TToken) string,
@@ -46,6 +49,7 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 		rulesets:             make(map[TLexerState]lexarch.LexingRuleset[TObservation, TToken, TTokenRole]),
 		initialState:         initialState,
 		newlineDetect:        newlineDetect,
+		columnAdvanceFn:      columnAdvanceFn,
 		eofToken:             eofToken,
 		observationFormatter: observationFormatter,
 		successorFn:          successorFn,
@@ -1077,6 +1081,7 @@ func getLexerSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, 
 			langParser.config.spec.Lexer.initialState,
 			sourceInput,
 			langParser.config.spec.Lexer.newlineDetect,
+			langParser.config.spec.Lexer.columnAdvanceFn,
 		)
 		langParser.lexingSessionCache = session
 		return session
@@ -1130,6 +1135,7 @@ func getLexerStreamingSession[TObservation cmp.Ordered, TLexerState, TToken, TTo
 			langParser.config.spec.Lexer.initialState,
 			producer,
 			langParser.config.spec.Lexer.newlineDetect,
+			langParser.config.spec.Lexer.columnAdvanceFn,
 			langParser.config.streaming.ReadChunkSize,
 			langParser.config.streaming.MaxBuffered,
 		)

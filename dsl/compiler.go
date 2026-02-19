@@ -7,6 +7,7 @@ import (
 	"langspec"
 	"lexarch"
 	"memarch"
+	"strings"
 	"syntaxa"
 	"syntaxa/rule"
 )
@@ -35,6 +36,15 @@ const (
 	LANG_SPEC_LEXER_VERSION
 
 	LANG_SPEC_LEXER_IDENTIFIER
+
+	LANG_SPEC_LEXER_KW_DECLARE
+	LANG_SPEC_LEXER_KW_LEXER_STATES
+	LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES
+
+	LANG_SPEC_LEXER_BRACKET_OPEN
+	LANG_SPEC_LEXER_BRACKET_CLOSE
+	LANG_SPEC_LEXER_SEMICOLON
+	LANG_SPEC_LEXER_COMMA
 )
 
 func (l LangSpecLexerTokenType) String() string {
@@ -51,8 +61,20 @@ func (l LangSpecLexerTokenType) String() string {
 		return "STRING LITERAL"
 	case LANG_SPEC_LEXER_VERSION:
 		return "VERSION"
-	case LANG_SPEC_LEXER_IDENTIFIER:
-		return "IDENTIFIER"
+	case LANG_SPEC_LEXER_KW_DECLARE:
+		return "DECLARE KW"
+	case LANG_SPEC_LEXER_KW_LEXER_STATES:
+		return "LEXER STATES KW"
+	case LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES:
+		return "TOKEN TYPES KW"
+	case LANG_SPEC_LEXER_BRACKET_OPEN:
+		return "BRACKET OPEN"
+	case LANG_SPEC_LEXER_BRACKET_CLOSE:
+		return "BRACKET CLOSE"
+	case LANG_SPEC_LEXER_SEMICOLON:
+		return "SEMICOLON"
+	case LANG_SPEC_LEXER_COMMA:
+		return "COMMA"
 	default:
 		return "UNKNOWN TOKEN TYPE"
 	}
@@ -86,10 +108,15 @@ const (
 	LANG_SPEC_PROGRAM_NODE
 
 	LANG_SPEC_HEADER_NODE
+	LANG_SPEC_DECLARE_NODE
 
 	LANG_SPEC_LANGUAGE_NAME_NODE
 	LANG_SPEC_VERSION_NODE
 	LANG_SPEC_DSL_NAME_NODE
+
+	LANG_SPEC_DECLARE_IDENTIFIER_NODE
+	LANG_SPEC_IDENTIFIER_NODE
+	LANG_SPEC_LIST_NODE
 )
 
 func (k LangSpecParserNodeKind) String() string {
@@ -106,6 +133,14 @@ func (k LangSpecParserNodeKind) String() string {
 		return "VERSION"
 	case LANG_SPEC_DSL_NAME_NODE:
 		return "DSL NAME"
+	case LANG_SPEC_DECLARE_NODE:
+		return "DECLARE BLOCK"
+	case LANG_SPEC_DECLARE_IDENTIFIER_NODE:
+		return "DECLARE IDENTIFIER"
+	case LANG_SPEC_IDENTIFIER_NODE:
+		return "IDENTIFIER"
+	case LANG_SPEC_LIST_NODE:
+		return "LIST"
 	default:
 		return "UNKNOWN NODE KIND"
 	}
@@ -378,6 +413,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 		LANG_SPEC_LEXER_EOF_TOKEN,
 		LANG_SPEC_LEXER_STATE_DEFAULT,
 		lexarch.NewlineDetectorRune(),
+		lexarch.ColumnAdvanceRune(4),
 		lexarch.RuneFormatterDefault(),
 		lexarch.LexarchRuneSuccessorFn(),
 		func(token LangSpecLexerTokenType) string {
@@ -419,6 +455,34 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 	defaultRuleset.WithRulePriority(
 		pattern.Literal('|'),
 		LANG_SPEC_LEXER_HEADER_SEPARATOR,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		0,
+	)
+
+	defaultRuleset.WithRulePriority(
+		pattern.Literal(','),
+		LANG_SPEC_LEXER_COMMA,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		0,
+	)
+
+	defaultRuleset.WithRulePriority(
+		pattern.Literal(';'),
+		LANG_SPEC_LEXER_SEMICOLON,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		0,
+	)
+
+	defaultRuleset.WithRulePriority(
+		pattern.Literal('{'),
+		LANG_SPEC_LEXER_BRACKET_OPEN,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		0,
+	)
+
+	defaultRuleset.WithRulePriority(
+		pattern.Literal('}'),
+		LANG_SPEC_LEXER_BRACKET_CLOSE,
 		LANG_SPEC_STRUCTURAL_ROLE,
 		0,
 	)
@@ -478,6 +542,27 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 		1,
 	)
 
+	defaultRuleset.WithRulePriority(
+		pattern.LiteralString[rune]("declare"),
+		LANG_SPEC_LEXER_KW_DECLARE,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		1,
+	)
+
+	defaultRuleset.WithRulePriority(
+		pattern.LiteralString[rune]("LexerStates"),
+		LANG_SPEC_LEXER_KW_LEXER_STATES,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		1,
+	)
+
+	defaultRuleset.WithRulePriority(
+		pattern.LiteralString[rune]("LexerTokenTypes"),
+		LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES,
+		LANG_SPEC_STRUCTURAL_ROLE,
+		1,
+	)
+
 	// ------------------------------------------------------------
 
 	lexerSpec.WithRuleset(
@@ -518,6 +603,10 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 			// Only valid top-level construct for now = header
 			if ctx.Match(LANG_SPEC_LEXER_HEADER_DASHES) {
 				return parseHeader(ruleBuilder)
+			}
+
+			if ctx.Match(LANG_SPEC_LEXER_KW_DECLARE) {
+				return parseDeclareBlock(ruleBuilder)
 			}
 
 			return nil
@@ -591,26 +680,8 @@ func parseHeader(
 	ruleBuilder *RuleBuilder,
 ) Rule {
 	return ruleBuilder.Sequence(
-		func(
-			currentLexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
-			ctx *syntaxa.FinalizationContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) Result {
-			node := ctx.CreateErrorNode("invalid header")
-			return Result{
-				Node: node,
-			}
-		},
-		func(
-			successResults []rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
-			ctx *syntaxa.FinalizationContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) Result {
-			headerNode := ctx.NewNode(LANG_SPEC_HEADER_NODE)
-			for _, child := range successResults {
-				ctx.AttachChild(headerNode, child.Node)
-			}
-
-			return Result{
-				Node: headerNode,
-			}
-		},
+		ruleBuilder.SequenceFailureBuilder("invalid header"),
+		ruleBuilder.SequenceSuccessBuilder(LANG_SPEC_HEADER_NODE),
 		ruleBuilder.Expect(
 			LANG_SPEC_LEXER_HEADER_DASHES,
 			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_DASHES, "expected header start '---'"),
@@ -657,33 +728,106 @@ func parseHeader(
 	)
 }
 
-func renderSyntaxErrorsWithContext(
-	source []rune,
-	errors *syntaxa.SyntaxErrors[rune],
-) {
+func parseDeclareBlock(
+	ruleBuilder *RuleBuilder,
+) Rule {
+	return ruleBuilder.Sequence(
+		ruleBuilder.SequenceFailureBuilder("invalid declare block"),
+		ruleBuilder.SequenceSuccessBuilder(LANG_SPEC_DECLARE_NODE),
+		ruleBuilder.Expect(
+			LANG_SPEC_LEXER_KW_DECLARE,
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_KW_DECLARE, "expected declare keyword"),
+			ruleBuilder.NilNodeSuccessBuilder(),
+		),
+		ruleBuilder.Choice(
+			ruleBuilder.ChoiceFailureBuilder("expected declaration ident keyword"),
+			ruleBuilder.Expect(
+				LANG_SPEC_LEXER_KW_LEXER_STATES,
+				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_KW_LEXER_STATES, "expected declaration ident keyword"),
+				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DECLARE_IDENTIFIER_NODE),
+			),
+			ruleBuilder.Expect(
+				LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES,
+				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_KW_LEXER_STATES, "expected declaration ident keyword"),
+				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DECLARE_IDENTIFIER_NODE),
+			),
+		),
+		ruleBuilder.TokenList(
+			LANG_SPEC_LIST_NODE,
+			LANG_SPEC_IDENTIFIER_NODE,
+			LANG_SPEC_LEXER_BRACKET_OPEN,
+			LANG_SPEC_LEXER_STRING_LITERAL,
+			LANG_SPEC_LEXER_COMMA,
+			LANG_SPEC_LEXER_BRACKET_CLOSE,
+			true, // optional trailing comma
+			true, // empty list allowed
+		),
+		ruleBuilder.Expect(
+			LANG_SPEC_LEXER_SEMICOLON,
+			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_SEMICOLON, "expected ;"),
+			ruleBuilder.NilNodeSuccessBuilder(),
+		),
+	)
+}
+
+func renderSyntaxErrorsWithContext(source []rune, errs *syntaxa.SyntaxErrors[rune]) {
+	if len(errs.Errors) == 0 {
+		return
+	}
+
 	lines := splitLinesRunes(source)
 
 	fmt.Println("\n===== SYNTAX ERRORS =====")
 
-	for _, e := range errors.Errors {
-		var typeString = "syntax"
-		if e.ProducedByLexer {
-			typeString = "lexer"
-		}
+	for _, e := range errs.Errors {
+		printErrorHeader(e)
 
-		fmt.Printf("[%s] %s at %d:%d\n", typeString, e.Message, e.Line, e.Column)
-
-		if e.Line <= 0 || e.Line > len(lines) {
-			fmt.Println("  (invalid line reference)")
+		// For now we only render nice underlines for single-line spans
+		if e.StartLine != e.EndLine || e.StartLine <= 0 || !isValidLine(e.StartLine, len(lines)) {
+			// Multi-line or invalid line reference → minimal fallback
+			if isValidLine(e.StartLine, len(lines)) {
+				line := lines[e.StartLine-1]
+				fmt.Printf(" %4d | %s\n", e.StartLine, string(line))
+			}
+			fmt.Println("       (multi-line span or invalid line reference — full context omitted)")
+			fmt.Println("")
 			continue
 		}
 
-		line := lines[e.Line-1]
+		// Single-line span
+		lineIdx := e.StartLine - 1
+		line := lines[lineIdx]
 
-		fmt.Printf("  %4d | %s\n", e.Line, line)
+		startCol := e.StartColumn + 1
+		endCol := e.EndColumn + 1
 
-		if e.Column >= 0 {
-			fmt.Printf("       | %s^\n", spaces(e.Column-1))
+		// Defensive: if end < start, treat as zero-length or single char
+		if endCol < startCol {
+			endCol = startCol
+		}
+		if endCol < 1 {
+			endCol = 1
+		}
+
+		// Calculate visual positions (tab-aware)
+		visualStart := calculateVisualOffset(line, startCol, 4)
+		visualEnd := calculateVisualOffset(line, endCol, 4) // +1 because we want position *after* last char
+
+		// Print source line
+		fmt.Printf(" %4d | %s\n", e.StartLine, string(line))
+
+		// Print underline
+		fmt.Print("      | ")
+		fmt.Print(strings.Repeat(" ", visualStart))
+
+		spanWidth := visualEnd - visualStart
+		if spanWidth <= 0 {
+			fmt.Print("^") // zero-length or calculation error → single caret
+		} else if spanWidth == 1 {
+			fmt.Print("^")
+		} else {
+			fmt.Print("^")
+			fmt.Print(strings.Repeat("~", spanWidth-1))
 		}
 
 		fmt.Println()
@@ -692,29 +836,57 @@ func renderSyntaxErrorsWithContext(
 	fmt.Println("========================")
 }
 
-func splitLinesRunes(runes []rune) []string {
-	var lines []string
+func calculateVisualOffset(line []rune, targetCol int, tabWidth int) int {
+	visualPos := 0
+
+	for col := 1; col < targetCol; col++ {
+		runeIdx := col - 1
+
+		if runeIdx < len(line) {
+			visualPos += getCharacterVisualWidth(line[runeIdx], visualPos, tabWidth)
+		} else {
+			visualPos++
+		}
+	}
+
+	return visualPos
+}
+
+func getCharacterVisualWidth(r rune, currentVisualPos int, tabWidth int) int {
+	if r == '\t' {
+		return tabWidth - (currentVisualPos % tabWidth)
+	}
+	return 1
+}
+
+func printErrorHeader(e syntaxa.SyntaxError[rune]) {
+	typeStr := "syntax"
+	if e.ProducedByLexer {
+		typeStr = "lexer"
+	}
+	fmt.Printf("[%s] %s at %d:%d\n", typeStr, e.Message, e.StartLine, e.StartColumn)
+}
+
+func isValidLine(lineNum, totalLines int) bool {
+	return lineNum > 0 && lineNum <= totalLines
+}
+
+func splitLinesRunes(runes []rune) [][]rune {
+	var lines [][]rune
 	start := 0
 
 	for i, r := range runes {
 		if r == '\n' {
-			lines = append(lines, string(runes[start:i]))
+			lines = append(lines, runes[start:i])
 			start = i + 1
 		}
 	}
 
 	if start < len(runes) {
-		lines = append(lines, string(runes[start:]))
+		lines = append(lines, runes[start:])
 	}
 
 	return lines
-}
-
-func spaces(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%*s", n, "")
 }
 
 func renderParseTrace[TToken any](
