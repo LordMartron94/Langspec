@@ -85,6 +85,23 @@ const (
 	VALIDATION_SEVERITY_FATAL
 )
 
+func (v ValidationSeverity) String() string {
+	switch v {
+	case VALIDATION_SEVERITY_DIAGNOSTIC:
+		return "DIAGNOSTIC"
+	case VALIDATION_SEVERITY_INFO:
+		return "INFO"
+	case VALIDATION_SEVERITY_WARNING:
+		return "WARNING"
+	case VALIDATION_SEVERITY_ERROR:
+		return "ERROR"
+	case VALIDATION_SEVERITY_FATAL:
+		return "FATAL"
+	default:
+		return "UNKNOWN SEVERITY"
+	}
+}
+
 /* ParserSyntaxErrorHook is an optional hook that runs post-parsing to process syntax errors. */
 type ParserSyntaxErrorHook[TObservation cmp.Ordered] func(errors *syntaxa.SyntaxErrors[TObservation]) error
 
@@ -268,10 +285,10 @@ type ParserSpec[
 	TLexerState,
 	TNodeKind comparable,
 ] struct {
-	ruleSelector syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
+
+	programRule syntaxa.ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	errorHook ParserSyntaxErrorHook[TObservation]
 
@@ -291,11 +308,11 @@ func ParserSpecCreate[
 	TNodeKind comparable,
 ](
 	rootNodeKind, errorNodeKind TNodeKind,
-	selector syntaxa.RuleSelector[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	programRule syntaxa.ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	freezeAfterParse bool,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		ruleSelector:     selector,
+		programRule:      programRule,
 		rootNodeKind:     rootNodeKind,
 		errorNodeKind:    errorNodeKind,
 		freezeAfterParse: freezeAfterParse,
@@ -754,7 +771,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 	)
 
 	parser := syntaxa.SyntaxaParserCreate(
-		config.spec.Parser.ruleSelector,
+		config.spec.Parser.programRule,
 		config.spec.Lexer.tokenFormatter,
 		config.spec.Lexer.observationFormatter,
 		config.spec.Lexer.eofToken,
@@ -884,14 +901,9 @@ func LangParserParseFile[
 		return nil, nil, nil, nil, err
 	}
 
-	rootNode := parsingContext.Editor.NewNode(
-		langParser.config.spec.Parser.rootNodeKind,
-	)
-
-	trace, err := syntaxa.SyntaxaParserParseWithContext(
+	rootNode, trace, err := syntaxa.SyntaxaParserParseWithContext(
 		langParser.parser,
 		parsingContext,
-		rootNode,
 	)
 
 	if err != nil {
@@ -1015,8 +1027,8 @@ func getParsingContext[
 	mapFn func([]byte) ([]TObservation, error),
 	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
 	streaming bool,
-) (syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
-	var parsingContext syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+) (*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
+	var parsingContext *syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	if !streaming {
 		ctx, err := buildSequentialParsingContext(
@@ -1051,13 +1063,12 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	mapFn func([]byte) ([]TObservation, error),
 	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
 ) (
-	syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	error,
 ) {
 	sourceInput, err := getSourceInput(sourceFile, mapFn)
 	if err != nil {
-		var zero syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-		return zero, fmt.Errorf("could not decode source-file: %w", err)
+		return nil, fmt.Errorf("could not decode source-file: %w", err)
 	}
 
 	lexingSession := getLexerSession(langParser, sourceInput)
@@ -1102,7 +1113,7 @@ func buildStreamingParsingContext[
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
 	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
-) (syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
+) (*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind], error) {
 	producer, err := newFileObservationProducer(
 		sourceFile,
 		mapFn,
@@ -1110,8 +1121,7 @@ func buildStreamingParsingContext[
 	)
 
 	if err != nil {
-		var zero syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-		return zero, fmt.Errorf("FS: open failed: %w", err)
+		return nil, fmt.Errorf("FS: open failed: %w", err)
 	}
 
 	lexingSession := getLexerStreamingSession(langParser, producer)

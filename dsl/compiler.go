@@ -35,7 +35,7 @@ const (
 	LANG_SPEC_LEXER_STRING_LITERAL
 	LANG_SPEC_LEXER_VERSION
 
-	LANG_SPEC_LEXER_IDENTIFIER
+	LANG_SPEC_LEXER_KW_LSPEC
 
 	LANG_SPEC_LEXER_KW_DECLARE
 	LANG_SPEC_LEXER_KW_LEXER_STATES
@@ -73,6 +73,8 @@ func (l LangSpecLexerTokenType) String() string {
 		return "BRACKET CLOSE"
 	case LANG_SPEC_LEXER_SEMICOLON:
 		return "SEMICOLON"
+	case LANG_SPEC_LEXER_KW_LSPEC:
+		return "LSPEC KW"
 	case LANG_SPEC_LEXER_COMMA:
 		return "COMMA"
 	default:
@@ -108,15 +110,18 @@ const (
 	LANG_SPEC_PROGRAM_NODE
 
 	LANG_SPEC_HEADER_NODE
-	LANG_SPEC_DECLARE_NODE
+	LANG_SPEC_DECLARATION_BLOCK_NODE
 
-	LANG_SPEC_LANGUAGE_NAME_NODE
-	LANG_SPEC_VERSION_NODE
 	LANG_SPEC_DSL_NAME_NODE
+	LANG_SPEC_VERSION_NODE
+	LANG_SPEC_LSPEC_NAME_NODE
 
 	LANG_SPEC_DECLARE_IDENTIFIER_NODE
 	LANG_SPEC_IDENTIFIER_NODE
 	LANG_SPEC_LIST_NODE
+
+	LANG_SPEC_BODY_NODE
+	LANG_SPEC_DECLARATION_BLOCKS_NODE
 )
 
 func (k LangSpecParserNodeKind) String() string {
@@ -127,13 +132,13 @@ func (k LangSpecParserNodeKind) String() string {
 		return "PROGRAM"
 	case LANG_SPEC_HEADER_NODE:
 		return "HEADER"
-	case LANG_SPEC_LANGUAGE_NAME_NODE:
-		return "LNG NAME"
-	case LANG_SPEC_VERSION_NODE:
-		return "VERSION"
 	case LANG_SPEC_DSL_NAME_NODE:
 		return "DSL NAME"
-	case LANG_SPEC_DECLARE_NODE:
+	case LANG_SPEC_VERSION_NODE:
+		return "VERSION"
+	case LANG_SPEC_LSPEC_NAME_NODE:
+		return "LSPEC NAME"
+	case LANG_SPEC_DECLARATION_BLOCK_NODE:
 		return "DECLARE BLOCK"
 	case LANG_SPEC_DECLARE_IDENTIFIER_NODE:
 		return "DECLARE IDENTIFIER"
@@ -141,14 +146,41 @@ func (k LangSpecParserNodeKind) String() string {
 		return "IDENTIFIER"
 	case LANG_SPEC_LIST_NODE:
 		return "LIST"
+	case LANG_SPEC_BODY_NODE:
+		return "BODY"
+	case LANG_SPEC_DECLARATION_BLOCKS_NODE:
+		return "DECLARATION BLOCKS"
 	default:
 		return "UNKNOWN NODE KIND"
 	}
 }
 
+type ValidationCode string
+
+const (
+	VALIDATION_DECLARATION_ALREADY_SEEN    ValidationCode = "V_D001"
+	VALIDATION_DECLARATION_NOT_PRESENT     ValidationCode = "V_D002"
+	VALIDATION_DECLARATION_DUPLICATE_ENTRY ValidationCode = "V_D003"
+)
+
+func (v ValidationCode) String() string {
+	return string(v)
+}
+
+// --------------------------------------------------------------- TYPE ALIASES
+
 type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationStageCTX = langspec.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+
+type Node = syntaxa.SyntaxaASTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+
+func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
+	return syntaxa.AttributeAs[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, TAttribute](
+		node, attributeName,
+	)
+}
 
 // --------------------------------------------------------------- CONFIGURATION
 
@@ -373,6 +405,8 @@ func LangSpecCompilerCompile(
 
 // --------------------------------------------------------------- PRIVATE HELPERS
 
+var runeFormatter = lexarch.RuneFormatterDefault()
+
 func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangParserSession[rune] {
 	if compiler.sessionCache != nil {
 		compiler.sessionCache.Reset(sourceFile, nil, false)
@@ -414,7 +448,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 		LANG_SPEC_LEXER_STATE_DEFAULT,
 		lexarch.NewlineDetectorRune(),
 		lexarch.ColumnAdvanceRune(4),
-		lexarch.RuneFormatterDefault(),
+		runeFormatter,
 		lexarch.LexarchRuneSuccessorFn(),
 		func(token LangSpecLexerTokenType) string {
 			return token.String()
@@ -537,7 +571,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 
 	defaultRuleset.WithRulePriority(
 		pattern.LiteralString[rune]("lspec"),
-		LANG_SPEC_LEXER_IDENTIFIER,
+		LANG_SPEC_LEXER_KW_LSPEC,
 		LANG_SPEC_STRUCTURAL_ROLE,
 		1,
 	)
@@ -587,31 +621,7 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	parserSpec := langspec.ParserSpecCreate(
 		LANG_SPEC_PROGRAM_NODE,
 		LANG_SPEC_ERROR_NODE,
-
-		func(ctx syntaxa.SelectRuleContext[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-		]) syntaxa.ParserRule[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecLexerState,
-			LangSpecParserNodeKind,
-		] {
-
-			// Only valid top-level construct for now = header
-			if ctx.Match(LANG_SPEC_LEXER_HEADER_DASHES) {
-				return parseHeader(ruleBuilder)
-			}
-
-			if ctx.Match(LANG_SPEC_LEXER_KW_DECLARE) {
-				return parseDeclareBlock(ruleBuilder)
-			}
-
-			return nil
-		},
-
+		parseProgram(ruleBuilder),
 		true, // freeze AST after parse
 	)
 	parserSpec.WithSkipRoles(
@@ -619,56 +629,60 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 		LANG_SPEC_IGNORED_ROLE,
 	)
 
-	// ------------------------------------------------------------
-	// Validation stages (semantic, not syntactic)
-	// ------------------------------------------------------------
-
 	parserSpec.WithValidationStages(
 		langspec.ASTValidationStageCreate(
-			"header.presence",
-			"ensure exactly one language header exists",
+			"Declaration Block Validation",
+			"Validates whether declaration blocks are correct in terms of presence an uniqueness.",
 			0,
+			func(ctx *ValidationStageCTX) {
+				root := ctx.RootNode
+				blocks := root.FindAllKind(LANG_SPEC_DECLARATION_BLOCK_NODE)
 
-			func(ctx *langspec.ASTValidationStageContext[
-				rune,
-				LangSpecLexerTokenType,
-				LangSpecLexerTokenRole,
-				LangSpecParserNodeKind,
-			]) {
+				required := []LangSpecLexerTokenType{
+					LANG_SPEC_LEXER_KW_LEXER_STATES,
+					LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES,
+				}
+				seenSet := map[LangSpecLexerTokenType]struct{}{}
 
-				headers := ctx.RootNode.FindAllKind(LANG_SPEC_HEADER_NODE)
+				for _, block := range blocks {
+					identifierNode := block.Children()[0]
+					tokenType, _ := AttributeAs[LangSpecLexerTokenType](identifierNode, rule.ATTRIBUTE_TOKEN_TYPE)
 
-				if len(headers) == 0 {
-					ctx.ReportFatal(
-						"missing-header",
-						"language specification must contain a header",
-						ctx.RootNode,
-					)
-					return
+					if _, seen := seenSet[tokenType]; seen {
+						ctx.ReportError(
+							VALIDATION_DECLARATION_ALREADY_SEEN.String(),
+							fmt.Sprintf("declaration node '%s' is not unique", identifierNode.GetContent(" ")),
+							identifierNode,
+						)
+					} else {
+						seenSet[tokenType] = struct{}{}
+					}
+
+					seenDeclarationsSet := map[string]struct{}{}
+					identifiers := block.FindAllKind(LANG_SPEC_DECLARE_IDENTIFIER_NODE)
+					for _, identifier := range identifiers {
+						identifierValue := identifier.GetContent(" ")
+						if _, seen := seenDeclarationsSet[identifierValue]; seen {
+							ctx.ReportError(
+								VALIDATION_DECLARATION_DUPLICATE_ENTRY.String(),
+								fmt.Sprintf("duplicate declaration entry '%s'", identifierValue),
+								identifierNode,
+							)
+						} else {
+							seenDeclarationsSet[identifierValue] = struct{}{}
+						}
+					}
 				}
 
-				if len(headers) > 1 {
-					ctx.ReportError(
-						"duplicate-header",
-						"multiple headers are not allowed",
-						headers[1],
-					)
+				for _, requiredTk := range required {
+					if _, seen := seenSet[requiredTk]; !seen {
+						ctx.ReportError(
+							VALIDATION_DECLARATION_NOT_PRESENT.String(),
+							fmt.Sprintf("declaration node '%s' is not present", requiredTk.String()),
+							nil,
+						)
+					}
 				}
-			},
-		),
-
-		langspec.ASTValidationStageCreate(
-			"version.sanity",
-			"basic version sanity checks",
-			10,
-
-			func(ctx *langspec.ASTValidationStageContext[
-				rune,
-				LangSpecLexerTokenType,
-				LangSpecLexerTokenRole,
-				LangSpecParserNodeKind,
-			]) {
-				// future: semantic version parsing
 			},
 		),
 	)
@@ -676,97 +690,52 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	return parserSpec
 }
 
-func parseHeader(
-	ruleBuilder *RuleBuilder,
-) Rule {
-	return ruleBuilder.Sequence(
-		ruleBuilder.SequenceFailureBuilder("invalid header"),
-		ruleBuilder.SequenceSuccessBuilder(LANG_SPEC_HEADER_NODE),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_HEADER_DASHES,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_DASHES, "expected header start '---'"),
-			ruleBuilder.NilNodeSuccessBuilder(),
-		),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_STRING_LITERAL,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_STRING_LITERAL, "expected language name"),
-			ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_LANGUAGE_NAME_NODE),
-		),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_VERSION,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_VERSION, "expected language version"),
-			ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_VERSION_NODE),
-		),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_HEADER_SEPARATOR,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_SEPARATOR, "expected '|' between language and DSL spec"),
-			ruleBuilder.NilNodeSuccessBuilder(),
-		),
-		ruleBuilder.Choice(
-			ruleBuilder.ChoiceFailureBuilder("expected DSL name"),
-			ruleBuilder.Expect(
-				LANG_SPEC_LEXER_STRING_LITERAL,
-				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_STRING_LITERAL, "expected DSL name"),
-				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DSL_NAME_NODE),
-			),
-			ruleBuilder.Expect(
-				LANG_SPEC_LEXER_IDENTIFIER,
-				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_IDENTIFIER, "expected DSL name"),
-				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DSL_NAME_NODE),
-			),
-		),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_VERSION,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_VERSION, "expected DSL version"),
-			ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_VERSION_NODE),
-		),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_HEADER_DASHES,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_HEADER_DASHES, "expected header end '---'"),
-			ruleBuilder.NilNodeSuccessBuilder(),
-		),
+func parseProgram(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Root(
+		"PROGRAM",
+		LANG_SPEC_PROGRAM_NODE,
+		false,
+		parseHeader(ruleBuilder),
+		parseBody(ruleBuilder),
+		ruleBuilder.Token.ExpectVirtual("EOF", LANG_SPEC_LEXER_EOF_TOKEN),
 	)
 }
 
-func parseDeclareBlock(
-	ruleBuilder *RuleBuilder,
-) Rule {
-	return ruleBuilder.Sequence(
-		ruleBuilder.SequenceFailureBuilder("invalid declare block"),
-		ruleBuilder.SequenceSuccessBuilder(LANG_SPEC_DECLARE_NODE),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_KW_DECLARE,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_KW_DECLARE, "expected declare keyword"),
-			ruleBuilder.NilNodeSuccessBuilder(),
-		),
-		ruleBuilder.Choice(
-			ruleBuilder.ChoiceFailureBuilder("expected declaration ident keyword"),
-			ruleBuilder.Expect(
-				LANG_SPEC_LEXER_KW_LEXER_STATES,
-				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_KW_LEXER_STATES, "expected declaration ident keyword"),
-				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DECLARE_IDENTIFIER_NODE),
-			),
-			ruleBuilder.Expect(
-				LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES,
-				ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_KW_LEXER_STATES, "expected declaration ident keyword"),
-				ruleBuilder.ExpectedNodeSuccessBuilder(LANG_SPEC_DECLARE_IDENTIFIER_NODE),
-			),
-		),
-		ruleBuilder.TokenList(
-			LANG_SPEC_LIST_NODE,
-			LANG_SPEC_IDENTIFIER_NODE,
+func parseHeader(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Sequence(
+		"HEADER",
+		LANG_SPEC_HEADER_NODE,
+		ruleBuilder.Token.ExpectVirtual("HEADER START", LANG_SPEC_LEXER_HEADER_DASHES),
+		ruleBuilder.Token.Expect("DSL NAME", LANG_SPEC_DSL_NAME_NODE, LANG_SPEC_LEXER_STRING_LITERAL),
+		ruleBuilder.Token.Expect("DSL VERSION", LANG_SPEC_VERSION_NODE, LANG_SPEC_LEXER_VERSION),
+		ruleBuilder.Token.ExpectVirtual("HEADER SEPARATOR", LANG_SPEC_LEXER_HEADER_SEPARATOR),
+		ruleBuilder.Token.ExpectOneOf("LANGSPEC NAME", LANG_SPEC_LSPEC_NAME_NODE, LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_LEXER_KW_LSPEC),
+		ruleBuilder.Token.Expect("LANGSPEC VERSION", LANG_SPEC_VERSION_NODE, LANG_SPEC_LEXER_VERSION),
+		ruleBuilder.Token.ExpectVirtual("HEADER END", LANG_SPEC_LEXER_HEADER_DASHES),
+	)
+}
+
+func parseBody(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.ZeroOrMore("DECLARATION BLOCKS", LANG_SPEC_DECLARATION_BLOCKS_NODE, parseDeclarationBlock(ruleBuilder))
+}
+
+func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Block(
+		"DECLARATION BLOCK",
+		LANG_SPEC_DECLARATION_BLOCK_NODE,
+		LANG_SPEC_LEXER_SEMICOLON,
+		ruleBuilder.Token.ExpectVirtual("DECLARE KEYWORD", LANG_SPEC_LEXER_KW_DECLARE),
+		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", LANG_SPEC_IDENTIFIER_NODE, LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES, LANG_SPEC_LEXER_KW_LEXER_STATES),
+		ruleBuilder.Token.List(
+			"DECLARE LIST",
 			LANG_SPEC_LEXER_BRACKET_OPEN,
-			LANG_SPEC_LEXER_STRING_LITERAL,
-			LANG_SPEC_LEXER_COMMA,
+			LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_LEXER_COMMA,
 			LANG_SPEC_LEXER_BRACKET_CLOSE,
-			true, // optional trailing comma
-			true, // empty list allowed
+			LANG_SPEC_LIST_NODE, LANG_SPEC_DECLARE_IDENTIFIER_NODE,
+			true, // Allow empty list
+			rule.TrailingOptional,
 		),
-		ruleBuilder.Expect(
-			LANG_SPEC_LEXER_SEMICOLON,
-			ruleBuilder.UnexpectedTokenFailureBuilder(LANG_SPEC_LEXER_SEMICOLON, "expected ;"),
-			ruleBuilder.NilNodeSuccessBuilder(),
-		),
+		ruleBuilder.Token.ExpectVirtual("BLOCK CLOSE", LANG_SPEC_LEXER_SEMICOLON),
 	)
 }
 
@@ -784,56 +753,80 @@ func renderSyntaxErrorsWithContext(source []rune, errs *syntaxa.SyntaxErrors[run
 
 		// For now we only render nice underlines for single-line spans
 		if e.StartLine != e.EndLine || e.StartLine <= 0 || !isValidLine(e.StartLine, len(lines)) {
-			// Multi-line or invalid line reference → minimal fallback
-			if isValidLine(e.StartLine, len(lines)) {
-				line := lines[e.StartLine-1]
-				fmt.Printf(" %4d | %s\n", e.StartLine, string(line))
+			fmt.Println(" ── INVALID ERROR SPAN DETECTED ─────────────────────────────")
+			fmt.Printf("  Message: %s\n", e.Message)
+			fmt.Printf("  StartLine: %d  StartColumn: %d\n", e.StartLine, e.StartColumn)
+			fmt.Printf("  EndLine:   %d  EndColumn:   %d\n", e.EndLine, e.EndColumn)
+			fmt.Printf("  Total lines: %d\n", len(lines))
+
+			var lineIdx int
+			switch {
+			case e.StartLine > 0 && e.StartLine <= len(lines):
+				lineIdx = e.StartLine - 1
+			case len(lines) > 0:
+				lineIdx = len(lines) - 1
+			default:
+				fmt.Println("(no source available)")
+				fmt.Println()
+				continue
 			}
-			fmt.Println("       (multi-line span or invalid line reference — full context omitted)")
-			fmt.Println("")
+
+			line := lines[lineIdx]
+
+			fmt.Printf(" %4d | %s\n", lineIdx+1, string(line))
+			fmt.Print("      | ")
+			fmt.Println(renderSpan(line, e.StartColumn, e.EndColumn, 4))
+
+			fmt.Println(" ──────────────────────────────────────────────────────────")
 			continue
 		}
 
 		// Single-line span
-		lineIdx := e.StartLine - 1
-		line := lines[lineIdx]
+		line := lines[e.StartLine-1]
 
-		startCol := e.StartColumn + 1
-		endCol := e.EndColumn + 1
-
-		// Defensive: if end < start, treat as zero-length or single char
-		if endCol < startCol {
-			endCol = startCol
-		}
-		if endCol < 1 {
-			endCol = 1
-		}
-
-		// Calculate visual positions (tab-aware)
-		visualStart := calculateVisualOffset(line, startCol, 4)
-		visualEnd := calculateVisualOffset(line, endCol, 4) // +1 because we want position *after* last char
-
-		// Print source line
 		fmt.Printf(" %4d | %s\n", e.StartLine, string(line))
-
-		// Print underline
 		fmt.Print("      | ")
-		fmt.Print(strings.Repeat(" ", visualStart))
-
-		spanWidth := visualEnd - visualStart
-		if spanWidth <= 0 {
-			fmt.Print("^") // zero-length or calculation error → single caret
-		} else if spanWidth == 1 {
-			fmt.Print("^")
-		} else {
-			fmt.Print("^")
-			fmt.Print(strings.Repeat("~", spanWidth-1))
-		}
+		fmt.Println(renderSpan(line, e.StartColumn, e.EndColumn, 4))
 
 		fmt.Println()
 	}
 
 	fmt.Println("========================")
+}
+
+func renderSpan(
+	line []rune,
+	startCol, endCol int,
+	tabWidth int,
+) string {
+
+	if endCol < startCol {
+		endCol = startCol
+	}
+	if startCol < 1 {
+		startCol = 1
+	}
+	if endCol < 1 {
+		endCol = 1
+	}
+
+	visualStart := calculateVisualOffset(line, startCol, tabWidth)
+	visualEnd := calculateVisualOffset(line, endCol, tabWidth)
+
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat(" ", visualStart))
+
+	spanWidth := visualEnd - visualStart
+	if spanWidth <= 0 {
+		sb.WriteString("^")
+	} else if spanWidth == 1 {
+		sb.WriteString("^")
+	} else {
+		sb.WriteString("^")
+		sb.WriteString(strings.Repeat("~", spanWidth-1))
+	}
+
+	return sb.String()
 }
 
 func calculateVisualOffset(line []rune, targetCol int, tabWidth int) int {
@@ -864,7 +857,7 @@ func printErrorHeader(e syntaxa.SyntaxError[rune]) {
 	if e.ProducedByLexer {
 		typeStr = "lexer"
 	}
-	fmt.Printf("[%s] %s at %d:%d\n", typeStr, e.Message, e.StartLine, e.StartColumn)
+	fmt.Printf("[%s] (rule=%s) %s at %d:%d\n", typeStr, e.Rule, e.Message, e.StartLine, e.StartColumn)
 }
 
 func isValidLine(lineNum, totalLines int) bool {
@@ -904,17 +897,14 @@ func renderParseTrace[TToken any](
 
 	for i, ev := range trace.Events {
 		fmt.Printf(
-			"%04d | cur=%d | raw=%s | logical=%s | sel=%v | ok=%v | cons=%v | top=%v | node=%v | rev=%d\n",
+			"%04d | cur=%d | raw=%s | logical=%s | ok=%v | cons=%v | node=%v \n",
 			i,
 			ev.Cursor,
 			formatToken(ev.RawToken),
 			formatToken(ev.LogicalToken),
-			ev.RuleSelected,
 			ev.RuleSucceeded,
 			ev.Consumed,
-			ev.TopLevel,
 			ev.NodeReturned,
-			ev.RootRevision,
 		)
 	}
 
