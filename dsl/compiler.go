@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"foundation/system"
 	"langspec"
+	"langspec/editor"
+	"langspec/editor/sublime"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
@@ -62,12 +64,14 @@ type LangSpecCompiler struct {
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 	validatorConfig *validation.ASTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
-	sessionCache *langspec.LangParserSession[rune]
+	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
+	sessionCache  *langspec.LangParserSession[rune]
 }
 
 /* LangSpecCompilerCreate constructs a compiler instance. */
 func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *LangSpecCompiler {
-	spec := buildLangSpecDSLSpec()
+	spec, ruleset := buildLangSpecDSLSpec()
+
 	langParserConfig := langspec.LangParserConfigurationCreate(
 		spec,
 		compilerConfig.scratchAllocationFunction,
@@ -82,6 +86,7 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	return &LangSpecCompiler{
 		parser:          parser,
 		validatorConfig: validationConfig,
+		lexingRuleSet:   ruleset,
 	}
 }
 
@@ -92,6 +97,35 @@ Forgetting to call this results in memory leaks.
 */
 func LangSpecCompilerDestroy(compiler *LangSpecCompiler) {
 	langspec.LangParserDestroy(compiler.parser)
+}
+
+/*
+LangSpecCompilerBuildSublimeSyntax builds a Sublime Text syntax file for the LangSpec DSL.
+*/
+func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, outputFile string) error {
+	roleScopes := getRoleScopes()
+	tokenScopes := getTokenScopes()
+
+	gen, err := editor.BuildGeneratedSyntaxFromRulesetSingleState(
+		compiler.lexingRuleSet,
+		roleScopes,
+		tokenScopes,
+		".lspec",
+	)
+
+	if err != nil {
+		return err
+	}
+
+	configuration := sublime.SublimeTextGeneratorConfigCreate(
+		outputFile,
+		"LangSpec (LSpec)",
+		"source.lspec",
+		[]string{"lspec"},
+		gen,
+	)
+
+	return sublime.SublimeTextGenerateSyntaxFile(configuration)
 }
 
 /*

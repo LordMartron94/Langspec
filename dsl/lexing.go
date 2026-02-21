@@ -33,7 +33,6 @@ const (
 	TokKWLSpec
 
 	TokKWDeclare
-	TokKWLexerStates
 	TokKWLexerTokenTypes
 
 	TokBracketOpen
@@ -91,23 +90,23 @@ func trivia(p pattern.RegulaAST[rune], tok LangSpecLexerTokenType, role LangSpec
 
 // --- Structural literals
 
-func LitRune(ch rune, tok LangSpecLexerTokenType) ruleDef {
+func litRune(ch rune, tok LangSpecLexerTokenType) ruleDef {
 	return structural(pattern.Literal(ch), tok, 0)
 }
 
-func LitString(s string, tok LangSpecLexerTokenType) ruleDef {
+func litString(s string, tok LangSpecLexerTokenType) ruleDef {
 	return structural(pattern.LiteralString[rune](s), tok, 0)
 }
 
 // --- Keywords (still structural; priority 1 to beat weaker matches if needed)
 
-func KW(s string, tok LangSpecLexerTokenType) ruleDef {
+func kw(s string, tok LangSpecLexerTokenType) ruleDef {
 	return structural(pattern.LiteralString[rune](s), tok, 1)
 }
 
 // --- Whitespace / comments (trivia)
 
-func WS() ruleDef {
+func ws() ruleDef {
 	ws := pattern.AnyOf(
 		pattern.Literal(' '),
 		pattern.Literal('\t'),
@@ -116,8 +115,7 @@ func WS() ruleDef {
 	return trivia(ws, TokWhitespace, LANG_SPEC_WHITESPACE_ROLE, 0)
 }
 
-// Line comment: // ... (until newline or EOF)
-func CommentLine() ruleDef {
+func commentLine() ruleDef {
 	// anything except newline
 	notNL := pattern.Class(
 		pattern.Range(0, '\n'-1),
@@ -132,8 +130,7 @@ func CommentLine() ruleDef {
 	return trivia(line, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
 }
 
-// Block comment: /* ... */  (non-nested)
-func CommentBlock() ruleDef {
+func commentBlock() ruleDef {
 	// This is the only mildly annoying part without a "not this sequence" primitive.
 	// We'll do a safe but simple variant:
 	//   "/*" ( (not '*') | ('*' not '/') )* "*/"
@@ -165,8 +162,7 @@ func CommentBlock() ruleDef {
 
 // --- Atoms
 
-// " ... " (no escapes)
-func StringLiteralNoEsc() ruleDef {
+func stringLiteralNoEsc() ruleDef {
 	notQuote := pattern.Class(
 		pattern.Range(0, '"'-1),
 		pattern.Range('"'+1, rune(0x10FFFF)),
@@ -179,8 +175,7 @@ func StringLiteralNoEsc() ruleDef {
 	return structural(quoted, TokStringLiteral, 1)
 }
 
-// version: v1.2.3
-func VersionSemverV3() ruleDef {
+func versionSemverV3() ruleDef {
 	digits := pattern.Digit.Plus()
 	version := pattern.Sequence(
 		pattern.Literal('v'),
@@ -195,8 +190,11 @@ func VersionSemverV3() ruleDef {
 
 // ===========================================================
 
-func buildLangSpecDSLSpec() *langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind] {
-	lexerSpec := buildLangSpecDSLLexerSpec()
+func buildLangSpecDSLSpec() (
+	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
+	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+) {
+	lexerSpec, ruleset := buildLangSpecDSLLexerSpec()
 	lexerSpec.WithDFADebugFormatter(
 		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
 	)
@@ -208,15 +206,13 @@ func buildLangSpecDSLSpec() *langspec.LangSpec[rune, LangSpecLexerTokenType, Lan
 		parserSpec,
 	)
 
-	return dslSpec
+	return dslSpec, ruleset
 }
 
-func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
-	rune,
-	LangSpecLexerTokenType,
-	LangSpecLexerTokenRole,
-	LangSpecLexerState,
-] {
+func buildLangSpecDSLLexerSpec() (
+	*langspec.LexerSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState],
+	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+) {
 	lexerSpec := langspec.LexerSpecCreate[
 		rune,
 		LangSpecLexerTokenType,
@@ -244,29 +240,60 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 
 	addRules(rs,
 		// trivia (ignored by parser, but still lexed)
-		WS(),
-		CommentLine(),
-		CommentBlock(),
+		ws(),
+		commentLine(),
+		commentBlock(),
 
 		// header / punctuation (priority 0)
-		LitString("---", TokDashes),
-		LitRune('|', TokHeaderSeparator),
-		LitRune(',', TokComma),
-		LitRune(';', TokSemicolon),
-		LitRune('{', TokBracketOpen),
-		LitRune('}', TokBracketClose),
+		litString("---", TokDashes),
+		litRune('|', TokHeaderSeparator),
+		litRune(',', TokComma),
+		litRune(';', TokSemicolon),
+		litRune('{', TokBracketOpen),
+		litRune('}', TokBracketClose),
 
 		// atoms (priority 1)
-		StringLiteralNoEsc(),
-		VersionSemverV3(),
+		stringLiteralNoEsc(),
+		versionSemverV3(),
 
 		// keywords (priority 1)
-		KW("lspec", TokKWLSpec),
-		KW("declare", TokKWDeclare),
-		KW("LexerStates", TokKWLexerStates),
-		KW("LexerTokenTypes", TokKWLexerTokenTypes),
+		kw("lspec", TokKWLSpec),
+		kw("declare", TokKWDeclare),
+		kw("LexerTokenTypes", TokKWLexerTokenTypes),
 	)
 
 	lexerSpec.WithRuleset(LANG_SPEC_LEXER_STATE_DEFAULT, *rs)
-	return lexerSpec
+	return lexerSpec, rs
+}
+
+func getRoleScopes() map[LangSpecLexerTokenRole]string {
+	return map[LangSpecLexerTokenRole]string{
+		LANG_SPEC_WHITESPACE_ROLE: "text.whitespace",
+		LANG_SPEC_COMMENT_ROLE:    "comment",
+		LANG_SPEC_STRUCTURAL_ROLE: "source",
+	}
+}
+
+func getTokenScopes() map[LangSpecLexerTokenType]string {
+	return map[LangSpecLexerTokenType]string{
+
+		// ---------------- Keywords ----------------
+		TokKWLSpec:           "keyword.control",
+		TokKWDeclare:         "keyword.control",
+		TokKWLexerTokenTypes: "meta.type",
+
+		// ---------------- Literals ----------------
+		TokStringLiteral: "string.quoted.double",
+		TokVersion:       "constant.numeric.version",
+
+		// ---------------- Punctuation / structure ----------------
+		TokDashes:          "punctuation.separator.header",
+		TokHeaderSeparator: "punctuation.separator.pipe",
+
+		TokComma:     "punctuation.separator.comma",
+		TokSemicolon: "punctuation.terminator.statement",
+
+		TokBracketOpen:  "punctuation.section.block.begin",
+		TokBracketClose: "punctuation.section.block.end",
+	}
 }

@@ -121,7 +121,7 @@ func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
 		NodeDeclarationBlock,
 		TokSemicolon,
 		ruleBuilder.Token.ExpectVirtual("DECLARE KEYWORD", TokKWDeclare),
-		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", NodeIdentifier, TokKWLexerTokenTypes, TokKWLexerStates),
+		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", NodeIdentifier, TokKWLexerTokenTypes),
 		ruleBuilder.Token.List(
 			"DECLARE LIST",
 			TokBracketOpen,

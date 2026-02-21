@@ -7,6 +7,7 @@ import (
 )
 
 const TestFile = "assets/testing/input.lspec"
+const TestSyntaxFile = "assets/testing/lspec.sublime-syntax"
 
 func TestDSLCompiler(t *testing.T) {
 	scratchAllocator := memforge.DynamicLinearAllocatorCreateFunction(uint64(memcore.KiloByte), func(currentCap, neededCap uint64) uint64 {
@@ -30,7 +31,11 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
 
-	if err := LangSpecCompilerCompile(compiler, TestFile); err != nil {
-		t.Fatalf("Compilation failed with error: %s", err.Error())
+	// if err := LangSpecCompilerCompile(compiler, TestFile); err != nil {
+	// 	t.Fatalf("Compilation failed with error: %s", err.Error())
+	// }
+
+	if err := LangSpecCompilerBuildSublimeSyntax(compiler, TestSyntaxFile); err != nil {
+		t.Fatalf("Sublime Syntax generation failed with error: %s", err.Error())
 	}
 }

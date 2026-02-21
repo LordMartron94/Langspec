@@ -32,7 +32,6 @@ func getValidationStages() []*ValidationStage {
 				blocks := root.FindAllKind(NodeDeclarationBlock)
 
 				required := []LangSpecLexerTokenType{
-					TokKWLexerStates,
 					TokKWLexerTokenTypes,
 				}
 				seenSet := map[LangSpecLexerTokenType]struct{}{}
