@@ -121,24 +121,23 @@ func LangSpecCompilerCompile(
 
 	session := getSession(compiler, sourceFile)
 
-	// lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
-	// if err != nil {
-	// 	return fmt.Errorf("lexing error: %w", err)
-	// }
+	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
+	if err != nil {
+		return fmt.Errorf("lexing error: %w", err)
+	}
 
-	// for i, lexeme := range lexemes {
-	// 	debug := lexeme.DebugString(
-	// 		lexarch.RuneFormatterDefault(),
-	// 		func(lsltt LangSpecLexerTokenType) string {
-	// 			return lsltt.String()
-	// 		},
-	// 		func(lsltr LangSpecLexerTokenRole) string {
-	// 			return lsltr.String()
-	// 		},
-	// 	)
+	for i, lexeme := range lexemes {
+		debug := lexeme.DebugString(
+			func(lsltt LangSpecLexerTokenType) string {
+				return lsltt.String()
+			},
+			func(lsltr LangSpecLexerTokenRole) string {
+				return lsltr.String()
+			},
+		)
 
-	// 	fmt.Printf("%05d) %s\n", i, debug)
-	// }
+		fmt.Printf("%05d) %s\n", i, debug)
+	}
 
 	// return nil
 

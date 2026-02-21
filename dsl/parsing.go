@@ -79,7 +79,7 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	)
 	parserSpec.WithSkipRoles(
 		LANG_SPEC_WHITESPACE_ROLE,
-		LANG_SPEC_IGNORED_ROLE,
+		LANG_SPEC_COMMENT_ROLE,
 	)
 	parserSpec.WithPostProcessor(finalizationPostProcessor)
 

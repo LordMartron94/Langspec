@@ -9,13 +9,13 @@ func _() {
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
 	_ = x[LANG_SPEC_STRUCTURAL_ROLE-1]
-	_ = x[LANG_SPEC_IGNORED_ROLE-2]
-	_ = x[LANG_SPEC_WHITESPACE_ROLE-3]
+	_ = x[LANG_SPEC_WHITESPACE_ROLE-2]
+	_ = x[LANG_SPEC_COMMENT_ROLE-3]
 }
 
-const _LangSpecLexerTokenRole_name = "LANG_SPEC_STRUCTURAL_ROLELANG_SPEC_IGNORED_ROLELANG_SPEC_WHITESPACE_ROLE"
+const _LangSpecLexerTokenRole_name = "LANG_SPEC_STRUCTURAL_ROLELANG_SPEC_WHITESPACE_ROLELANG_SPEC_COMMENT_ROLE"
 
-var _LangSpecLexerTokenRole_index = [...]uint8{0, 25, 47, 72}
+var _LangSpecLexerTokenRole_index = [...]uint8{0, 25, 50, 72}
 
 func (i LangSpecLexerTokenRole) String() string {
 	idx := int(i) - 1

@@ -40,6 +40,8 @@ const (
 	TokBracketClose
 	TokSemicolon
 	TokComma
+
+	TokComment
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -47,8 +49,8 @@ type LangSpecLexerTokenRole uint8
 
 const (
 	LANG_SPEC_STRUCTURAL_ROLE LangSpecLexerTokenRole = iota + 1
-	LANG_SPEC_IGNORED_ROLE
 	LANG_SPEC_WHITESPACE_ROLE
+	LANG_SPEC_COMMENT_ROLE
 )
 
 // ----------------------------------------------------------- BUILDING
@@ -68,6 +70,130 @@ func addRules(
 		rs.WithRulePriority(d.pattern, d.token, d.role, d.priority)
 	}
 }
+
+// ===========================================================
+// ATOM HELPERS (make grammar list declarative)
+// ===========================================================
+
+// --- Base constructors (tiny, boring, reusable)
+
+func def(p pattern.RegulaAST[rune], tok LangSpecLexerTokenType, role LangSpecLexerTokenRole, prio int) ruleDef {
+	return ruleDef{pattern: p, token: tok, role: role, priority: prio}
+}
+
+func structural(p pattern.RegulaAST[rune], tok LangSpecLexerTokenType, prio int) ruleDef {
+	return def(p, tok, LANG_SPEC_STRUCTURAL_ROLE, prio)
+}
+
+func trivia(p pattern.RegulaAST[rune], tok LangSpecLexerTokenType, role LangSpecLexerTokenRole, prio int) ruleDef {
+	return def(p, tok, role, prio)
+}
+
+// --- Structural literals
+
+func LitRune(ch rune, tok LangSpecLexerTokenType) ruleDef {
+	return structural(pattern.Literal(ch), tok, 0)
+}
+
+func LitString(s string, tok LangSpecLexerTokenType) ruleDef {
+	return structural(pattern.LiteralString[rune](s), tok, 0)
+}
+
+// --- Keywords (still structural; priority 1 to beat weaker matches if needed)
+
+func KW(s string, tok LangSpecLexerTokenType) ruleDef {
+	return structural(pattern.LiteralString[rune](s), tok, 1)
+}
+
+// --- Whitespace / comments (trivia)
+
+func WS() ruleDef {
+	ws := pattern.AnyOf(
+		pattern.Literal(' '),
+		pattern.Literal('\t'),
+		pattern.Literal('\n'),
+	).Plus()
+	return trivia(ws, TokWhitespace, LANG_SPEC_WHITESPACE_ROLE, 0)
+}
+
+// Line comment: // ... (until newline or EOF)
+func CommentLine() ruleDef {
+	// anything except newline
+	notNL := pattern.Class(
+		pattern.Range(0, '\n'-1),
+		pattern.Range('\n'+1, rune(0x10FFFF)),
+	)
+
+	line := pattern.Sequence(
+		pattern.Literal('/'),
+		pattern.Literal('/'),
+		notNL.Star(),
+	)
+	return trivia(line, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
+}
+
+// Block comment: /* ... */  (non-nested)
+func CommentBlock() ruleDef {
+	// This is the only mildly annoying part without a "not this sequence" primitive.
+	// We'll do a safe but simple variant:
+	//   "/*" ( (not '*') | ('*' not '/') )* "*/"
+	//
+	// That accepts anything until it sees the terminating */.
+	notStar := pattern.Class(
+		pattern.Range(0, '*'-1),
+		pattern.Range('*'+1, rune(0x10FFFF)),
+	)
+	starNotSlash := pattern.Sequence(
+		pattern.Literal('*'),
+		pattern.Class(
+			pattern.Range(0, '/'-1),
+			pattern.Range('/'+1, rune(0x10FFFF)),
+		),
+	)
+
+	bodyUnit := pattern.AnyOf(notStar, starNotSlash)
+
+	block := pattern.Sequence(
+		pattern.Literal('/'),
+		pattern.Literal('*'),
+		bodyUnit.Star(),
+		pattern.Literal('*'),
+		pattern.Literal('/'),
+	)
+	return trivia(block, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
+}
+
+// --- Atoms
+
+// " ... " (no escapes)
+func StringLiteralNoEsc() ruleDef {
+	notQuote := pattern.Class(
+		pattern.Range(0, '"'-1),
+		pattern.Range('"'+1, rune(0x10FFFF)),
+	)
+	quoted := pattern.Sequence(
+		pattern.Literal('"'),
+		notQuote.Star(),
+		pattern.Literal('"'),
+	)
+	return structural(quoted, TokStringLiteral, 1)
+}
+
+// version: v1.2.3
+func VersionSemverV3() ruleDef {
+	digits := pattern.Digit.Plus()
+	version := pattern.Sequence(
+		pattern.Literal('v'),
+		digits,
+		pattern.Literal('.'),
+		digits,
+		pattern.Literal('.'),
+		digits,
+	)
+	return structural(version, TokVersion, 1)
+}
+
+// ===========================================================
 
 func buildLangSpecDSLSpec() *langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind] {
 	lexerSpec := buildLangSpecDSLLexerSpec()
@@ -113,57 +239,32 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 	)
 
 	// -------------------------
-	// GRAMMAR (at a glance)
+	// GRAMMAR (purely declarative)
 	// -------------------------
 
-	// whitespace (ignored)
-	ws := pattern.AnyOf(
-		pattern.Literal(' '),
-		pattern.Literal('\t'),
-		pattern.Literal('\n'),
-	).Plus()
-	rs.WithRule(ws, TokWhitespace, LANG_SPEC_WHITESPACE_ROLE)
-
-	// string literal: " ... " (no escapes)
-	notQuote := pattern.Class(
-		pattern.Range(0, '"'-1),
-		pattern.Range('"'+1, rune(0x10FFFF)),
-	)
-	quoted := pattern.Sequence(
-		pattern.Literal('"'),
-		notQuote.Star(),
-		pattern.Literal('"'),
-	)
-
-	// version: v1.2.3
-	digits := pattern.Digit.Plus()
-	version := pattern.Sequence(
-		pattern.Literal('v'),
-		digits,
-		pattern.Literal('.'),
-		digits,
-		pattern.Literal('.'),
-		digits,
-	)
-
 	addRules(rs,
+		// trivia (ignored by parser, but still lexed)
+		WS(),
+		CommentLine(),
+		CommentBlock(),
+
 		// header / punctuation (priority 0)
-		ruleDef{pattern.LiteralString[rune]("---"), TokDashes, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal('|'), TokHeaderSeparator, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal(','), TokComma, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal(';'), TokSemicolon, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal('{'), TokBracketOpen, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal('}'), TokBracketClose, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		LitString("---", TokDashes),
+		LitRune('|', TokHeaderSeparator),
+		LitRune(',', TokComma),
+		LitRune(';', TokSemicolon),
+		LitRune('{', TokBracketOpen),
+		LitRune('}', TokBracketClose),
 
 		// atoms (priority 1)
-		ruleDef{quoted, TokStringLiteral, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{version, TokVersion, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		StringLiteralNoEsc(),
+		VersionSemverV3(),
 
 		// keywords (priority 1)
-		ruleDef{pattern.LiteralString[rune]("lspec"), TokKWLSpec, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{pattern.LiteralString[rune]("declare"), TokKWDeclare, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{pattern.LiteralString[rune]("LexerStates"), TokKWLexerStates, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{pattern.LiteralString[rune]("LexerTokenTypes"), TokKWLexerTokenTypes, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		KW("lspec", TokKWLSpec),
+		KW("declare", TokKWDeclare),
+		KW("LexerStates", TokKWLexerStates),
+		KW("LexerTokenTypes", TokKWLexerTokenTypes),
 	)
 
 	lexerSpec.WithRuleset(LANG_SPEC_LEXER_STATE_DEFAULT, *rs)
