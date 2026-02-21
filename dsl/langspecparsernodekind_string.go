@@ -8,23 +8,23 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
-	_ = x[LANG_SPEC_ERROR_NODE-1]
-	_ = x[LANG_SPEC_PROGRAM_NODE-2]
-	_ = x[LANG_SPEC_HEADER_NODE-3]
-	_ = x[LANG_SPEC_DECLARATION_BLOCK_NODE-4]
-	_ = x[LANG_SPEC_DSL_NAME_NODE-5]
-	_ = x[LANG_SPEC_VERSION_NODE-6]
-	_ = x[LANG_SPEC_LSPEC_NAME_NODE-7]
-	_ = x[LANG_SPEC_DECLARE_IDENTIFIER_NODE-8]
-	_ = x[LANG_SPEC_IDENTIFIER_NODE-9]
-	_ = x[LANG_SPEC_LIST_NODE-10]
-	_ = x[LANG_SPEC_BODY_NODE-11]
-	_ = x[LANG_SPEC_DECLARATION_BLOCKS_NODE-12]
+	_ = x[NodeError-1]
+	_ = x[NodeProgram-2]
+	_ = x[NodeHeader-3]
+	_ = x[NodeBody-4]
+	_ = x[NodeDeclarationBlocks-5]
+	_ = x[NodeDeclarationBlock-6]
+	_ = x[NodeList-7]
+	_ = x[NodeDSLName-8]
+	_ = x[NodeVersion-9]
+	_ = x[NodeLSPECName-10]
+	_ = x[NodeDeclareIdentifier-11]
+	_ = x[NodeIdentifier-12]
 }
 
-const _LangSpecParserNodeKind_name = "LANG_SPEC_ERROR_NODELANG_SPEC_PROGRAM_NODELANG_SPEC_HEADER_NODELANG_SPEC_DECLARATION_BLOCK_NODELANG_SPEC_DSL_NAME_NODELANG_SPEC_VERSION_NODELANG_SPEC_LSPEC_NAME_NODELANG_SPEC_DECLARE_IDENTIFIER_NODELANG_SPEC_IDENTIFIER_NODELANG_SPEC_LIST_NODELANG_SPEC_BODY_NODELANG_SPEC_DECLARATION_BLOCKS_NODE"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeBodyNodeDeclarationBlocksNodeDeclarationBlockNodeListNodeDSLNameNodeVersionNodeLSPECNameNodeDeclareIdentifierNodeIdentifier"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 20, 42, 63, 95, 118, 140, 165, 198, 223, 242, 261, 294}
+var _LangSpecParserNodeKind_index = [...]uint8{0, 9, 20, 30, 38, 59, 79, 87, 98, 109, 122, 143, 157}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

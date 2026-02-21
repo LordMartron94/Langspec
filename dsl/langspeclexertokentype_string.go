@@ -8,25 +8,25 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
-	_ = x[LANG_SPEC_LEXER_EOF_TOKEN-1]
-	_ = x[LANG_SPEC_LEXER_WHITESPACE-2]
-	_ = x[LANG_SPEC_LEXER_HEADER_DASHES-3]
-	_ = x[LANG_SPEC_LEXER_HEADER_SEPARATOR-4]
-	_ = x[LANG_SPEC_LEXER_STRING_LITERAL-5]
-	_ = x[LANG_SPEC_LEXER_VERSION-6]
-	_ = x[LANG_SPEC_LEXER_KW_LSPEC-7]
-	_ = x[LANG_SPEC_LEXER_KW_DECLARE-8]
-	_ = x[LANG_SPEC_LEXER_KW_LEXER_STATES-9]
-	_ = x[LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES-10]
-	_ = x[LANG_SPEC_LEXER_BRACKET_OPEN-11]
-	_ = x[LANG_SPEC_LEXER_BRACKET_CLOSE-12]
-	_ = x[LANG_SPEC_LEXER_SEMICOLON-13]
-	_ = x[LANG_SPEC_LEXER_COMMA-14]
+	_ = x[TokEOF-1]
+	_ = x[TokWhitespace-2]
+	_ = x[TokDashes-3]
+	_ = x[TokHeaderSeparator-4]
+	_ = x[TokStringLiteral-5]
+	_ = x[TokVersion-6]
+	_ = x[TokKWLSpec-7]
+	_ = x[TokKWDeclare-8]
+	_ = x[TokKWLexerStates-9]
+	_ = x[TokKWLexerTokenTypes-10]
+	_ = x[TokBracketOpen-11]
+	_ = x[TokBracketClose-12]
+	_ = x[TokSemicolon-13]
+	_ = x[TokComma-14]
 }
 
-const _LangSpecLexerTokenType_name = "LANG_SPEC_LEXER_EOF_TOKENLANG_SPEC_LEXER_WHITESPACELANG_SPEC_LEXER_HEADER_DASHESLANG_SPEC_LEXER_HEADER_SEPARATORLANG_SPEC_LEXER_STRING_LITERALLANG_SPEC_LEXER_VERSIONLANG_SPEC_LEXER_KW_LSPECLANG_SPEC_LEXER_KW_DECLARELANG_SPEC_LEXER_KW_LEXER_STATESLANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPESLANG_SPEC_LEXER_BRACKET_OPENLANG_SPEC_LEXER_BRACKET_CLOSELANG_SPEC_LEXER_SEMICOLONLANG_SPEC_LEXER_COMMA"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokDashesTokHeaderSeparatorTokStringLiteralTokVersionTokKWLSpecTokKWDeclareTokKWLexerStatesTokKWLexerTokenTypesTokBracketOpenTokBracketCloseTokSemicolonTokComma"
 
-var _LangSpecLexerTokenType_index = [...]uint16{0, 25, 51, 80, 112, 142, 165, 189, 215, 246, 282, 310, 339, 364, 385}
+var _LangSpecLexerTokenType_index = [...]uint8{0, 6, 19, 28, 46, 62, 72, 82, 94, 110, 130, 144, 159, 171, 179}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1

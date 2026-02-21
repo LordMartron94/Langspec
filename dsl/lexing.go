@@ -19,27 +19,27 @@ type LangSpecLexerTokenType uint32
 
 const (
 	// Core
-	LANG_SPEC_LEXER_EOF_TOKEN LangSpecLexerTokenType = iota + 1
+	TokEOF LangSpecLexerTokenType = iota + 1
 
-	LANG_SPEC_LEXER_WHITESPACE
+	TokWhitespace
 
 	// Header structure
-	LANG_SPEC_LEXER_HEADER_DASHES
-	LANG_SPEC_LEXER_HEADER_SEPARATOR
+	TokDashes
+	TokHeaderSeparator
 
-	LANG_SPEC_LEXER_STRING_LITERAL
-	LANG_SPEC_LEXER_VERSION
+	TokStringLiteral
+	TokVersion
 
-	LANG_SPEC_LEXER_KW_LSPEC
+	TokKWLSpec
 
-	LANG_SPEC_LEXER_KW_DECLARE
-	LANG_SPEC_LEXER_KW_LEXER_STATES
-	LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES
+	TokKWDeclare
+	TokKWLexerStates
+	TokKWLexerTokenTypes
 
-	LANG_SPEC_LEXER_BRACKET_OPEN
-	LANG_SPEC_LEXER_BRACKET_CLOSE
-	LANG_SPEC_LEXER_SEMICOLON
-	LANG_SPEC_LEXER_COMMA
+	TokBracketOpen
+	TokBracketClose
+	TokSemicolon
+	TokComma
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -95,7 +95,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 		rune,
 		LangSpecLexerTokenType,
 		LangSpecLexerTokenRole](
-		LANG_SPEC_LEXER_EOF_TOKEN,
+		TokEOF,
 		LANG_SPEC_LEXER_STATE_DEFAULT,
 		lexarch.NewlineDetectorRune(),
 		lexarch.ColumnAdvanceRune(4),
@@ -122,7 +122,7 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 		pattern.Literal('\t'),
 		pattern.Literal('\n'),
 	).Plus()
-	rs.WithRule(ws, LANG_SPEC_LEXER_WHITESPACE, LANG_SPEC_WHITESPACE_ROLE)
+	rs.WithRule(ws, TokWhitespace, LANG_SPEC_WHITESPACE_ROLE)
 
 	// string literal: " ... " (no escapes)
 	notQuote := pattern.Class(
@@ -148,22 +148,22 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 
 	addRules(rs,
 		// header / punctuation (priority 0)
-		ruleDef{pattern.LiteralString[rune]("---"), LANG_SPEC_LEXER_HEADER_DASHES, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal('|'), LANG_SPEC_LEXER_HEADER_SEPARATOR, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal(','), LANG_SPEC_LEXER_COMMA, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal(';'), LANG_SPEC_LEXER_SEMICOLON, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal('{'), LANG_SPEC_LEXER_BRACKET_OPEN, LANG_SPEC_STRUCTURAL_ROLE, 0},
-		ruleDef{pattern.Literal('}'), LANG_SPEC_LEXER_BRACKET_CLOSE, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		ruleDef{pattern.LiteralString[rune]("---"), TokDashes, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		ruleDef{pattern.Literal('|'), TokHeaderSeparator, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		ruleDef{pattern.Literal(','), TokComma, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		ruleDef{pattern.Literal(';'), TokSemicolon, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		ruleDef{pattern.Literal('{'), TokBracketOpen, LANG_SPEC_STRUCTURAL_ROLE, 0},
+		ruleDef{pattern.Literal('}'), TokBracketClose, LANG_SPEC_STRUCTURAL_ROLE, 0},
 
 		// atoms (priority 1)
-		ruleDef{quoted, LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{version, LANG_SPEC_LEXER_VERSION, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		ruleDef{quoted, TokStringLiteral, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		ruleDef{version, TokVersion, LANG_SPEC_STRUCTURAL_ROLE, 1},
 
 		// keywords (priority 1)
-		ruleDef{pattern.LiteralString[rune]("lspec"), LANG_SPEC_LEXER_KW_LSPEC, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{pattern.LiteralString[rune]("declare"), LANG_SPEC_LEXER_KW_DECLARE, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{pattern.LiteralString[rune]("LexerStates"), LANG_SPEC_LEXER_KW_LEXER_STATES, LANG_SPEC_STRUCTURAL_ROLE, 1},
-		ruleDef{pattern.LiteralString[rune]("LexerTokenTypes"), LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		ruleDef{pattern.LiteralString[rune]("lspec"), TokKWLSpec, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		ruleDef{pattern.LiteralString[rune]("declare"), TokKWDeclare, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		ruleDef{pattern.LiteralString[rune]("LexerStates"), TokKWLexerStates, LANG_SPEC_STRUCTURAL_ROLE, 1},
+		ruleDef{pattern.LiteralString[rune]("LexerTokenTypes"), TokKWLexerTokenTypes, LANG_SPEC_STRUCTURAL_ROLE, 1},
 	)
 
 	lexerSpec.WithRuleset(LANG_SPEC_LEXER_STATE_DEFAULT, *rs)

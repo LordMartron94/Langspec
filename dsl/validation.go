@@ -29,11 +29,11 @@ func getValidationStages() []*ValidationStage {
 			0,
 			func(ctx *ValidationStageCtx) {
 				root := ctx.RootNode
-				blocks := root.FindAllKind(LANG_SPEC_DECLARATION_BLOCK_NODE)
+				blocks := root.FindAllKind(NodeDeclarationBlock)
 
 				required := []LangSpecLexerTokenType{
-					LANG_SPEC_LEXER_KW_LEXER_STATES,
-					LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES,
+					TokKWLexerStates,
+					TokKWLexerTokenTypes,
 				}
 				seenSet := map[LangSpecLexerTokenType]struct{}{}
 
@@ -52,7 +52,7 @@ func getValidationStages() []*ValidationStage {
 					}
 
 					seenDeclarationsSet := map[string]struct{}{}
-					identifiers := block.FindAllKind(LANG_SPEC_DECLARE_IDENTIFIER_NODE)
+					identifiers := block.FindAllKind(NodeDeclareIdentifier)
 					for _, identifier := range identifiers {
 						identifierValue, _ := AttributeAs[string](identifier, ATTRIBUTE_LITERAL_STRING_FORMATTED)
 						if _, seen := seenDeclarationsSet[identifierValue]; seen {
