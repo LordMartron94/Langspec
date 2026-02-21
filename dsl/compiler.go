@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"foundation/system"
 	"langspec"
+	"langspec/validation"
 	"lexarch"
 	"memarch"
 	"strings"
@@ -173,7 +174,9 @@ type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerT
 type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
-type ValidationStageCtx = langspec.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationStage = validation.ASTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+
+type ValidationStageCtx = validation.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 type Node = syntaxa.SyntaxaASTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
@@ -189,7 +192,7 @@ func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 /* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
-	stageReporter             langspec.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	stageReporter             validation.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 }
 
 /*
@@ -199,7 +202,7 @@ Stage reporter is optional.
 */
 func LangSpecCompilerConfigurationCreate(
 	scratchAllocationFunction memarch.AllocationFn,
-	stageReporter langspec.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
+	stageReporter validation.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 ) *LangSpecCompilerConfiguration {
 	return &LangSpecCompilerConfiguration{
 		scratchAllocationFunction: scratchAllocationFunction,
@@ -213,7 +216,8 @@ func LangSpecCompilerConfigurationCreate(
 LangSpecCompiler compiles a .lspec file into the LangSpec configuration needed by the LangParser.
 */
 type LangSpecCompiler struct {
-	parser *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	validatorConfig *validation.ASTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 	sessionCache *langspec.LangParserSession[rune]
 }
@@ -224,12 +228,17 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	langParserConfig := langspec.LangParserConfigurationCreate(
 		spec,
 		compilerConfig.scratchAllocationFunction,
-		compilerConfig.stageReporter,
 	)
 	parser := langspec.LangParserCreate(langParserConfig)
 
+	validationConfig := validation.ASTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]()
+	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
+		getValidationStages()...,
+	)
+
 	return &LangSpecCompiler{
-		parser: parser,
+		parser:          parser,
+		validatorConfig: validationConfig,
 	}
 }
 
@@ -290,7 +299,7 @@ func LangSpecCompilerCompile(
 
 	// return nil
 
-	trace, rootNode, syntaxErrors, validationEntries, err := langspec.LangParserParseFile(
+	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
 		compiler.parser,
 		session,
 	)
@@ -317,36 +326,43 @@ func LangSpecCompilerCompile(
 	// Validation entries
 	// ============================================================
 
-	if validationEntries != nil && len(validationEntries.Results) > 0 {
-		fmt.Println("\n===== VALIDATION =====")
-
-		errorAmount := 0
-		for _, stage := range validationEntries.Results {
-			fmt.Printf("\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
-
-			if len(stage.Entries) == 0 {
-				fmt.Println("  ✔ no issues")
-				continue
-			}
-
-			for _, entry := range stage.Entries {
-				if entry.Severity >= langspec.VALIDATION_SEVERITY_INFO {
-					errorAmount++
-				}
-
-				fmt.Printf(
-					"  [%v] %s — %s\n",
-					entry.Severity,
-					entry.Code,
-					entry.Message,
-				)
-			}
+	if !syntaxErrors.HasErrors() {
+		validationEntries, validationErr := validation.ASTValidatorRun(compiler.validatorConfig, rootNode)
+		if validationErr != nil {
+			err = validationErr
 		}
 
-		fmt.Println("=======================")
+		if validationEntries != nil && len(validationEntries.Results) > 0 {
+			fmt.Println("\n===== VALIDATION =====")
 
-		if errorAmount > 0 {
-			err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
+			errorAmount := 0
+			for _, stage := range validationEntries.Results {
+				fmt.Printf("\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
+
+				if len(stage.Entries) == 0 {
+					fmt.Println("  ✔ no issues")
+					continue
+				}
+
+				for _, entry := range stage.Entries {
+					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
+						errorAmount++
+					}
+
+					fmt.Printf(
+						"  [%v] %s — %s\n",
+						entry.Severity,
+						entry.Code,
+						entry.Message,
+					)
+				}
+			}
+
+			fmt.Println("=======================")
+
+			if errorAmount > 0 {
+				err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
+			}
 		}
 	}
 
@@ -652,8 +668,61 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	)
 	parserSpec.WithPostProcessor(finalizationPostProcessor)
 
-	parserSpec.WithValidationStages(
-		langspec.ASTValidationStageCreate(
+	return parserSpec
+}
+
+func parseProgram(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Root(
+		"PROGRAM",
+		LANG_SPEC_PROGRAM_NODE,
+		false,
+		parseHeader(ruleBuilder),
+		parseBody(ruleBuilder),
+		ruleBuilder.Token.ExpectVirtual("EOF", LANG_SPEC_LEXER_EOF_TOKEN),
+	)
+}
+
+func parseHeader(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Sequence(
+		"HEADER",
+		LANG_SPEC_HEADER_NODE,
+		ruleBuilder.Token.ExpectVirtual("HEADER START", LANG_SPEC_LEXER_HEADER_DASHES),
+		ruleBuilder.Token.Expect("DSL NAME", LANG_SPEC_DSL_NAME_NODE, LANG_SPEC_LEXER_STRING_LITERAL),
+		ruleBuilder.Token.Expect("DSL VERSION", LANG_SPEC_VERSION_NODE, LANG_SPEC_LEXER_VERSION),
+		ruleBuilder.Token.ExpectVirtual("HEADER SEPARATOR", LANG_SPEC_LEXER_HEADER_SEPARATOR),
+		ruleBuilder.Token.ExpectOneOf("LANGSPEC NAME", LANG_SPEC_LSPEC_NAME_NODE, LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_LEXER_KW_LSPEC),
+		ruleBuilder.Token.Expect("LANGSPEC VERSION", LANG_SPEC_VERSION_NODE, LANG_SPEC_LEXER_VERSION),
+		ruleBuilder.Token.ExpectVirtual("HEADER END", LANG_SPEC_LEXER_HEADER_DASHES),
+	)
+}
+
+func parseBody(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.ZeroOrMore("DECLARATION BLOCKS", LANG_SPEC_DECLARATION_BLOCKS_NODE, parseDeclarationBlock(ruleBuilder))
+}
+
+func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Block(
+		"DECLARATION BLOCK",
+		LANG_SPEC_DECLARATION_BLOCK_NODE,
+		LANG_SPEC_LEXER_SEMICOLON,
+		ruleBuilder.Token.ExpectVirtual("DECLARE KEYWORD", LANG_SPEC_LEXER_KW_DECLARE),
+		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", LANG_SPEC_IDENTIFIER_NODE, LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES, LANG_SPEC_LEXER_KW_LEXER_STATES),
+		ruleBuilder.Token.List(
+			"DECLARE LIST",
+			LANG_SPEC_LEXER_BRACKET_OPEN,
+			LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_LEXER_COMMA,
+			LANG_SPEC_LEXER_BRACKET_CLOSE,
+			LANG_SPEC_LIST_NODE, LANG_SPEC_DECLARE_IDENTIFIER_NODE,
+			true, // Allow empty list
+			rule.TrailingOptional,
+		),
+		ruleBuilder.Token.ExpectVirtual("BLOCK CLOSE", LANG_SPEC_LEXER_SEMICOLON),
+	)
+}
+
+func getValidationStages() []*ValidationStage {
+	stages := []*ValidationStage{
+		validation.ASTValidationStageCreate(
 			"Declaration Block Validation",
 			"Validates whether declaration blocks are correct in terms of presence an uniqueness.",
 			0,
@@ -708,58 +777,9 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 				}
 			},
 		),
-	)
+	}
 
-	return parserSpec
-}
-
-func parseProgram(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.Root(
-		"PROGRAM",
-		LANG_SPEC_PROGRAM_NODE,
-		false,
-		parseHeader(ruleBuilder),
-		parseBody(ruleBuilder),
-		ruleBuilder.Token.ExpectVirtual("EOF", LANG_SPEC_LEXER_EOF_TOKEN),
-	)
-}
-
-func parseHeader(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.Sequence(
-		"HEADER",
-		LANG_SPEC_HEADER_NODE,
-		ruleBuilder.Token.ExpectVirtual("HEADER START", LANG_SPEC_LEXER_HEADER_DASHES),
-		ruleBuilder.Token.Expect("DSL NAME", LANG_SPEC_DSL_NAME_NODE, LANG_SPEC_LEXER_STRING_LITERAL),
-		ruleBuilder.Token.Expect("DSL VERSION", LANG_SPEC_VERSION_NODE, LANG_SPEC_LEXER_VERSION),
-		ruleBuilder.Token.ExpectVirtual("HEADER SEPARATOR", LANG_SPEC_LEXER_HEADER_SEPARATOR),
-		ruleBuilder.Token.ExpectOneOf("LANGSPEC NAME", LANG_SPEC_LSPEC_NAME_NODE, LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_LEXER_KW_LSPEC),
-		ruleBuilder.Token.Expect("LANGSPEC VERSION", LANG_SPEC_VERSION_NODE, LANG_SPEC_LEXER_VERSION),
-		ruleBuilder.Token.ExpectVirtual("HEADER END", LANG_SPEC_LEXER_HEADER_DASHES),
-	)
-}
-
-func parseBody(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.ZeroOrMore("DECLARATION BLOCKS", LANG_SPEC_DECLARATION_BLOCKS_NODE, parseDeclarationBlock(ruleBuilder))
-}
-
-func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.Block(
-		"DECLARATION BLOCK",
-		LANG_SPEC_DECLARATION_BLOCK_NODE,
-		LANG_SPEC_LEXER_SEMICOLON,
-		ruleBuilder.Token.ExpectVirtual("DECLARE KEYWORD", LANG_SPEC_LEXER_KW_DECLARE),
-		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", LANG_SPEC_IDENTIFIER_NODE, LANG_SPEC_LEXER_KW_LEXER_TOKEN_TYPES, LANG_SPEC_LEXER_KW_LEXER_STATES),
-		ruleBuilder.Token.List(
-			"DECLARE LIST",
-			LANG_SPEC_LEXER_BRACKET_OPEN,
-			LANG_SPEC_LEXER_STRING_LITERAL, LANG_SPEC_LEXER_COMMA,
-			LANG_SPEC_LEXER_BRACKET_CLOSE,
-			LANG_SPEC_LIST_NODE, LANG_SPEC_DECLARE_IDENTIFIER_NODE,
-			true, // Allow empty list
-			rule.TrailingOptional,
-		),
-		ruleBuilder.Token.ExpectVirtual("BLOCK CLOSE", LANG_SPEC_LEXER_SEMICOLON),
-	)
+	return stages
 }
 
 func renderSyntaxErrorsWithContext(source []rune, errs *syntaxa.SyntaxErrors[rune]) {
