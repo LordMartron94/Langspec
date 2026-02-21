@@ -9,6 +9,7 @@ import (
 
 // --------------------------------------------------------------- TYPES
 
+//go:generate stringer -type LangSpecParserNodeKind
 type LangSpecParserNodeKind uint32
 
 const (
@@ -29,37 +30,6 @@ const (
 	LANG_SPEC_BODY_NODE
 	LANG_SPEC_DECLARATION_BLOCKS_NODE
 )
-
-func (k LangSpecParserNodeKind) String() string {
-	switch k {
-	case LANG_SPEC_ERROR_NODE:
-		return "ERROR"
-	case LANG_SPEC_PROGRAM_NODE:
-		return "PROGRAM"
-	case LANG_SPEC_HEADER_NODE:
-		return "HEADER"
-	case LANG_SPEC_DSL_NAME_NODE:
-		return "DSL NAME"
-	case LANG_SPEC_VERSION_NODE:
-		return "VERSION"
-	case LANG_SPEC_LSPEC_NAME_NODE:
-		return "LSPEC NAME"
-	case LANG_SPEC_DECLARATION_BLOCK_NODE:
-		return "DECLARE BLOCK"
-	case LANG_SPEC_DECLARE_IDENTIFIER_NODE:
-		return "DECLARE IDENTIFIER"
-	case LANG_SPEC_IDENTIFIER_NODE:
-		return "IDENTIFIER"
-	case LANG_SPEC_LIST_NODE:
-		return "LIST"
-	case LANG_SPEC_BODY_NODE:
-		return "BODY"
-	case LANG_SPEC_DECLARATION_BLOCKS_NODE:
-		return "DECLARATION BLOCKS"
-	default:
-		return "UNKNOWN NODE KIND"
-	}
-}
 
 // --------------------------------------------------------------- ATTRIBUTES
 
