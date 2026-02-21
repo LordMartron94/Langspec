@@ -172,7 +172,9 @@ func (v ValidationCode) String() string {
 type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-type ValidationStageCTX = langspec.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+
+type ValidationStageCtx = langspec.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 type Node = syntaxa.SyntaxaASTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
@@ -607,6 +609,11 @@ func buildLangSpecDSLLexerSpec() *langspec.LexerSpec[
 	return lexerSpec
 }
 
+const (
+	ATTRIBUTE_LITERAL_STRING_FORMATTED = "formattedString"
+	ATTRIBUTE_RULE_NAME                = "ruleName"
+)
+
 func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	rune,
 	LangSpecLexerTokenType,
@@ -614,6 +621,21 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	LangSpecLexerState,
 	LangSpecParserNodeKind,
 ] {
+	finalizationPostProcessor := func(node *Node, finalizationCTX *NodeFinalizationCtx, ruleIdentity syntaxa.RuleIdentity) {
+		// fmt.Printf("Post processing node created by: %s\n", ruleIdentity.RuleName)
+		finalizationCTX.SetAttribute(node, ATTRIBUTE_RULE_NAME, ruleIdentity.RuleName)
+
+		lexemes := node.Tokens()
+		for _, lexeme := range lexemes {
+			if lexeme.Token == LANG_SPEC_LEXER_STRING_LITERAL {
+				raw := node.GetContent(" ")
+				formatted := strings.Replace(raw, "\"", "", -1)
+				finalizationCTX.SetAttribute(node, ATTRIBUTE_LITERAL_STRING_FORMATTED, formatted)
+				break
+			}
+		}
+	}
+
 	ruleBuilder := rule.RuleBuilderCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
 		LangSpecLexerTokenType.String,
 	)
@@ -628,13 +650,14 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 		LANG_SPEC_WHITESPACE_ROLE,
 		LANG_SPEC_IGNORED_ROLE,
 	)
+	parserSpec.WithPostProcessor(finalizationPostProcessor)
 
 	parserSpec.WithValidationStages(
 		langspec.ASTValidationStageCreate(
 			"Declaration Block Validation",
 			"Validates whether declaration blocks are correct in terms of presence an uniqueness.",
 			0,
-			func(ctx *ValidationStageCTX) {
+			func(ctx *ValidationStageCtx) {
 				root := ctx.RootNode
 				blocks := root.FindAllKind(LANG_SPEC_DECLARATION_BLOCK_NODE)
 
@@ -646,7 +669,7 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 
 				for _, block := range blocks {
 					identifierNode := block.Children()[0]
-					tokenType, _ := AttributeAs[LangSpecLexerTokenType](identifierNode, rule.ATTRIBUTE_TOKEN_TYPE)
+					tokenType := identifierNode.Tokens()[0].Token
 
 					if _, seen := seenSet[tokenType]; seen {
 						ctx.ReportError(
@@ -661,7 +684,7 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 					seenDeclarationsSet := map[string]struct{}{}
 					identifiers := block.FindAllKind(LANG_SPEC_DECLARE_IDENTIFIER_NODE)
 					for _, identifier := range identifiers {
-						identifierValue := identifier.GetContent(" ")
+						identifierValue, _ := AttributeAs[string](identifier, ATTRIBUTE_LITERAL_STRING_FORMATTED)
 						if _, seen := seenDeclarationsSet[identifierValue]; seen {
 							ctx.ReportError(
 								VALIDATION_DECLARATION_DUPLICATE_ENTRY.String(),

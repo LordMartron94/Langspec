@@ -288,7 +288,8 @@ type ParserSpec[
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
 
-	programRule syntaxa.ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	programRule       syntaxa.ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	nodePostProcessor syntaxa.NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
 
 	errorHook ParserSyntaxErrorHook[TObservation]
 
@@ -312,13 +313,14 @@ func ParserSpecCreate[
 	freezeAfterParse bool,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		programRule:      programRule,
-		rootNodeKind:     rootNodeKind,
-		errorNodeKind:    errorNodeKind,
-		freezeAfterParse: freezeAfterParse,
-		errorHook:        nil,
-		validationStages: make([]*ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind], 0),
-		defaultSkipRoles: make([]TTokenRole, 0),
+		programRule:       programRule,
+		rootNodeKind:      rootNodeKind,
+		errorNodeKind:     errorNodeKind,
+		freezeAfterParse:  freezeAfterParse,
+		nodePostProcessor: nil,
+		errorHook:         nil,
+		validationStages:  make([]*ASTValidationStage[TObservation, TToken, TTokenRole, TNodeKind], 0),
+		defaultSkipRoles:  make([]TTokenRole, 0),
 	}
 }
 
@@ -343,6 +345,13 @@ func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) W
 	roles ...TTokenRole,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	p.defaultSkipRoles = append(p.defaultSkipRoles, roles...)
+	return p
+}
+
+func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithPostProcessor(
+	postProcessor syntaxa.NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
+) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	p.nodePostProcessor = postProcessor
 	return p
 }
 
@@ -774,6 +783,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		config.spec.Parser.programRule,
 		config.spec.Lexer.tokenFormatter,
 		config.spec.Lexer.observationFormatter,
+		config.spec.Parser.nodePostProcessor,
 		config.spec.Lexer.eofToken,
 		config.spec.Parser.rootNodeKind,
 		config.spec.Parser.errorNodeKind,
