@@ -265,35 +265,3 @@ func buildLangSpecDSLLexerSpec() (
 	lexerSpec.WithRuleset(LANG_SPEC_LEXER_STATE_DEFAULT, *rs)
 	return lexerSpec, rs
 }
-
-func getRoleScopes() map[LangSpecLexerTokenRole]string {
-	return map[LangSpecLexerTokenRole]string{
-		LANG_SPEC_WHITESPACE_ROLE: "text.whitespace",
-		LANG_SPEC_COMMENT_ROLE:    "comment",
-		LANG_SPEC_STRUCTURAL_ROLE: "source",
-	}
-}
-
-func getTokenScopes() map[LangSpecLexerTokenType]string {
-	return map[LangSpecLexerTokenType]string{
-
-		// ---------------- Keywords ----------------
-		TokKWLSpec:           "keyword.control",
-		TokKWDeclare:         "keyword.control",
-		TokKWLexerTokenTypes: "meta.type",
-
-		// ---------------- Literals ----------------
-		TokStringLiteral: "string.quoted.double",
-		TokVersion:       "constant.numeric.version",
-
-		// ---------------- Punctuation / structure ----------------
-		TokDashes:          "punctuation.separator.header",
-		TokHeaderSeparator: "punctuation.separator.pipe",
-
-		TokComma:     "punctuation.separator.comma",
-		TokSemicolon: "punctuation.terminator.statement",
-
-		TokBracketOpen:  "punctuation.section.block.begin",
-		TokBracketClose: "punctuation.section.block.end",
-	}
-}

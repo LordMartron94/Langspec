@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"foundation/system"
 	"langspec"
-	"langspec/editor"
-	"langspec/editor/sublime"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
@@ -97,35 +95,6 @@ Forgetting to call this results in memory leaks.
 */
 func LangSpecCompilerDestroy(compiler *LangSpecCompiler) {
 	langspec.LangParserDestroy(compiler.parser)
-}
-
-/*
-LangSpecCompilerBuildSublimeSyntax builds a Sublime Text syntax file for the LangSpec DSL.
-*/
-func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, outputFile string) error {
-	roleScopes := getRoleScopes()
-	tokenScopes := getTokenScopes()
-
-	gen, err := editor.BuildGeneratedSyntaxFromRulesetSingleState(
-		compiler.lexingRuleSet,
-		roleScopes,
-		tokenScopes,
-		".lspec",
-	)
-
-	if err != nil {
-		return err
-	}
-
-	configuration := sublime.SublimeTextGeneratorConfigCreate(
-		outputFile,
-		"LangSpec (LSpec)",
-		"source.lspec",
-		[]string{"lspec"},
-		gen,
-	)
-
-	return sublime.SublimeTextGenerateSyntaxFile(configuration)
 }
 
 /*
