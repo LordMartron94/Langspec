@@ -1,7 +1,11 @@
 package dsl
 
 import (
+	"autarch/pattern"
+	"cmp"
 	"fmt"
+	"foundation/bytes"
+	"foundation/formatting"
 	"foundation/system"
 	"langspec"
 	"langspec/validation"
@@ -59,16 +63,20 @@ func LangSpecCompilerConfigurationCreate(
 LangSpecCompiler compiles a .lspec file into the LangSpec configuration needed by the LangParser.
 */
 type LangSpecCompiler struct {
+	config *LangSpecCompilerConfiguration
+
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 	validatorConfig *validation.ASTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
-	sessionCache  *langspec.LangParserSession[rune]
+	programRule   Rule
+
+	sessionCache *langspec.LangParserSession[rune]
 }
 
 /* LangSpecCompilerCreate constructs a compiler instance. */
 func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *LangSpecCompiler {
-	spec, ruleset := buildLangSpecDSLSpec()
+	spec, ruleset, programRule := buildLangSpecDSLSpec()
 
 	langParserConfig := langspec.LangParserConfigurationCreate(
 		spec,
@@ -82,9 +90,11 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	)
 
 	return &LangSpecCompiler{
+		config:          compilerConfig,
 		parser:          parser,
 		validatorConfig: validationConfig,
 		lexingRuleSet:   ruleset,
+		programRule:     programRule,
 	}
 }
 
@@ -111,7 +121,7 @@ func LangSpecCompilerCompile(
 
 	// dfaDUMP := compiler.parser.DebugDumpAllLexerDFAs()
 
-	// fmt.Println("\n===== DFA DEBUG DUMP =====")
+	// fmt.Println("\n===== LEXER DFA DEBUG DUMP =====")
 	// fmt.Println(dfaDUMP)
 	// fmt.Println("=========================")
 
@@ -121,6 +131,79 @@ func LangSpecCompilerCompile(
 	// for i, r := range contentRune {
 	// 	fmt.Printf("[%04d] rune=%q  codepoint=U+%04X\n", i, r, r)
 	// }
+
+	grammarDump := compiler.programRule.GetGrammar().DebugDump(
+		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType]{
+			FormatKind:  syntaxa.GrammarKind.String,
+			FormatToken: LangSpecLexerTokenType.String,
+			FormatRange: func(min int, max *int) string {
+				if max == nil {
+					return fmt.Sprintf("[%d..∞]", min)
+				}
+				return fmt.Sprintf("[%d..%d]", min, *max)
+			},
+			FormatGrammarID: func(id string) string {
+				return "(" + id + ")"
+			},
+		},
+	)
+
+	fmt.Println("\n===== GRAMMAR DEBUG DUMP =====")
+	fmt.Println(grammarDump)
+	fmt.Println("=========================")
+
+	cmpFn := func(a, b LangSpecLexerTokenType) int {
+		return cmp.Compare(a, b)
+	}
+	grammarPattern, annotationMap, _ := compiler.programRule.GetGrammar().ToRecognitionPattern(cmpFn)
+
+	patternDump := grammarPattern.DebugDump(
+		pattern.RegulaDebugFormatter[LangSpecLexerTokenType]{
+			FormatKind:        pattern.ExpressionKind.String,
+			FormatObservation: LangSpecLexerTokenType.String,
+			FormatRepeat: func(min int, max *int) string {
+				if max == nil {
+					return fmt.Sprintf("[%d..∞]", min)
+				}
+				return fmt.Sprintf("[%d..%d]", min, *max)
+			},
+			FormatAnnotationID: func(ai pattern.AnnotationID) string {
+				ids := annotationMap[ai].GrammarIDs
+				return formatting.FormatStringSlice(ids, formatting.FormatSliceOptions[string]{
+					Prefix:    "[",
+					Suffix:    "]",
+					Separator: ", ",
+					Quote:     true,
+				})
+			},
+		})
+
+	fmt.Println("\n===== GRAMMAR PATTERN (REGULA) DEBUG DUMP =====")
+	fmt.Println(patternDump)
+	fmt.Println("=========================")
+
+	grammarStateMachine := compiler.programRule.GetGrammar().ToRecognitionStateMachineWithPattern(
+		syntaxa.GrammarToRecognitionStateMachineConfigurationCreate(
+			compiler.config.scratchAllocationFunction,
+			compiler.config.scratchAllocationFunction,
+		),
+		cmpFn,
+		syntaxa.TokenFormatterCreate(
+			pattern.ObservationFormatter[LangSpecLexerTokenType]{
+				ToBytes: func(observations []LangSpecLexerTokenType) []byte {
+					return bytes.IntegerSliceToBytes(observations)
+				},
+			},
+			LangSpecLexerTokenType.String,
+		),
+		grammarPattern,
+		annotationMap,
+	)
+	grammarStateMachineDump := grammarStateMachine.DebugStateMachine()
+
+	fmt.Println("\n===== GRAMMAR RECOGNITION MACHINE DEBUG DUMP =====")
+	fmt.Println(grammarStateMachineDump)
+	fmt.Println("=========================")
 
 	session := getSession(compiler, sourceFile)
 
@@ -279,4 +362,24 @@ func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangPar
 		compiler.sessionCache = session
 		return session
 	}
+}
+
+func buildLangSpecDSLSpec() (
+	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
+	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	Rule,
+) {
+	lexerSpec, ruleset := buildLangSpecDSLLexerSpec()
+	lexerSpec.WithDFADebugFormatter(
+		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
+	)
+
+	parserSpec, programRule := buildLangSpecDSLParserSpec()
+
+	dslSpec := langspec.LangSpecCreate(
+		lexerSpec,
+		parserSpec,
+	)
+
+	return dslSpec, ruleset, programRule
 }

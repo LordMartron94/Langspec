@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"autarch/pattern"
+	"cmp"
 	"langspec"
 	"lexarch"
 )
@@ -35,8 +36,8 @@ const (
 	TokKWDeclare
 	TokKWLexerTokenTypes
 
-	TokBracketOpen
-	TokBracketClose
+	TokBraceOpen
+	TokBraceClose
 	TokSemicolon
 	TokComma
 
@@ -53,6 +54,14 @@ const (
 )
 
 // ----------------------------------------------------------- BUILDING
+
+var factory = pattern.RegulaASTFactoryCreate(
+	func(a, b rune) int {
+		return cmp.Compare(a, b)
+	},
+)
+
+var templates = pattern.RegulaTemplatesCreate(factory)
 
 type ruleDef struct {
 	pattern  pattern.RegulaAST[rune]
@@ -91,40 +100,36 @@ func trivia(p pattern.RegulaAST[rune], tok LangSpecLexerTokenType, role LangSpec
 // --- Structural literals
 
 func litRune(ch rune, tok LangSpecLexerTokenType) ruleDef {
-	return structural(pattern.Literal(ch), tok, 0)
+	return structural(factory.Literal(ch), tok, 0)
 }
 
 func litString(s string, tok LangSpecLexerTokenType) ruleDef {
-	return structural(pattern.LiteralString[rune](s), tok, 0)
+	return structural(pattern.LiteralString(factory, s), tok, 0)
 }
 
 // --- Keywords (still structural; priority 1 to beat weaker matches if needed)
 
 func kw(s string, tok LangSpecLexerTokenType) ruleDef {
-	return structural(pattern.LiteralString[rune](s), tok, 1)
+	return structural(pattern.LiteralString(factory, s), tok, 1)
 }
 
 // --- Whitespace / comments (trivia)
 
 func ws() ruleDef {
-	ws := pattern.AnyOf(
-		pattern.Literal(' '),
-		pattern.Literal('\t'),
-		pattern.Literal('\n'),
-	).Plus()
+	ws := templates.Whitespace().Plus()
 	return trivia(ws, TokWhitespace, LANG_SPEC_WHITESPACE_ROLE, 0)
 }
 
 func commentLine() ruleDef {
 	// anything except newline
-	notNL := pattern.Class(
-		pattern.Range(0, '\n'-1),
-		pattern.Range('\n'+1, rune(0x10FFFF)),
+	notNL := factory.Class(
+		factory.Range(0, '\n'-1),
+		factory.Range('\n'+1, rune(0x10FFFF)),
 	)
 
-	line := pattern.Sequence(
-		pattern.Literal('/'),
-		pattern.Literal('/'),
+	line := factory.Sequence(
+		factory.Literal('/'),
+		factory.Literal('/'),
 		notNL.Star(),
 	)
 	return trivia(line, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
@@ -136,26 +141,26 @@ func commentBlock() ruleDef {
 	//   "/*" ( (not '*') | ('*' not '/') )* "*/"
 	//
 	// That accepts anything until it sees the terminating */.
-	notStar := pattern.Class(
-		pattern.Range(0, '*'-1),
-		pattern.Range('*'+1, rune(0x10FFFF)),
+	notStar := factory.Class(
+		factory.Range(0, '*'-1),
+		factory.Range('*'+1, rune(0x10FFFF)),
 	)
-	starNotSlash := pattern.Sequence(
-		pattern.Literal('*'),
-		pattern.Class(
-			pattern.Range(0, '/'-1),
-			pattern.Range('/'+1, rune(0x10FFFF)),
+	starNotSlash := factory.Sequence(
+		factory.Literal('*'),
+		factory.Class(
+			factory.Range(0, '/'-1),
+			factory.Range('/'+1, rune(0x10FFFF)),
 		),
 	)
 
-	bodyUnit := pattern.AnyOf(notStar, starNotSlash)
+	bodyUnit := factory.AnyOf(notStar, starNotSlash)
 
-	block := pattern.Sequence(
-		pattern.Literal('/'),
-		pattern.Literal('*'),
+	block := factory.Sequence(
+		factory.Literal('/'),
+		factory.Literal('*'),
 		bodyUnit.Star(),
-		pattern.Literal('*'),
-		pattern.Literal('/'),
+		factory.Literal('*'),
+		factory.Literal('/'),
 	)
 	return trivia(block, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
 }
@@ -163,51 +168,32 @@ func commentBlock() ruleDef {
 // --- Atoms
 
 func stringLiteralNoEsc() ruleDef {
-	notQuote := pattern.Class(
-		pattern.Range(0, '"'-1),
-		pattern.Range('"'+1, rune(0x10FFFF)),
+	notQuote := factory.Class(
+		factory.Range(0, '"'-1),
+		factory.Range('"'+1, rune(0x10FFFF)),
 	)
-	quoted := pattern.Sequence(
-		pattern.Literal('"'),
+	quoted := factory.Sequence(
+		factory.Literal('"'),
 		notQuote.Star(),
-		pattern.Literal('"'),
+		factory.Literal('"'),
 	)
 	return structural(quoted, TokStringLiteral, 1)
 }
 
 func versionSemverV3() ruleDef {
-	digits := pattern.Digit.Plus()
-	version := pattern.Sequence(
-		pattern.Literal('v'),
+	digits := templates.Digit().Plus()
+	version := factory.Sequence(
+		factory.Literal('v'),
 		digits,
-		pattern.Literal('.'),
+		factory.Literal('.'),
 		digits,
-		pattern.Literal('.'),
+		factory.Literal('.'),
 		digits,
 	)
 	return structural(version, TokVersion, 1)
 }
 
 // ===========================================================
-
-func buildLangSpecDSLSpec() (
-	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
-) {
-	lexerSpec, ruleset := buildLangSpecDSLLexerSpec()
-	lexerSpec.WithDFADebugFormatter(
-		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
-	)
-
-	parserSpec := buildLangSpecDSLParserSpec()
-
-	dslSpec := langspec.LangSpecCreate(
-		lexerSpec,
-		parserSpec,
-	)
-
-	return dslSpec, ruleset
-}
 
 func buildLangSpecDSLLexerSpec() (
 	*langspec.LexerSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState],
@@ -221,6 +207,7 @@ func buildLangSpecDSLLexerSpec() (
 		LANG_SPEC_LEXER_STATE_DEFAULT,
 		lexarch.NewlineDetectorRune(),
 		lexarch.ColumnAdvanceRune(4),
+		lexarch.RunesToBytesDefault(),
 		runeFormatter,
 		lexarch.LexarchRuneSuccessorFn(),
 		func(t LangSpecLexerTokenType) string { return t.String() },
@@ -249,8 +236,8 @@ func buildLangSpecDSLLexerSpec() (
 		litRune('|', TokHeaderSeparator),
 		litRune(',', TokComma),
 		litRune(';', TokSemicolon),
-		litRune('{', TokBracketOpen),
-		litRune('}', TokBracketClose),
+		litRune('{', TokBraceOpen),
+		litRune('}', TokBraceClose),
 
 		// atoms (priority 1)
 		stringLiteralNoEsc(),

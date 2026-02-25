@@ -45,13 +45,10 @@ const (
 
 // --------------------------------------------------------------- BUILDING
 
-func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
-	rune,
-	LangSpecLexerTokenType,
-	LangSpecLexerTokenRole,
-	LangSpecLexerState,
-	LangSpecParserNodeKind,
-] {
+func buildLangSpecDSLParserSpec() (
+	*langspec.ParserSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
+	Rule,
+) {
 	finalizationPostProcessor := func(node *Node, finalizationCTX *NodeFinalizationCtx, ruleIdentity syntaxa.RuleIdentity) {
 		// fmt.Printf("Post processing node created by: %s\n", ruleIdentity.RuleName)
 		finalizationCTX.SetAttribute(node, ATTRIBUTE_RULE_NAME, ruleIdentity.RuleName)
@@ -71,10 +68,12 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 		LangSpecLexerTokenType.String,
 	)
 
+	programRule := parseProgram(ruleBuilder)
+
 	parserSpec := langspec.ParserSpecCreate(
 		NodeProgram,
 		NodeError,
-		parseProgram(ruleBuilder),
+		programRule,
 		true, // freeze AST after parse
 	)
 	parserSpec.WithSkipRoles(
@@ -83,7 +82,7 @@ func buildLangSpecDSLParserSpec() *langspec.ParserSpec[
 	)
 	parserSpec.WithPostProcessor(finalizationPostProcessor)
 
-	return parserSpec
+	return parserSpec, programRule
 }
 
 func parseProgram(ruleBuilder *RuleBuilder) Rule {
@@ -124,9 +123,9 @@ func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
 		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", NodeIdentifier, TokKWLexerTokenTypes),
 		ruleBuilder.Token.List(
 			"DECLARE LIST",
-			TokBracketOpen,
+			TokBraceOpen,
 			TokStringLiteral, TokComma,
-			TokBracketClose,
+			TokBraceClose,
 			NodeList, NodeDeclareIdentifier,
 			true, // Allow empty list
 			rule.TrailingOptional,

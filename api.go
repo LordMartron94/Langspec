@@ -24,12 +24,15 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 
 	newlineDetect   lexarch.NewlineDetector[TObservation]
 	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation]
+	toBytes         func(observations []TObservation) []byte
 
 	observationFormatter lexarch.ObservationFormatter[TObservation]
 	successorFn          pattern.SuccessorFn[TObservation]
 
 	tokenFormatter func(token TToken) string
-	dfaFormatter   *autarch.DFADebugFormatter[TObservation, lexarch.TokenOutcome[TToken, TTokenRole]]
+	dfaFormatter   *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]]
+
+	compilerMode lexarch.CompilerMode
 
 	eofToken TToken
 }
@@ -40,6 +43,7 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 	initialState TLexerState,
 	newlineDetect lexarch.NewlineDetector[TObservation],
 	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation],
+	toBytes func(observations []TObservation) []byte,
 	observationFormatter lexarch.ObservationFormatter[TObservation],
 	successorFn pattern.SuccessorFn[TObservation],
 	tokenFormatter func(token TToken) string,
@@ -49,10 +53,12 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 		initialState:         initialState,
 		newlineDetect:        newlineDetect,
 		columnAdvanceFn:      columnAdvanceFn,
+		toBytes:              toBytes,
 		eofToken:             eofToken,
 		observationFormatter: observationFormatter,
 		successorFn:          successorFn,
 		tokenFormatter:       tokenFormatter,
+		compilerMode:         lexarch.Glushkov,
 	}
 }
 
@@ -66,9 +72,16 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRuleset(
 }
 
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithDFADebugFormatter(
-	f *autarch.DFADebugFormatter[TObservation, lexarch.TokenOutcome[TToken, TTokenRole]],
+	f *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]],
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	l.dfaFormatter = f
+	return l
+}
+
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithCompilationMode(
+	mode lexarch.CompilerMode,
+) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
+	l.compilerMode = mode
 	return l
 }
 
@@ -549,10 +562,12 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		config.spec.Lexer.eofToken,
 		config.scratchAllocationFn,
 		config.maxLexerAutomatonMemory,
-		lexarch.ObservationCTX[TObservation]{
-			Formatter:   config.spec.Lexer.observationFormatter,
-			SuccessorFn: config.spec.Lexer.successorFn,
-		},
+		lexarch.ObservationCTXCreate[TObservation](
+			config.spec.Lexer.observationFormatter,
+			config.spec.Lexer.successorFn,
+			config.spec.Lexer.toBytes,
+		),
+		config.spec.Lexer.compilerMode,
 	)
 
 	parser := syntaxa.SyntaxaParserCreate(
