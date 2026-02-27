@@ -1,13 +1,10 @@
 package dsl
 
 import (
-	"autarch/pattern"
-	"cmp"
 	"fmt"
-	"foundation/bytes"
-	"foundation/formatting"
 	"foundation/system"
 	"langspec"
+	"langspec/editor"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
@@ -16,6 +13,8 @@ import (
 )
 
 // --------------------------------------------------------------- TYPE ALIASES
+
+type LexingRuleset = lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 
 type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
@@ -142,8 +141,8 @@ func LangSpecCompilerCompile(
 				}
 				return fmt.Sprintf("[%d..%d]", min, *max)
 			},
-			FormatGrammarID: func(id string) string {
-				return "(" + id + ")"
+			FormatGrammarID: func(id syntaxa.GrammarID) string {
+				return "(" + string(id) + ")"
 			},
 		},
 	)
@@ -152,57 +151,43 @@ func LangSpecCompilerCompile(
 	fmt.Println(grammarDump)
 	fmt.Println("=========================")
 
-	cmpFn := func(a, b LangSpecLexerTokenType) int {
-		return cmp.Compare(a, b)
-	}
-	grammarPattern, annotationMap, _ := compiler.programRule.GetGrammar().ToRecognitionPattern(cmpFn)
+	grammarPackage := compiler.programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0")
+	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[LangSpecLexerTokenType]{
+		FormatToken: LangSpecLexerTokenType.String,
+	})
 
-	patternDump := grammarPattern.DebugDump(
-		pattern.RegulaDebugFormatter[LangSpecLexerTokenType]{
-			FormatKind:        pattern.ExpressionKind.String,
-			FormatObservation: LangSpecLexerTokenType.String,
-			FormatRepeat: func(min int, max *int) string {
-				if max == nil {
-					return fmt.Sprintf("[%d..∞]", min)
-				}
-				return fmt.Sprintf("[%d..%d]", min, *max)
-			},
-			FormatAnnotationID: func(ai pattern.AnnotationID) string {
-				ids := annotationMap[ai].GrammarIDs
-				return formatting.FormatStringSlice(ids, formatting.FormatSliceOptions[string]{
-					Prefix:    "[",
-					Suffix:    "]",
-					Separator: ", ",
-					Quote:     true,
-				})
-			},
-		})
-
-	fmt.Println("\n===== GRAMMAR PATTERN (REGULA) DEBUG DUMP =====")
-	fmt.Println(patternDump)
+	fmt.Println("\n===== GRAMMAR PACKAGE DEBUG DUMP =====")
+	fmt.Println(grammarPackageDump)
 	fmt.Println("=========================")
 
-	grammarStateMachine := compiler.programRule.GetGrammar().ToRecognitionStateMachineWithPattern(
-		syntaxa.GrammarToRecognitionStateMachineConfigurationCreate(
-			compiler.config.scratchAllocationFunction,
-			compiler.config.scratchAllocationFunction,
-		),
-		cmpFn,
-		syntaxa.TokenFormatterCreate(
-			pattern.ObservationFormatter[LangSpecLexerTokenType]{
-				ToBytes: func(observations []LangSpecLexerTokenType) []byte {
-					return bytes.IntegerSliceToBytes(observations)
-				},
-			},
-			LangSpecLexerTokenType.String,
-		),
-		grammarPattern,
-		annotationMap,
+	editorIR := editor.EditorIRConstruct(
+		grammarPackage,
+		[]LexingRuleset{*compiler.lexingRuleSet},
+		func(_ struct{}, _ string) (result any, ok bool) {
+			return nil, true
+		},
+		func(_ struct{}, _ string) (result any, ok bool) {
+			return nil, true
+		},
+		[]LangSpecLexerTokenRole{
+			LANG_SPEC_WHITESPACE_ROLE,
+			LANG_SPEC_COMMENT_ROLE,
+		},
 	)
-	grammarStateMachineDump := grammarStateMachine.DebugStateMachine()
 
-	fmt.Println("\n===== GRAMMAR RECOGNITION MACHINE DEBUG DUMP =====")
-	fmt.Println(grammarStateMachineDump)
+	editorIRDump := editorIR.DebugDump(&editor.EditorIRDebugFormatter[rune, struct{}, struct{}, LangSpecLexerTokenType]{
+		FormatPattern: func(p editor.Pattern[rune]) string {
+			regex, err := p.ToRegEx()
+			if err != nil {
+				panic(err)
+			}
+
+			return fmt.Sprintf("pattern{regex='%s'}", regex)
+		},
+	})
+
+	fmt.Println("\n===== EDITOR IR DEBUG DUMP =====")
+	fmt.Println(editorIRDump)
 	fmt.Println("=========================")
 
 	session := getSession(compiler, sourceFile)
