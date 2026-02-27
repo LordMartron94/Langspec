@@ -5,6 +5,7 @@ import (
 	"autarch/pattern"
 	"cmp"
 	"fmt"
+	"foundation/domain"
 	"foundation/system"
 	"lexarch"
 	"memarch"
@@ -27,7 +28,7 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 	toBytes         func(observations []TObservation) []byte
 
 	observationFormatter lexarch.ObservationFormatter[TObservation]
-	successorFn          pattern.SuccessorFn[TObservation]
+	observationDomain   *domain.DiscreteDomain[TObservation]
 
 	tokenFormatter func(token TToken) string
 	dfaFormatter   *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]]
@@ -45,20 +46,20 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation],
 	toBytes func(observations []TObservation) []byte,
 	observationFormatter lexarch.ObservationFormatter[TObservation],
-	successorFn pattern.SuccessorFn[TObservation],
+	observationDomain *domain.DiscreteDomain[TObservation],
 	tokenFormatter func(token TToken) string,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	return &LexerSpec[TObservation, TToken, TTokenRole, TLexerState]{
 		rulesets:             make(map[TLexerState]lexarch.LexingRuleset[TObservation, TToken, TTokenRole]),
 		initialState:         initialState,
 		newlineDetect:        newlineDetect,
-		columnAdvanceFn:      columnAdvanceFn,
+		columnAdvanceFn:     columnAdvanceFn,
 		toBytes:              toBytes,
 		eofToken:             eofToken,
 		observationFormatter: observationFormatter,
-		successorFn:          successorFn,
-		tokenFormatter:       tokenFormatter,
-		compilerMode:         lexarch.Glushkov,
+		observationDomain:   observationDomain,
+		tokenFormatter:      tokenFormatter,
+		compilerMode:        lexarch.Glushkov,
 	}
 }
 
@@ -564,7 +565,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		config.maxLexerAutomatonMemory,
 		lexarch.ObservationCTXCreate[TObservation](
 			config.spec.Lexer.observationFormatter,
-			config.spec.Lexer.successorFn,
+			config.spec.Lexer.observationDomain,
 			config.spec.Lexer.toBytes,
 		),
 		config.spec.Lexer.compilerMode,

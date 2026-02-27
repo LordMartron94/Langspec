@@ -2,7 +2,7 @@ package dsl
 
 import (
 	"autarch/pattern"
-	"cmp"
+	"foundation/domain"
 	"langspec"
 	"lexarch"
 )
@@ -41,7 +41,8 @@ const (
 	TokSemicolon
 	TokComma
 
-	TokComment
+	TokLineComment
+	TokBlockComment
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -55,11 +56,7 @@ const (
 
 // ----------------------------------------------------------- BUILDING
 
-var factory = pattern.RegulaASTFactoryCreate(
-	func(a, b rune) int {
-		return cmp.Compare(a, b)
-	},
-)
+var factory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 
 var templates = pattern.RegulaTemplatesCreate(factory)
 
@@ -121,63 +118,80 @@ func ws() ruleDef {
 }
 
 func commentLine() ruleDef {
-	// anything except newline
-	notNL := factory.Class(
-		factory.Range(0, '\n'-1),
-		factory.Range('\n'+1, rune(0x10FFFF)),
+	notTerminator := factory.NegatedClass(
+		factory.Range('\n', '\n'),
+		factory.Range('\r', '\r'),
 	)
 
 	line := factory.Sequence(
 		factory.Literal('/'),
 		factory.Literal('/'),
-		notNL.Star(),
+		notTerminator.Star(),
 	)
-	return trivia(line, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
+	return trivia(line, TokLineComment, LANG_SPEC_COMMENT_ROLE, 0)
 }
 
 func commentBlock() ruleDef {
-	// This is the only mildly annoying part without a "not this sequence" primitive.
-	// We'll do a safe but simple variant:
-	//   "/*" ( (not '*') | ('*' not '/') )* "*/"
-	//
-	// That accepts anything until it sees the terminating */.
-	notStar := factory.Class(
-		factory.Range(0, '*'-1),
-		factory.Range('*'+1, rune(0x10FFFF)),
-	)
-	starNotSlash := factory.Sequence(
-		factory.Literal('*'),
-		factory.Class(
-			factory.Range(0, '/'-1),
-			factory.Range('/'+1, rune(0x10FFFF)),
-		),
+	// [^*]
+	notStar := factory.NegatedClass(factory.Range('*', '*'))
+
+	// [^*/]
+	notStarNorSlash := factory.NegatedClass(
+		factory.Range('*', '*'),
+		factory.Range('/', '/'),
 	)
 
-	bodyUnit := factory.AnyOf(notStar, starNotSlash)
+	// \*+
+	stars := factory.Literal('*').Plus()
 
+	// \*+[^*/]
+	starPlusNotSlash := factory.Sequence(stars, notStarNorSlash)
+
+	// ([^*]|\*+[^*/])*
+	bodyUnit := factory.AnyOf(notStar, starPlusNotSlash).Star()
+
+	// /\* body \*+/
 	block := factory.Sequence(
 		factory.Literal('/'),
 		factory.Literal('*'),
-		bodyUnit.Star(),
-		factory.Literal('*'),
+		bodyUnit,
+		stars,
 		factory.Literal('/'),
 	)
-	return trivia(block, TokComment, LANG_SPEC_COMMENT_ROLE, 0)
+
+	return trivia(block, TokBlockComment, LANG_SPEC_COMMENT_ROLE, 0)
 }
 
 // --- Atoms
 
-func stringLiteralNoEsc() ruleDef {
-	notQuote := factory.Class(
-		factory.Range(0, '"'-1),
-		factory.Range('"'+1, rune(0x10FFFF)),
+func stringLiteralStandard() ruleDef {
+	// 1. Normal characters: Not ", Not \, Not \n, Not \r
+	normalChar := factory.NegatedClass(
+		factory.Range('"', '"'),
+		factory.Range('\\', '\\'),
+		factory.Range('\n', '\n'),
+		factory.Range('\r', '\r'),
 	)
-	quoted := factory.Sequence(
-		factory.Literal('"'),
-		notQuote.Star(),
-		factory.Literal('"'),
+
+	// 2. Escape sequences: \ followed by specific allowed characters
+	escapeTrigger := factory.Literal('\\')
+	escapedChar := factory.Class(
+		factory.Range('"', '"'),
+		factory.Range('\\', '\\'),
+		factory.Range('n', 'n'),
+		factory.Range('r', 'r'),
+		factory.Range('t', 't'),
 	)
-	return structural(quoted, TokStringLiteral, 1)
+	escapeSequence := factory.Sequence(escapeTrigger, escapedChar)
+
+	// 3. The string body is zero or more of either normal chars or escapes
+	body := factory.AnyOf(normalChar, escapeSequence).Star()
+
+	// 4. Assemble: " body "
+	quote := factory.Literal('"')
+	stringLit := factory.Sequence(quote, body, quote)
+
+	return structural(stringLit, TokStringLiteral, 1)
 }
 
 func versionSemverV3() ruleDef {
@@ -209,7 +223,7 @@ func buildLangSpecDSLLexerSpec() (
 		lexarch.ColumnAdvanceRune(4),
 		lexarch.RunesToBytesDefault(),
 		runeFormatter,
-		lexarch.LexarchRuneSuccessorFn(),
+		lexarch.LexarchRuneDomain(),
 		func(t LangSpecLexerTokenType) string { return t.String() },
 	)
 
@@ -240,7 +254,7 @@ func buildLangSpecDSLLexerSpec() (
 		litRune('}', TokBraceClose),
 
 		// atoms (priority 1)
-		stringLiteralNoEsc(),
+		stringLiteralStandard(),
 		versionSemverV3(),
 
 		// keywords (priority 1)
