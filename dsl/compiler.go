@@ -307,10 +307,15 @@ func LangSpecCompilerCompile(
 }
 
 func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile string) error {
-	editorIRConfig := editor.PushDownAutomatonIRConfigurationCreate(
+	editorIRConfig := editor.PushDownAutomatonIRConfigurationCreate[LangSpecLexerTokenType, LangSpecLexerTokenRole](
 		getTokenScopes,
 		LangSpecLexerTokenType.String,
 		".lspec", // Scope Extension
+	)
+
+	editorIRConfig.AddPrototypeTokenRoles(
+		LANG_SPEC_WHITESPACE_ROLE,
+		LANG_SPEC_COMMENT_ROLE,
 	)
 
 	editorIRConfig.AddOverride(TokBlockComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
@@ -341,6 +346,7 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 					Action: editor.ACTION_POP,
 				},
 			},
+			OmitPrototype: true,
 		}
 
 		return mainRule, []editor.State{bodyState}

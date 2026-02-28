@@ -6,6 +6,7 @@ import (
 	"foundation/bytes"
 	"foundation/hash"
 	"lexarch"
+	"slices"
 	"strings"
 	"syntaxa"
 )
@@ -51,6 +52,7 @@ type State struct {
 	Rules         []StateRule
 	Includes      []StateID
 	IsRootContext bool
+	OmitPrototype bool // REQUIRED: Set to true for string/comment bodies to prevent prototype recursion
 }
 
 type StateRule struct {
@@ -100,28 +102,38 @@ type TokenOverrideFunc func(ctx *TokenOverrideContext) (mainRule StateRule, extr
 
 // ------------------------------------------------------------------ CONFIGURATION
 
-type PushDownAutomatonIRConfiguration[TToken comparable] struct {
-	scopeProvider  ScopeProvider[TToken]
-	formatter      TokenFormatter[TToken]
-	scopeExtension string
-	overrides      map[TToken]TokenOverrideFunc
+type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
+	scopeProvider       ScopeProvider[TToken]
+	formatter           TokenFormatter[TToken]
+	scopeExtension      string
+	overrides           map[TToken]TokenOverrideFunc
+	prototypeTokenRoles []TTokenRole
 }
 
-func PushDownAutomatonIRConfigurationCreate[TToken comparable](
+func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 	provider ScopeProvider[TToken],
 	formatter TokenFormatter[TToken],
 	scopeExtension string,
-) *PushDownAutomatonIRConfiguration[TToken] {
-	return &PushDownAutomatonIRConfiguration[TToken]{
-		scopeProvider:  provider,
-		formatter:      formatter,
-		scopeExtension: scopeExtension,
-		overrides:      make(map[TToken]TokenOverrideFunc),
+) *PushDownAutomatonIRConfiguration[TToken, TTokenRole] {
+	return &PushDownAutomatonIRConfiguration[TToken, TTokenRole]{
+		scopeProvider:       provider,
+		formatter:           formatter,
+		scopeExtension:      scopeExtension,
+		overrides:           make(map[TToken]TokenOverrideFunc),
+		prototypeTokenRoles: make([]TTokenRole, 0),
 	}
 }
 
-func (c *PushDownAutomatonIRConfiguration[TToken]) AddOverride(token TToken, fn TokenOverrideFunc) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token TToken, fn TokenOverrideFunc) {
 	c.overrides[token] = fn
+}
+
+/*
+AddPrototypeTokenRoles registers a token (e.g. whitespace, comments) to be injected
+into ST4's global prototype context.
+*/
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
+	c.prototypeTokenRoles = append(c.prototypeTokenRoles, tokenRoles...)
 }
 
 // ------------------------------------------------------------------ IR ORCHESTRATOR
@@ -137,14 +149,16 @@ type PushDownAutomatonIR struct {
 }
 
 func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
 	grammarPackage syntaxa.GrammarPackage[TToken],
 ) *PushDownAutomatonIR {
 
-	tokensInUse, tokenPatternMap := extractLexerTokens(lexingRuleSet)
-	allStates := buildBaseStates(config, tokensInUse, tokenPatternMap)
+	tokensInUse, tokenPatternMap, prototypeTokens := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
+
+	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens)
 	allStates = injectNestStates(config, allStates, grammarPackage, tokenPatternMap)
+	allStates = injectPrototypeState(allStates, prototypeIncludes)
 
 	return &PushDownAutomatonIR{
 		LanguageName:    grammarPackage.Name,
@@ -158,23 +172,31 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 
 func extractLexerTokens[TToken, TTokenRole comparable](
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
-) ([]TToken, map[TToken]Pattern) {
+	prototypeTokenRoles []TTokenRole,
+) ([]TToken, map[TToken]Pattern, map[TToken]bool) {
 	var tokensInUse []TToken
 	tokenPatternMap := make(map[TToken]Pattern)
+	prototypeTokens := make(map[TToken]bool)
 
 	for _, lexerRule := range lexingRuleSet.GetRules() {
 		tokensInUse = append(tokensInUse, lexerRule.Token)
 		tokenPatternMap[lexerRule.Token] = lexerRule.Pattern
+
+		if slices.Contains(prototypeTokenRoles, lexerRule.Role) {
+			prototypeTokens[lexerRule.Token] = true
+		}
 	}
-	return tokensInUse, tokenPatternMap
+	return tokensInUse, tokenPatternMap, prototypeTokens
 }
 
-func buildBaseStates[TToken comparable](
-	config *PushDownAutomatonIRConfiguration[TToken],
+func buildBaseStates[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	tokensInUse []TToken,
 	tokenPatternMap map[TToken]Pattern,
-) []State {
+	prototypeTokens map[TToken]bool,
+) ([]State, []StateID) {
 	var allStates []State
+	var prototypeIncludes []StateID
 
 	for _, token := range tokensInUse {
 		label := sanitizeContextName(config.formatter(token))
@@ -204,22 +226,28 @@ func buildBaseStates[TToken comparable](
 			}
 		}
 
+		isProto := prototypeTokens[token]
+
 		baseState := State{
 			ID:            id,
 			Label:         label,
 			Rules:         []StateRule{mainRule},
-			IsRootContext: true,
+			IsRootContext: !isProto,
+		}
+
+		if isProto {
+			prototypeIncludes = append(prototypeIncludes, id)
 		}
 
 		allStates = append(allStates, baseState)
 		allStates = append(allStates, extraStates...)
 	}
 
-	return allStates
+	return allStates, prototypeIncludes
 }
 
-func injectNestStates[TToken comparable](
-	config *PushDownAutomatonIRConfiguration[TToken],
+func injectNestStates[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	allStates []State,
 	grammarPackage syntaxa.GrammarPackage[TToken],
 	tokenPatternMap map[TToken]Pattern,
@@ -238,7 +266,6 @@ func injectNestStates[TToken comparable](
 		includes := buildIncludesWhitelist(validTokens, nest.Open, nest.Close, getBaseStateID)
 
 		closeRegex, _ := tokenPatternMap[nest.Close].ToRegEx()
-
 		metaScopeBase := fmt.Sprintf("meta.block.%s", strings.ToLower(nestLabel))
 
 		nestState := State{
@@ -270,6 +297,27 @@ func injectNestStates[TToken comparable](
 
 	return allStates
 }
+
+/*
+injectPrototypeState generates the magic 'prototype' state required by ST4.
+ST4 automatically injects this state at the top of every context on the stack.
+*/
+func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []State {
+	if len(prototypeIncludes) == 0 {
+		return allStates
+	}
+
+	protoState := State{
+		ID:            StateID(produceStateID("prototype")),
+		Label:         "prototype", // MUST be named exactly "prototype"
+		IsRootContext: false,
+		Includes:      prototypeIncludes,
+	}
+
+	return append(allStates, protoState)
+}
+
+// ------------------------------------------------------------------ UTILITY EXTRACTORS
 
 func linkOpenTokenToPushAction(states []State, openStateID, targetBodyID StateID) {
 	for i := range states {
