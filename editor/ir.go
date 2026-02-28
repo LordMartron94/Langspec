@@ -61,6 +61,8 @@ type StateRule struct {
 	Scope        string
 	Action       RuleAction
 	ActionTarget StateID
+
+	Captures map[int]string
 }
 
 type ScopeProvider[T any] func(item T) string

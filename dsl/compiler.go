@@ -346,6 +346,34 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 		return mainRule, []editor.State{bodyState}
 	})
 
+	editorIRConfig.AddOverride(TokLineComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
+		slashes := pattern.LiteralString(factory, "//").Capture()
+
+		notTerminator := factory.NegatedClass(
+			factory.Range('\n', '\n'),
+			factory.Range('\r', '\r'),
+		).Star().Capture()
+
+		fullPattern := slashes.Then(notTerminator)
+
+		regex, _ := fullPattern.ToRegEx()
+
+		mainRule := editor.StateRule{
+			ID:    editor.StateRuleID(ctx.BaseID),
+			Label: ctx.Label,
+			RegEx: regex,
+
+			Scope: ctx.ApplyScope("comment.line.double-slash"),
+
+			Captures: map[int]string{
+				1: ctx.ApplyScope("punctuation.definition.comment"),
+			},
+			Action: editor.ACTION_MATCH,
+		}
+
+		return mainRule, nil
+	})
+
 	editorIR := editor.PushDownAutomatonIRCreate(
 		editorIRConfig,
 		compiler.lexingRuleSet,

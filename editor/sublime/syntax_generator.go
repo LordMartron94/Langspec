@@ -68,13 +68,14 @@ func writeLanguageMetadata(sb *strings.Builder, editorIR *editor.PushDownAutomat
 }
 
 type contextEntry struct {
-	MetaScope *string `yaml:"meta_scope,omitempty"`
-	Match     *string `yaml:"match,omitempty"`
-	Scope     string  `yaml:"scope,omitempty"`
-	Push      *string `yaml:"push,omitempty"`
-	Set       *string `yaml:"set,omitempty"`
-	Pop       *bool   `yaml:"pop,omitempty"`
-	Include   *string `yaml:"include,omitempty"`
+	MetaScope *string        `yaml:"meta_scope,omitempty"`
+	Match     *string        `yaml:"match,omitempty"`
+	Scope     string         `yaml:"scope,omitempty"`
+	Push      *string        `yaml:"push,omitempty"`
+	Set       *string        `yaml:"set,omitempty"`
+	Pop       *bool          `yaml:"pop,omitempty"`
+	Include   *string        `yaml:"include,omitempty"`
+	Captures  map[int]string `yaml:"captures,omitempty"`
 }
 
 type contextsSection struct {
@@ -102,11 +103,17 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 		}
 
 		for _, rule := range state.Rules {
+			matchStr := rule.RegEx
 			entry := contextEntry{
-				Match: &rule.RegEx,
+				Match: &matchStr,
 			}
+
 			if rule.Scope != "" {
 				entry.Scope = rule.Scope
+			}
+
+			if len(rule.Captures) > 0 {
+				entry.Captures = rule.Captures
 			}
 
 			switch rule.Action {
