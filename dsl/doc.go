@@ -28,15 +28,11 @@
 // while remaining decoupled from runtime concerns such as memory allocation,
 // streaming configuration, and performance tuning.
 //
-// Editor IR for syntax highlighting (e.g. Sublime Text) is built from the same
-// grammar via the editor package's structural helpers and nest state builder.
+// Public API: LangSpecCompilerConfiguration (with optional LangSpecDiagnosticSink),
+// LangSpecCompilerCreate, LangSpecCompilerCompile (returns LangSpecCompileResult),
+// LangSpecCompilerDestroy. Diagnostic output is optional; when a sink is set,
+// syntax errors, parse trace, validation entries, and AST dumps are written to it.
 //
-// Subpackages typically include:
-//
-//   - ast        — syntax tree representation of the DSL
-//   - compiler  — lowering and transformation passes into runtime LangSpec structures
-//   - passes    — semantic analysis and validation phases
-//
-// This package is not a helper API.
-// It is the language that defines languages for the LangSpec ecosystem.
+// Editor integration for the DSL (e.g. Sublime Text syntax generation) lives in
+// subpackage dsl/editor, which consumes this package and the generic editor IR.
 package dsl

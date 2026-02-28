@@ -2,29 +2,35 @@ package dsl
 
 import (
 	"fmt"
+	"io"
+	"langspec/validation"
+	"lexarch"
 	"strings"
 	"syntaxa"
 )
 
-func renderSyntaxErrorsWithContext(source []rune, errs *syntaxa.SyntaxErrors[rune]) {
-	if len(errs.Errors) == 0 {
+func renderSyntaxErrorsWithContext(
+	w io.Writer,
+	source []rune,
+	errs *syntaxa.SyntaxErrors[rune],
+) {
+	if w == nil || len(errs.Errors) == 0 {
 		return
 	}
 
 	lines := splitLinesRunes(source)
 
-	fmt.Println("\n===== SYNTAX ERRORS =====")
+	fmt.Fprintln(w, "\n===== SYNTAX ERRORS =====")
 
 	for _, e := range errs.Errors {
-		printErrorHeader(e)
+		printErrorHeaderTo(w, e)
 
-		// For now we only render nice underlines for single-line spans
 		if e.StartLine != e.EndLine || e.StartLine <= 0 || !isValidLine(e.StartLine, len(lines)) {
-			fmt.Println(" ── INVALID ERROR SPAN DETECTED ─────────────────────────────")
-			fmt.Printf("  Message: %s\n", e.Message)
-			fmt.Printf("  StartLine: %d  StartColumn: %d\n", e.StartLine, e.StartColumn)
-			fmt.Printf("  EndLine:   %d  EndColumn:   %d\n", e.EndLine, e.EndColumn)
-			fmt.Printf("  Total lines: %d\n", len(lines))
+			fmt.Fprintln(w, " ── INVALID ERROR SPAN DETECTED ─────────────────────────────")
+			fmt.Fprintf(w, "  Message: %s\n", e.Message)
+			fmt.Fprintf(w, "  StartLine: %d  StartColumn: %d\n", e.StartLine, e.StartColumn)
+			fmt.Fprintf(w, "  EndLine:   %d  EndColumn:   %d\n", e.EndLine, e.EndColumn)
+			fmt.Fprintf(w, "  Total lines: %d\n", len(lines))
 
 			var lineIdx int
 			switch {
@@ -33,32 +39,27 @@ func renderSyntaxErrorsWithContext(source []rune, errs *syntaxa.SyntaxErrors[run
 			case len(lines) > 0:
 				lineIdx = len(lines) - 1
 			default:
-				fmt.Println("(no source available)")
-				fmt.Println()
+				fmt.Fprintln(w, "(no source available)")
+				fmt.Fprintln(w)
 				continue
 			}
 
 			line := lines[lineIdx]
-
-			fmt.Printf(" %4d | %s\n", lineIdx+1, string(line))
-			fmt.Print("      | ")
-			fmt.Println(renderSpan(line, e.StartColumn, e.EndColumn, 4))
-
-			fmt.Println(" ──────────────────────────────────────────────────────────")
+			fmt.Fprintf(w, " %4d | %s\n", lineIdx+1, string(line))
+			fmt.Fprint(w, "      | ")
+			fmt.Fprintln(w, renderSpan(line, e.StartColumn, e.EndColumn, 4))
+			fmt.Fprintln(w, " ──────────────────────────────────────────────────────────")
 			continue
 		}
 
-		// Single-line span
 		line := lines[e.StartLine-1]
-
-		fmt.Printf(" %4d | %s\n", e.StartLine, string(line))
-		fmt.Print("      | ")
-		fmt.Println(renderSpan(line, e.StartColumn, e.EndColumn, 4))
-
-		fmt.Println()
+		fmt.Fprintf(w, " %4d | %s\n", e.StartLine, string(line))
+		fmt.Fprint(w, "      | ")
+		fmt.Fprintln(w, renderSpan(line, e.StartColumn, e.EndColumn, 4))
+		fmt.Fprintln(w)
 	}
 
-	fmt.Println("========================")
+	fmt.Fprintln(w, "========================")
 }
 
 func renderSpan(
@@ -66,7 +67,6 @@ func renderSpan(
 	startCol, endCol int,
 	tabWidth int,
 ) string {
-
 	if endCol < startCol {
 		endCol = startCol
 	}
@@ -119,12 +119,15 @@ func getCharacterVisualWidth(r rune, currentVisualPos int, tabWidth int) int {
 	return 1
 }
 
-func printErrorHeader(e syntaxa.SyntaxError[rune]) {
+func printErrorHeaderTo(w io.Writer, e syntaxa.SyntaxError[rune]) {
+	if w == nil {
+		return
+	}
 	typeStr := "syntax"
 	if e.ProducedByLexer {
 		typeStr = "lexer"
 	}
-	fmt.Printf("[%s] (rule=%s) %s at %d:%d\n", typeStr, e.Rule, e.Message, e.StartLine, e.StartColumn)
+	fmt.Fprintf(w, "[%s] (rule=%s) %s at %d:%d\n", typeStr, e.Rule, e.Message, e.StartLine, e.StartColumn)
 }
 
 func isValidLine(lineNum, totalLines int) bool {
@@ -150,20 +153,24 @@ func splitLinesRunes(runes []rune) [][]rune {
 }
 
 func renderParseTrace[TToken any](
+	w io.Writer,
 	trace *syntaxa.ParseTrace[TToken],
 	formatToken func(TToken) string,
 ) {
+	if w == nil {
+		return
+	}
 	if trace == nil || len(trace.Events) == 0 {
-		fmt.Println("\n===== PARSE TRACE =====")
-		fmt.Println("  (no trace data)")
-		fmt.Println("======================")
+		fmt.Fprintln(w, "\n===== PARSE TRACE =====")
+		fmt.Fprintln(w, "  (no trace data)")
+		fmt.Fprintln(w, "======================")
 		return
 	}
 
-	fmt.Println("\n===== PARSE TRACE =====")
+	fmt.Fprintln(w, "\n===== PARSE TRACE =====")
 
 	for i, ev := range trace.Events {
-		fmt.Printf(
+		fmt.Fprintf(w,
 			"%04d | cur=%d | raw=%s | logical=%s | ok=%v | cons=%v | node=%v \n",
 			i,
 			ev.Cursor,
@@ -175,5 +182,72 @@ func renderParseTrace[TToken any](
 		)
 	}
 
-	fmt.Println("======================")
+	fmt.Fprintln(w, "======================")
+}
+
+func renderValidationEntries(
+	w io.Writer,
+	entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
+) {
+	if w == nil || entries == nil || len(entries.Results) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w, "\n===== VALIDATION =====")
+
+	for _, stage := range entries.Results {
+		fmt.Fprintf(w, "\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
+
+		if len(stage.Entries) == 0 {
+			fmt.Fprintln(w, "  ✔ no issues")
+			continue
+		}
+
+		for _, entry := range stage.Entries {
+			fmt.Fprintf(w,
+				"  [%v] %s — %s\n",
+				entry.Severity,
+				entry.Code,
+				entry.Message,
+			)
+		}
+	}
+
+	fmt.Fprintln(w, "=======================")
+}
+
+func renderASTDump(w io.Writer, dump string) {
+	if w == nil || dump == "" {
+		return
+	}
+	fmt.Fprintln(w, "\n===== AST DEBUG DUMP =====")
+	fmt.Fprintln(w, dump)
+	fmt.Fprintln(w, "=========================")
+}
+
+func renderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump string) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintln(w, "\n===== GRAMMAR DEBUG DUMP =====")
+	fmt.Fprintln(w, grammarDump)
+	fmt.Fprintln(w, "=========================")
+	fmt.Fprintln(w, "\n===== GRAMMAR PACKAGE DEBUG DUMP =====")
+	fmt.Fprintln(w, grammarPackageDump)
+	fmt.Fprintln(w, "=========================")
+}
+
+func renderLexemes(
+	w io.Writer,
+	lexemes []lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	formatToken func(LangSpecLexerTokenType) string,
+	formatRole func(LangSpecLexerTokenRole) string,
+) {
+	if w == nil || len(lexemes) == 0 {
+		return
+	}
+	for i, lexeme := range lexemes {
+		debug := lexeme.DebugString(formatToken, formatRole)
+		fmt.Fprintf(w, "%05d) %s\n", i, debug)
+	}
 }

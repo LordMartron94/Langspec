@@ -1,12 +1,10 @@
 package dsl
 
 import (
-	"autarch/pattern"
 	"fmt"
 	"foundation/system"
+	"io"
 	"langspec"
-	"langspec/editor"
-	"langspec/editor/sublime"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
@@ -41,12 +39,14 @@ func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
 	stageReporter             validation.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	diagnosticSink            *LangSpecDiagnosticSink
 }
 
 /*
 LangSpecCompilerConfigurationCreate creates an instance of the compiler configuration.
 
-Stage reporter is optional.
+Stage reporter is optional. DiagnosticSink is optional; when set, compilation diagnostics
+(syntax errors, trace, validation, AST dump) are written to the sink's Writer.
 */
 func LangSpecCompilerConfigurationCreate(
 	scratchAllocationFunction memarch.AllocationFn,
@@ -55,10 +55,32 @@ func LangSpecCompilerConfigurationCreate(
 	return &LangSpecCompilerConfiguration{
 		scratchAllocationFunction: scratchAllocationFunction,
 		stageReporter:             stageReporter,
+		diagnosticSink:            nil,
 	}
 }
 
+/*
+WithDiagnosticSink configures where compilation diagnostics are written.
+When nil, no diagnostic output is produced. Use DefaultLangSpecDiagnosticSink() for stdout.
+*/
+func (c *LangSpecCompilerConfiguration) WithDiagnosticSink(sink *LangSpecDiagnosticSink) *LangSpecCompilerConfiguration {
+	c.diagnosticSink = sink
+	return c
+}
+
 // --------------------------------------------------------------- COMPILER
+
+/*
+LangSpecCompileResult holds the result of compiling a .lspec file: the parsed AST,
+parse trace, syntax errors (if any), and validation entries (when validation was run).
+Callers can inspect the result without parsing stdout.
+*/
+type LangSpecCompileResult struct {
+	RootNode           *Node
+	Trace              *syntaxa.ParseTrace[LangSpecLexerTokenType]
+	SyntaxErrors       *syntaxa.SyntaxErrors[rune]
+	ValidationEntries  *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+}
 
 /*
 LangSpecCompiler compiles a .lspec file into the LangSpec configuration needed by the LangParser.
@@ -109,29 +131,26 @@ func LangSpecCompilerDestroy(compiler *LangSpecCompiler) {
 }
 
 /*
-LangSpecCompilerCompile compiles a .lspec file into a LangSpec specification.
+LangSpecCompilerCompile compiles a .lspec file and returns a structured result plus an error.
+When the file is not .lspec or lexing fails, result is nil. Otherwise result is populated
+with the parsed AST, trace, syntax errors, and validation entries (if validation ran).
+Diagnostic output is written only when config's DiagnosticSink is set.
 */
 func LangSpecCompilerCompile(
 	compiler *LangSpecCompiler,
 	sourceFile string,
-) error {
+) (*LangSpecCompileResult, error) {
 
 	if !system.PathHasExt(sourceFile, ".lspec") {
-		return fmt.Errorf("file is not a .lspec file: %s", sourceFile)
+		return nil, fmt.Errorf("file is not a .lspec file: %s", sourceFile)
 	}
 
-	// dfaDUMP := compiler.parser.DebugDumpAllLexerDFAs()
-
-	// fmt.Println("\n===== LEXER DFA DEBUG DUMP =====")
-	// fmt.Println(dfaDUMP)
-	// fmt.Println("=========================")
+	var w io.Writer
+	if compiler.config.diagnosticSink != nil && compiler.config.diagnosticSink.Writer != nil {
+		w = compiler.config.diagnosticSink.Writer
+	}
 
 	contentRune, _ := system.FileReadAllRunes(sourceFile)
-	// fmt.Printf("DEBUG: rune content (escaped):\n%q\n", string(contentRune))
-	// fmt.Println("DEBUG: rune stream:")
-	// for i, r := range contentRune {
-	// 	fmt.Printf("[%04d] rune=%q  codepoint=U+%04X\n", i, r, r)
-	// }
 
 	grammarDump := compiler.programRule.GetGrammar().DebugDump(
 		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType]{
@@ -149,101 +168,66 @@ func LangSpecCompilerCompile(
 		},
 	)
 
-	fmt.Println("\n===== GRAMMAR DEBUG DUMP =====")
-	fmt.Println(grammarDump)
-	fmt.Println("=========================")
-
 	grammarPackage := compiler.programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0")
 	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[LangSpecLexerTokenType]{
 		FormatToken: LangSpecLexerTokenType.String,
 	})
 
-	fmt.Println("\n===== GRAMMAR PACKAGE DEBUG DUMP =====")
-	fmt.Println(grammarPackageDump)
-	fmt.Println("=========================")
+	renderGrammarDumps(w, grammarDump, grammarPackageDump)
 
 	session := getSession(compiler, sourceFile)
 
 	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
 	if err != nil {
-		return fmt.Errorf("lexing error: %w", err)
+		return nil, fmt.Errorf("lexing error: %w", err)
 	}
 
-	for i, lexeme := range lexemes {
-		debug := lexeme.DebugString(
-			func(lsltt LangSpecLexerTokenType) string {
-				return lsltt.String()
-			},
-			func(lsltr LangSpecLexerTokenRole) string {
-				return lsltr.String()
-			},
-		)
-
-		fmt.Printf("%05d) %s\n", i, debug)
-	}
-
-	// return nil
+	renderLexemes(w, lexemes,
+		func(t LangSpecLexerTokenType) string { return t.String() },
+		func(r LangSpecLexerTokenRole) string { return r.String() },
+	)
 
 	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
 		compiler.parser,
 		session,
 	)
 
+	result := &LangSpecCompileResult{
+		RootNode:     rootNode,
+		Trace:        trace,
+		SyntaxErrors: syntaxErrors,
+	}
+
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		renderSyntaxErrorsWithContext(
-			contentRune,
-			syntaxErrors,
-		)
+		renderSyntaxErrorsWithContext(w, contentRune, syntaxErrors)
 		err = fmt.Errorf(
 			"langspec parse failed with %d syntax errors",
 			len(syntaxErrors.Errors),
 		)
 	}
 
-	renderParseTrace(
-		trace,
-		func(t LangSpecLexerTokenType) string {
-			return t.String()
-		},
-	)
+	renderParseTrace(w, trace, func(t LangSpecLexerTokenType) string { return t.String() })
 
-	// ============================================================
 	// Validation entries
-	// ============================================================
-
 	if !syntaxErrors.HasErrors() {
 		validationEntries, validationErr := validation.ASTValidatorRun(compiler.validatorConfig, rootNode)
 		if validationErr != nil {
 			err = validationErr
 		}
 
+		result.ValidationEntries = validationEntries
+
 		if validationEntries != nil && len(validationEntries.Results) > 0 {
-			fmt.Println("\n===== VALIDATION =====")
+			renderValidationEntries(w, validationEntries)
 
 			errorAmount := 0
 			for _, stage := range validationEntries.Results {
-				fmt.Printf("\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
-
-				if len(stage.Entries) == 0 {
-					fmt.Println("  ✔ no issues")
-					continue
-				}
-
 				for _, entry := range stage.Entries {
 					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
 						errorAmount++
 					}
-
-					fmt.Printf(
-						"  [%v] %s — %s\n",
-						entry.Severity,
-						entry.Code,
-						entry.Message,
-					)
 				}
 			}
-
-			fmt.Println("=======================")
 
 			if errorAmount > 0 {
 				err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
@@ -251,10 +235,7 @@ func LangSpecCompilerCompile(
 		}
 	}
 
-	// ============================================================
 	// AST dump (visual ground truth)
-	// ============================================================
-
 	dump := rootNode.DebugDump(
 		syntaxa.ASTDebugFormatter[
 			rune,
@@ -299,159 +280,27 @@ func LangSpecCompilerCompile(
 		},
 	)
 
-	fmt.Println("\n===== AST DEBUG DUMP =====")
-	fmt.Println(dump)
-	fmt.Println("=========================")
+	renderASTDump(w, dump)
 
-	return err
-}
-
-/*
-LangSpecCompilerBuildSublimeSyntax generates a Sublime Text syntax definition file from the
-compiler's grammar and lexer. It builds an editor IR via PushDownAutomatonIRConfiguration
-with token overrides (using the editor's structural helpers for delimited regions and
-match-with-capture) and a nest override for the HEADER production (using
-BuildNestStateSequence), then writes the result to syntaxFile via the sublime package.
-*/
-func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile string) error {
-	editorIRConfig := editor.PushDownAutomatonIRConfigurationCreate[LangSpecLexerTokenType, LangSpecLexerTokenRole](
-		getTokenScopes,
-		LangSpecLexerTokenType.String,
-		".lspec", // Scope Extension
-	)
-
-	editorIRConfig.AddPrototypeTokenRoles(
-		LANG_SPEC_WHITESPACE_ROLE,
-		LANG_SPEC_COMMENT_ROLE,
-	)
-
-	editorIRConfig.AddOverride(TokBlockComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
-		openRegex, _ := pattern.LiteralString(factory, "/*").ToRegEx()
-		closeRegex, _ := pattern.LiteralString(factory, "*/").ToRegEx()
-		return editor.TokenOverrideDelimitedRegion(ctx,
-			openRegex, closeRegex,
-			"punctuation.definition.comment.begin",
-			ctx.BaseScope,
-			"punctuation.definition.comment.end",
-		)
-	})
-
-	editorIRConfig.AddOverride(TokLineComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
-		slashes := pattern.LiteralString(factory, "//").Capture()
-		notTerminator := factory.NegatedClass(
-			factory.Range('\n', '\n'),
-			factory.Range('\r', '\r'),
-		).Star().Capture()
-		regex, _ := slashes.Then(notTerminator).ToRegEx()
-		return editor.TokenOverrideMatchWithCapture(ctx,
-			regex,
-			"comment.line.double-slash",
-			"punctuation.definition.comment",
-		)
-	})
-
-	// Override the HEADER nest (GrammarIDHeader) with a custom state sequence for Sublime highlighting.
-	editorIRConfig.AddNestOverrideByPredicate(
-		func(nest *syntaxa.NestSpec[LangSpecLexerTokenType]) bool { return nest.OwnerRule == GrammarIDHeader },
-		func(ctx *editor.NestOverrideContext[LangSpecLexerTokenType]) (editor.StateID, []editor.State) {
-		steps := []editor.NestStep[LangSpecLexerTokenType]{
-			{
-				LabelSuffix: "expect_name",
-				MetaScope:   "meta.block.header",
-				Rules: []editor.NestStepRule[LangSpecLexerTokenType]{
-					{Token: TokStringLiteral, Scope: "entity.name.language", Action: editor.NestRuleActionPushNext},
-				},
-			},
-			{
-				LabelSuffix: "expect_version",
-				Rules: []editor.NestStepRule[LangSpecLexerTokenType]{
-					{Token: TokVersion, Scope: "constant.numeric.version", Action: editor.NestRuleActionPushNext},
-				},
-			},
-			{
-				LabelSuffix: "expect_tail",
-				Rules: []editor.NestStepRule[LangSpecLexerTokenType]{
-					{Token: TokDashes, Scope: "punctuation.definition.separator", Action: editor.NestRuleActionPop, PopCount: 3},
-					{Token: TokHeaderSeparator, Scope: "punctuation.section.header", Action: editor.NestRuleActionMatch},
-					{Token: TokStringLiteral, Scope: "string.quoted.double", Action: editor.NestRuleActionMatch},
-					{Token: TokKWLSpec, Scope: "keyword.declaration.lspec", Action: editor.NestRuleActionMatch},
-					{Token: TokVersion, Scope: "constant.numeric.version", Action: editor.NestRuleActionMatch},
-				},
-			},
-		}
-		return editor.BuildNestStateSequence(ctx, steps)
-		},
-	)
-
-	editorIR := editor.PushDownAutomatonIRCreate(
-		editorIRConfig,
-		compiler.lexingRuleSet,
-		compiler.programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0"),
-	)
-
-	return sublime.SublimeTextGenerateSyntaxFile(
-		editorIR,
-		syntaxFile,
-		[]string{".lspec"},
-	)
+	return result, err
 }
 
 // --------------------------------------------------------------- PRIVATE HELPERS
 
-var tokenScopeMap = map[LangSpecLexerTokenType]string{
-	TokEOF:               "meta.eof",
-	TokWhitespace:        "punctuation.whitespace",
-	TokDashes:            "punctuation.definition.separator",
-	TokHeaderSeparator:   "punctuation.section.header",
-	TokStringLiteral:     "string.quoted.double",
-	TokVersion:           "constant.numeric.version",
-	TokKWLSpec:           "keyword.declaration.lspec",
-	TokKWDeclare:         "keyword.control.declare",
-	TokKWLexerTokenTypes: "meta.type.builtin",
-	TokBraceOpen:         "punctuation.section.braces.begin",
-	TokBraceClose:        "punctuation.section.braces.end",
-	TokSemicolon:         "punctuation.terminator.statement",
-	TokComma:             "punctuation.separator.comma",
-	TokLineComment:       "comment.line.double-slash",
-	TokBlockComment:      "comment.block",
+/*
+LangSpecCompilerLexingRuleSet returns the lexing ruleset used by the DSL compiler.
+Used by editor integrations to build syntax highlighting IR without depending on parser internals.
+*/
+func LangSpecCompilerLexingRuleSet(compiler *LangSpecCompiler) *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole] {
+	return compiler.lexingRuleSet
 }
 
-func getTokenScopes(token LangSpecLexerTokenType) string {
-	if scope, ok := tokenScopeMap[token]; ok {
-		return scope
-	}
-	return ""
+/*
+LangSpecCompilerProgramRule returns the program rule used by the DSL compiler.
+Used by editor integrations to produce the grammar package for syntax highlighting.
+*/
+func LangSpecCompilerProgramRule(compiler *LangSpecCompiler) Rule {
+	return compiler.programRule
 }
 
 var runeFormatter = lexarch.RuneFormatterDefault()
-
-func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangParserSession[rune] {
-	if compiler.sessionCache != nil {
-		compiler.sessionCache.Reset(sourceFile, nil, false)
-		return compiler.sessionCache
-	} else {
-		session := langspec.LangParserSessionCreate[rune](sourceFile, nil, false)
-		compiler.sessionCache = session
-		return session
-	}
-}
-
-func buildLangSpecDSLSpec() (
-	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
-	Rule,
-) {
-	lexerSpec, ruleset := buildLangSpecDSLLexerSpec()
-	lexerSpec.WithDFADebugFormatter(
-		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
-	)
-
-	parserSpec, programRule := buildLangSpecDSLParserSpec()
-
-	dslSpec := langspec.LangSpecCreate(
-		lexerSpec,
-		parserSpec,
-	)
-
-	return dslSpec, ruleset, programRule
-}
