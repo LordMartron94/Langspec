@@ -16,21 +16,25 @@ func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangPar
 }
 
 func buildLangSpecDSLSpec() (
+	LanguageSpec,
 	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	Rule,
 ) {
-	lexerSpec, ruleset := buildLangSpecDSLLexerSpec()
+	factory, templates := DSLSpecFactoryAndTemplates()
+	spec := BuildLanguageSpec(factory, templates)
+
+	lexerSpec, ruleset := buildLangSpecDSLLexerSpec(spec)
 	lexerSpec.WithDFADebugFormatter(
 		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
 	)
 
-	parserSpec, programRule := buildLangSpecDSLParserSpec()
+	parserSpec, programRule := buildLangSpecDSLParserSpec(spec)
 
 	dslSpec := langspec.LangSpecCreate(
 		lexerSpec,
 		parserSpec,
 	)
 
-	return dslSpec, ruleset, programRule
+	return spec, dslSpec, ruleset, programRule
 }

@@ -88,6 +88,8 @@ LangSpecCompiler compiles a .lspec file into the LangSpec configuration needed b
 type LangSpecCompiler struct {
 	config *LangSpecCompilerConfiguration
 
+	languageSpec LanguageSpec
+
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 	validatorConfig *validation.ASTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
@@ -99,10 +101,10 @@ type LangSpecCompiler struct {
 
 /* LangSpecCompilerCreate constructs a compiler instance. */
 func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *LangSpecCompiler {
-	spec, ruleset, programRule := buildLangSpecDSLSpec()
+	spec, dslSpec, ruleset, programRule := buildLangSpecDSLSpec()
 
 	langParserConfig := langspec.LangParserConfigurationCreate(
-		spec,
+		dslSpec,
 		compilerConfig.scratchAllocationFunction,
 	)
 	parser := langspec.LangParserCreate(langParserConfig)
@@ -114,6 +116,7 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 
 	return &LangSpecCompiler{
 		config:          compilerConfig,
+		languageSpec:    spec,
 		parser:          parser,
 		validatorConfig: validationConfig,
 		lexingRuleSet:   ruleset,
@@ -286,6 +289,22 @@ func LangSpecCompilerCompile(
 }
 
 // --------------------------------------------------------------- PRIVATE HELPERS
+
+/*
+LangSpecCompilerScopeMap returns the token-to-scope map from the compiler's language spec.
+Used by editor integrations for syntax highlighting.
+*/
+func LangSpecCompilerScopeMap(compiler *LangSpecCompiler) map[LangSpecLexerTokenType]string {
+	return LanguageSpecScopeMap(compiler.languageSpec)
+}
+
+/*
+LangSpecCompilerHeaderSpec returns the header nest steps from the compiler's language spec.
+Used by editor integrations for Sublime nest overrides.
+*/
+func LangSpecCompilerHeaderSpec(compiler *LangSpecCompiler) []DSLHeaderNestStep {
+	return compiler.languageSpec.Headers
+}
 
 /*
 LangSpecCompilerLexingRuleSet returns the lexing ruleset used by the DSL compiler.

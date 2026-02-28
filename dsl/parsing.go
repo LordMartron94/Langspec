@@ -7,30 +7,7 @@ import (
 	"syntaxa/rule"
 )
 
-// --------------------------------------------------------------- TYPES
-
-//go:generate stringer -type LangSpecParserNodeKind
-type LangSpecParserNodeKind uint32
-
-const (
-	// SPECIAL
-	NodeError LangSpecParserNodeKind = iota + 1
-
-	// ROOT
-	NodeProgram
-	NodeHeader
-	NodeHeaderContent
-	NodeBody
-
-	// ATOMS
-	NodeDSLName
-	NodeVersion
-	NodeLSPECName
-
-	NodeIdentifier
-)
-
-// --------------------------------------------------------------- ATTRIBUTES
+// --------------------------------------------------------------- ATTRIBUTES (node kinds live in constructs.go)
 
 const (
 	ATTRIBUTE_LITERAL_STRING_FORMATTED = "formattedString"
@@ -39,7 +16,7 @@ const (
 
 // --------------------------------------------------------------- BUILDING
 
-func buildLangSpecDSLParserSpec() (
+func buildLangSpecDSLParserSpec(spec LanguageSpec) (
 	*langspec.ParserSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	Rule,
 ) {
@@ -62,7 +39,7 @@ func buildLangSpecDSLParserSpec() (
 		LangSpecLexerTokenType.String,
 	)
 
-	programRule := parseProgram(ruleBuilder)
+	programRule := parseProgram(ruleBuilder, spec)
 
 	parserSpec := langspec.ParserSpecCreate(
 		NodeProgram,
@@ -79,30 +56,41 @@ func buildLangSpecDSLParserSpec() (
 	return parserSpec, programRule
 }
 
-func parseProgram(ruleBuilder *RuleBuilder) Rule {
+func parseProgram(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
 	return ruleBuilder.Rule.Root(
 		GrammarIDProgram,
 		NodeProgram,
 		false,
-		parseHeader(ruleBuilder),
+		parseHeader(ruleBuilder, spec),
 		// parseBody(ruleBuilder),
 		ruleBuilder.Token.ExpectVirtual(GrammarIDEOF, TokEOF),
 	)
 }
 
-func parseHeader(ruleBuilder *RuleBuilder) Rule {
+func parseHeader(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
+	flat := LanguageSpecHeaderExpectationsFlat(spec)
+	sequenceRules := make([]Rule, 0, len(flat))
+	for _, e := range flat {
+		if e.Virtual {
+			if len(e.Tokens) > 0 {
+				sequenceRules = append(sequenceRules, ruleBuilder.Token.ExpectVirtual(e.GrammarID, e.Tokens[0]))
+			}
+			continue
+		}
+		if len(e.Tokens) == 1 {
+			sequenceRules = append(sequenceRules, ruleBuilder.Token.Expect(e.GrammarID, e.NodeKind, e.Tokens[0]))
+		} else if len(e.Tokens) > 1 {
+			sequenceRules = append(sequenceRules, ruleBuilder.Token.ExpectOneOf(e.GrammarID, e.NodeKind, e.Tokens...))
+		}
+	}
 	return ruleBuilder.Rule.Nest(
 		GrammarIDHeader,
 		NodeHeader,
-		TokDashes, TokDashes, // open + close
+		TokDashes, TokDashes,
 		ruleBuilder.Rule.Sequence(
 			GrammarIDHeaderContent,
 			NodeHeaderContent,
-			ruleBuilder.Token.Expect(GrammarIDDSLName, NodeDSLName, TokStringLiteral),
-			ruleBuilder.Token.Expect(GrammarIDDSLVersion, NodeVersion, TokVersion),
-			ruleBuilder.Token.ExpectVirtual(GrammarIDHeaderSeparator, TokHeaderSeparator),
-			ruleBuilder.Token.ExpectOneOf(GrammarIDLangspecName, NodeLSPECName, TokStringLiteral, TokKWLSpec),
-			ruleBuilder.Token.Expect(GrammarIDLangspecVersion, NodeVersion, TokVersion),
+			sequenceRules...,
 		),
 	)
 }

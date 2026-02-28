@@ -11,6 +11,46 @@ import (
 
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 
+func dslNestActionToEditor(a dsl.DSLNestAction) langspeceditor.NestRuleAction {
+	switch a {
+	case dsl.DSLNestActionMatch:
+		return langspeceditor.NestRuleActionMatch
+	case dsl.DSLNestActionPushNext:
+		return langspeceditor.NestRuleActionPushNext
+	case dsl.DSLNestActionPop:
+		return langspeceditor.NestRuleActionPop
+	default:
+		return langspeceditor.NestRuleActionMatch
+	}
+}
+
+func dslHeaderSpecToNestSteps(spec []dsl.DSLHeaderNestStep, scopeResolver func(dsl.LangSpecLexerTokenType) string) []langspeceditor.NestStep[dsl.LangSpecLexerTokenType] {
+	out := make([]langspeceditor.NestStep[dsl.LangSpecLexerTokenType], 0, len(spec))
+	for _, step := range spec {
+		var rules []langspeceditor.NestStepRule[dsl.LangSpecLexerTokenType]
+		for _, e := range step.Expectations {
+			for _, tok := range e.Tokens {
+				scope := e.ScopeOverride
+				if scope == "" {
+					scope = scopeResolver(tok)
+				}
+				rules = append(rules, langspeceditor.NestStepRule[dsl.LangSpecLexerTokenType]{
+					Token:    tok,
+					Scope:    scope,
+					Action:   dslNestActionToEditor(e.NestAction),
+					PopCount: e.PopCount,
+				})
+			}
+		}
+		out = append(out, langspeceditor.NestStep[dsl.LangSpecLexerTokenType]{
+			LabelSuffix: step.LabelSuffix,
+			MetaScope:   step.MetaScope,
+			Rules:       rules,
+		})
+	}
+	return out
+}
+
 /*
 BuildSublimeSyntaxForDSL generates a Sublime Text syntax definition file for the
 LangSpec DSL from the given compiler. It builds an editor IR with token overrides
@@ -21,8 +61,12 @@ Use this from tools or tests that need .lspec syntax highlighting; the core
 langspec/dsl compiler does not depend on editor or sublime.
 */
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
+	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
+	scopeResolver := func(t dsl.LangSpecLexerTokenType) string { return scopeMap[t] }
+	headerSpec := dsl.LangSpecCompilerHeaderSpec(compiler)
+
 	editorIRConfig := langspeceditor.PushDownAutomatonIRConfigurationCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole](
-		dslTokenScope,
+		scopeResolver,
 		dsl.LangSpecLexerTokenType.String,
 		".lspec",
 	)
@@ -60,31 +104,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	editorIRConfig.AddNestOverrideByPredicate(
 		func(nest *syntaxa.NestSpec[dsl.LangSpecLexerTokenType]) bool { return nest.OwnerRule == dsl.GrammarIDHeader },
 		func(ctx *langspeceditor.NestOverrideContext[dsl.LangSpecLexerTokenType]) (langspeceditor.StateID, []langspeceditor.State) {
-			steps := []langspeceditor.NestStep[dsl.LangSpecLexerTokenType]{
-				{
-					LabelSuffix: "expect_name",
-					MetaScope:   "meta.block.header",
-					Rules: []langspeceditor.NestStepRule[dsl.LangSpecLexerTokenType]{
-						{Token: dsl.TokStringLiteral, Scope: "entity.name.language", Action: langspeceditor.NestRuleActionPushNext},
-					},
-				},
-				{
-					LabelSuffix: "expect_version",
-					Rules: []langspeceditor.NestStepRule[dsl.LangSpecLexerTokenType]{
-						{Token: dsl.TokVersion, Scope: "constant.numeric.version", Action: langspeceditor.NestRuleActionPushNext},
-					},
-				},
-				{
-					LabelSuffix: "expect_tail",
-					Rules: []langspeceditor.NestStepRule[dsl.LangSpecLexerTokenType]{
-						{Token: dsl.TokDashes, Scope: "punctuation.definition.separator", Action: langspeceditor.NestRuleActionPop, PopCount: 3},
-						{Token: dsl.TokHeaderSeparator, Scope: "punctuation.section.header", Action: langspeceditor.NestRuleActionMatch},
-						{Token: dsl.TokStringLiteral, Scope: "string.quoted.double", Action: langspeceditor.NestRuleActionMatch},
-						{Token: dsl.TokKWLSpec, Scope: "keyword.declaration.lspec", Action: langspeceditor.NestRuleActionMatch},
-						{Token: dsl.TokVersion, Scope: "constant.numeric.version", Action: langspeceditor.NestRuleActionMatch},
-					},
-				},
-			}
+			steps := dslHeaderSpecToNestSteps(headerSpec, scopeResolver)
 			return langspeceditor.BuildNestStateSequence(ctx, steps)
 		},
 	)
