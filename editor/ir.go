@@ -47,31 +47,65 @@ type State struct {
 	ID    StateID
 	Label string
 
-	Rules []StateRule
+	MetaScope string
+	Rules     []StateRule
 }
 
 type StateRule struct {
 	ID    StateRuleID
 	Label string
 
-	RegEx  string
-	Scope  string
-	Action RuleAction
+	RegEx        string
+	Scope        string
+	Action       RuleAction
+	ActionTarget StateID
 }
 
 type ScopeProvider[T any] func(item T) string
 
 type TokenFormatter[TToken any] func(token TToken) string
 
+/*
+TokenOverrideContext provides the necessary utilities and state to a TokenOverrideFunc,
+allowing clients to generate rules and states without breaking package boundaries.
+*/
+type TokenOverrideContext struct {
+	BaseID          StateID
+	Label           string
+	OriginalPattern Pattern
+	BaseScope       string
+	ScopeExtension  string
+}
+
+/*
+DeriveStateID generates a deterministic ID for auxiliary states using the editor package's internal hasher.
+*/
+func (ctx *TokenOverrideContext) DeriveStateID(suffix string) StateID {
+	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.Label, suffix)))
+}
+
+/*
+ApplyScope appends the configured scope extension to a base scope string.
+*/
+func (ctx *TokenOverrideContext) ApplyScope(scope string) string {
+	return getScopeString(scope, ctx.ScopeExtension)
+}
+
+/*
+TokenOverrideFunc generates a custom rule and optional auxiliary states for a token.
+*/
+type TokenOverrideFunc func(ctx *TokenOverrideContext) (mainRule StateRule, extraStates []State)
+
 // ------------------------------------------------------------------ CONFIGURATION
 
-type PushDownAutomatonIRConfiguration[TToken any] struct {
+type PushDownAutomatonIRConfiguration[TToken comparable] struct {
 	scopeProvider  ScopeProvider[TToken]
 	formatter      TokenFormatter[TToken]
 	scopeExtension string
+	overrides      map[TToken]TokenOverrideFunc
 }
 
-func PushDownAutomatonIRConfigurationCreate[TToken any](
+func PushDownAutomatonIRConfigurationCreate[TToken comparable](
 	provider ScopeProvider[TToken],
 	formatter TokenFormatter[TToken],
 	scopeExtension string,
@@ -80,7 +114,12 @@ func PushDownAutomatonIRConfigurationCreate[TToken any](
 		scopeProvider:  provider,
 		formatter:      formatter,
 		scopeExtension: scopeExtension,
+		overrides:      make(map[TToken]TokenOverrideFunc),
 	}
+}
+
+func (c *PushDownAutomatonIRConfiguration[TToken]) AddOverride(token TToken, fn TokenOverrideFunc) {
+	c.overrides[token] = fn
 }
 
 // ------------------------------------------------------------------ IR
@@ -110,33 +149,53 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 		tokenPatternMap[lexerRule.Token] = lexerRule.Pattern
 	}
 
-	states := make([]State, len(tokensInUse))
-	for i, token := range tokensInUse {
+	var allStates []State
+
+	for _, token := range tokensInUse {
 		label := config.formatter(token)
-		id := produceStateID(label)
-		defaultRegex, _ := tokenPatternMap[token].ToRegEx()
+		id := StateID(produceStateID(label))
+		baseScope := config.scopeProvider(token)
 
-		states[i] = State{
-			ID:    StateID(id),
-			Label: label,
-			Rules: []StateRule{
-				{
-					ID:     StateRuleID(id),
-					Label:  label,
-					Action: ACTION_MATCH,
-					Scope:  getScopeString(config.scopeProvider(token), config.scopeExtension),
-					RegEx:  defaultRegex,
-				},
-			},
+		var mainRule StateRule
+		var extraStates []State
+
+		// Check for client override
+		if overrideFn, exists := config.overrides[token]; exists {
+			ctx := &TokenOverrideContext{
+				BaseID:          id,
+				Label:           label,
+				OriginalPattern: tokenPatternMap[token],
+				BaseScope:       baseScope,
+				ScopeExtension:  config.scopeExtension,
+			}
+			mainRule, extraStates = overrideFn(ctx)
+		} else {
+			// Default behavior
+			defaultRegex, _ := tokenPatternMap[token].ToRegEx()
+			mainRule = StateRule{
+				ID:     StateRuleID(id),
+				Label:  label,
+				Action: ACTION_MATCH,
+				Scope:  getScopeString(baseScope, config.scopeExtension),
+				RegEx:  defaultRegex,
+			}
 		}
-	}
 
-	// TODO - RegEx overrides optional by client
+		// Create the base state for this token
+		baseState := State{
+			ID:    id,
+			Label: label,
+			Rules: []StateRule{mainRule},
+		}
+
+		allStates = append(allStates, baseState)
+		allStates = append(allStates, extraStates...)
+	}
 
 	return &PushDownAutomatonIR{
 		LanguageName:    grammarPackage.Name,
 		LanguageVersion: grammarPackage.Version,
-		States:          states,
+		States:          allStates,
 		ScopeExtension:  config.scopeExtension,
 	}
 }

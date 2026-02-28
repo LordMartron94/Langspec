@@ -68,12 +68,13 @@ func writeLanguageMetadata(sb *strings.Builder, editorIR *editor.PushDownAutomat
 }
 
 type contextEntry struct {
-	Include *string `yaml:"include,omitempty"`
-	Push    any     `yaml:"push,omitempty"`
-	Pop     *string `yaml:"pop,omitempty"`
-	Set     *string `yaml:"set,omitempty"`
-	Match   *string `yaml:"match,omitempty"`
-	Scope   string  `yaml:"scope,omitempty"`
+	MetaScope *string `yaml:"meta_scope,omitempty"`
+	Match     *string `yaml:"match,omitempty"`
+	Scope     string  `yaml:"scope,omitempty"`
+	Push      *string `yaml:"push,omitempty"`
+	Set       *string `yaml:"set,omitempty"`
+	Pop       *bool   `yaml:"pop,omitempty"`
+	Include   *string `yaml:"include,omitempty"`
 }
 
 type contextsSection struct {
@@ -83,32 +84,62 @@ type contextsSection struct {
 func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error {
 	writeSectionHeader(sb, "Contexts & Rules")
 
-	contexts := make(map[string][]contextEntry)
+	idToLabel := make(map[editor.StateID]string)
 	for _, state := range editorIR.States {
-		entries := []contextEntry{}
+		idToLabel[state.ID] = state.Label
+	}
 
-		for _, rule := range state.Rules {
+	contexts := make(map[string][]contextEntry)
+	var rootIncludes []contextEntry
+
+	for _, state := range editorIR.States {
+		var entries []contextEntry
+
+		if state.MetaScope != "" {
 			entries = append(entries, contextEntry{
-				Match: &rule.RegEx,
-				Scope: rule.Scope,
+				MetaScope: &state.MetaScope,
 			})
 		}
 
-		contexts[state.Label] = entries
-	}
+		for _, rule := range state.Rules {
+			entry := contextEntry{
+				Match: &rule.RegEx,
+			}
+			if rule.Scope != "" {
+				entry.Scope = rule.Scope
+			}
 
-	mainIncludes := []contextEntry{}
-	for ctxName := range contexts {
-		mainIncludes = append(mainIncludes, contextEntry{
-			Include: &ctxName,
+			switch rule.Action {
+			case editor.ACTION_PUSH:
+				target, ok := idToLabel[rule.ActionTarget]
+				if !ok {
+					return fmt.Errorf("missing target ID %d for push action in state %s", rule.ActionTarget, state.Label)
+				}
+				entry.Push = &target
+			case editor.ACTION_SET:
+				target, ok := idToLabel[rule.ActionTarget]
+				if !ok {
+					return fmt.Errorf("missing target ID %d for set action in state %s", rule.ActionTarget, state.Label)
+				}
+				entry.Set = &target
+			case editor.ACTION_POP:
+				t := true
+				entry.Pop = &t
+			}
+
+			entries = append(entries, entry)
+		}
+
+		contexts[state.Label] = entries
+
+		rootIncludes = append(rootIncludes, contextEntry{
+			Include: &state.Label,
 		})
 	}
 
-	contexts["main"] = mainIncludes
+	contexts["main"] = rootIncludes
 
-	if value, err := yaml.Marshal(contextsSection{
-		Contexts: contexts,
-	}); err != nil {
+	if value, err := yaml.Marshal(contextsSection{Contexts: contexts}); err != nil {
 		return fmt.Errorf("error marshaling context: %w", err)
 	} else {
 		sb.Write(value)

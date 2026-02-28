@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"autarch/pattern"
 	"fmt"
 	"foundation/system"
 	"langspec"
@@ -306,12 +307,47 @@ func LangSpecCompilerCompile(
 }
 
 func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile string) error {
+	editorIRConfig := editor.PushDownAutomatonIRConfigurationCreate(
+		getTokenScopes,
+		LangSpecLexerTokenType.String,
+		".lspec", // Scope Extension
+	)
+
+	editorIRConfig.AddOverride(TokBlockComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
+		openRegex, _ := pattern.LiteralString(factory, "/*").ToRegEx()
+		closeRegex, _ := pattern.LiteralString(factory, "*/").ToRegEx()
+
+		bodyStateID := ctx.DeriveStateID("body")
+
+		mainRule := editor.StateRule{
+			ID:           editor.StateRuleID(ctx.BaseID),
+			Label:        ctx.Label + "_open",
+			RegEx:        openRegex,
+			Scope:        ctx.ApplyScope("punctuation.definition.comment.begin"),
+			Action:       editor.ACTION_PUSH,
+			ActionTarget: bodyStateID,
+		}
+
+		bodyState := editor.State{
+			ID:        bodyStateID,
+			Label:     ctx.Label + "_body",
+			MetaScope: ctx.ApplyScope(ctx.BaseScope),
+			Rules: []editor.StateRule{
+				{
+					ID:     editor.StateRuleID(ctx.DeriveStateID("close")),
+					Label:  ctx.Label + "_close",
+					RegEx:  closeRegex,
+					Scope:  ctx.ApplyScope("punctuation.definition.comment.end"),
+					Action: editor.ACTION_POP,
+				},
+			},
+		}
+
+		return mainRule, []editor.State{bodyState}
+	})
+
 	editorIR := editor.PushDownAutomatonIRCreate(
-		editor.PushDownAutomatonIRConfigurationCreate(
-			getTokenScopes,
-			LangSpecLexerTokenType.String,
-			".lspec", // Scope Extension
-		),
+		editorIRConfig,
 		compiler.lexingRuleSet,
 		compiler.programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0"),
 	)
