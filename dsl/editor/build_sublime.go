@@ -106,16 +106,18 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	editorIRConfig.AddOverride(dsl.TokRegexLiteral, func(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
 		return langspeceditor.TokenOverrideEmbed(ctx,
 			backtickRegex,
-			"punctuation.definition.string.begin.lspec",
+			"punctuation.definition.string.begin",
 			"scope:source.regexp",
-			"meta.embedded.regexp.lspec",
+			"meta.embedded.regexp",
 			"\x60",
-			map[int]string{0: "punctuation.definition.string.end.lspec"},
+			map[int]string{0: "punctuation.definition.string.end"},
 		)
 	})
 
 	editorIRConfig.AddNestOverrideByPredicate(
-		func(nest *syntaxa.NestSpec[dsl.LangSpecLexerTokenType]) bool { return nest.OwnerRule == dsl.GrammarIDHeader },
+		func(nest *syntaxa.NestSpec[dsl.LangSpecLexerTokenType]) bool {
+			return nest.OwnerRule == dsl.GrammarIDHeader
+		},
 		func(ctx *langspeceditor.NestOverrideContext[dsl.LangSpecLexerTokenType]) (langspeceditor.StateID, []langspeceditor.State) {
 			steps := dslHeaderSpecToNestSteps(headerSpec, scopeResolver)
 			return langspeceditor.BuildNestStateSequence(ctx, steps)
