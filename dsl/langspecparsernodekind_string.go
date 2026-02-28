@@ -13,19 +13,15 @@ func _() {
 	_ = x[NodeHeader-3]
 	_ = x[NodeHeaderContent-4]
 	_ = x[NodeBody-5]
-	_ = x[NodeDeclarationBlocks-6]
-	_ = x[NodeDeclarationBlock-7]
-	_ = x[NodeList-8]
-	_ = x[NodeDSLName-9]
-	_ = x[NodeVersion-10]
-	_ = x[NodeLSPECName-11]
-	_ = x[NodeDeclareIdentifier-12]
-	_ = x[NodeIdentifier-13]
+	_ = x[NodeDSLName-6]
+	_ = x[NodeVersion-7]
+	_ = x[NodeLSPECName-8]
+	_ = x[NodeIdentifier-9]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeHeaderContentNodeBodyNodeDeclarationBlocksNodeDeclarationBlockNodeListNodeDSLNameNodeVersionNodeLSPECNameNodeDeclareIdentifierNodeIdentifier"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeHeaderContentNodeBodyNodeDSLNameNodeVersionNodeLSPECNameNodeIdentifier"
 
-var _LangSpecParserNodeKind_index = [...]uint8{0, 9, 20, 30, 47, 55, 76, 96, 104, 115, 126, 139, 160, 174}
+var _LangSpecParserNodeKind_index = [...]uint8{0, 9, 20, 30, 47, 55, 66, 77, 90, 104}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

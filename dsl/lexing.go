@@ -33,9 +33,6 @@ const (
 
 	TokKWLSpec
 
-	TokKWDeclare
-	TokKWLexerTokenTypes
-
 	TokBraceOpen
 	TokBraceClose
 	TokSemicolon
@@ -259,8 +256,6 @@ func buildLangSpecDSLLexerSpec() (
 
 		// keywords (priority 1)
 		kw("lspec", TokKWLSpec),
-		kw("declare", TokKWDeclare),
-		kw("LexerTokenTypes", TokKWLexerTokenTypes),
 	)
 
 	lexerSpec.WithRuleset(LANG_SPEC_LEXER_STATE_DEFAULT, *rs)

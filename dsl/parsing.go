@@ -22,18 +22,11 @@ const (
 	NodeHeaderContent
 	NodeBody
 
-	// AGGREGATIONS
-	NodeDeclarationBlocks
-	NodeDeclarationBlock
-
-	NodeList
-
 	// ATOMS
 	NodeDSLName
 	NodeVersion
 	NodeLSPECName
 
-	NodeDeclareIdentifier
 	NodeIdentifier
 )
 
@@ -92,7 +85,7 @@ func parseProgram(ruleBuilder *RuleBuilder) Rule {
 		NodeProgram,
 		false,
 		parseHeader(ruleBuilder),
-		parseBody(ruleBuilder),
+		// parseBody(ruleBuilder),
 		ruleBuilder.Token.ExpectVirtual(GrammarIDEOF, TokEOF),
 	)
 }
@@ -114,26 +107,6 @@ func parseHeader(ruleBuilder *RuleBuilder) Rule {
 	)
 }
 
-func parseBody(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.ZeroOrMore(GrammarIDDeclarationBlocks, NodeDeclarationBlocks, parseDeclarationBlock(ruleBuilder))
-}
-
-func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.Block(
-		GrammarIDDeclarationBlock,
-		NodeDeclarationBlock,
-		TokSemicolon,
-		ruleBuilder.Token.ExpectVirtual(GrammarIDDeclareKeyword, TokKWDeclare),
-		ruleBuilder.Token.ExpectOneOf(GrammarIDDeclareIdentifier, NodeIdentifier, TokKWLexerTokenTypes),
-		ruleBuilder.Token.List(
-			GrammarIDDeclareList,
-			TokBraceOpen,
-			TokStringLiteral, TokComma,
-			TokBraceClose,
-			NodeList, NodeDeclareIdentifier,
-			true, // Allow empty list
-			rule.TrailingOptional,
-		),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDBlockClose, TokSemicolon),
-	)
-}
+// func parseBody(ruleBuilder *RuleBuilder) Rule {
+// 	return ruleBuilder.Rule.ZeroOrMore(GrammarIDDeclarationBlocks, NodeDeclarationBlocks, parseDeclarationBlock(ruleBuilder))
+// }

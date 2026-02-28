@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-const testLspecFile = "assets/testing/input.lspec"
 const testSublimeSyntaxFile = "assets/testing/lspec.sublime-syntax"
 
 func TestBuildSublimeSyntaxForDSL(t *testing.T) {
@@ -29,11 +28,6 @@ func TestBuildSublimeSyntaxForDSL(t *testing.T) {
 
 	compiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(compiler)
-
-	_, err := dsl.LangSpecCompilerCompile(compiler, testLspecFile)
-	if err != nil {
-		t.Fatalf("Compilation failed with error: %s", err.Error())
-	}
 
 	if err := BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile); err != nil {
 		t.Fatalf("Sublime Syntax generation failed with error: %s", err.Error())

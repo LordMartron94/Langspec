@@ -15,19 +15,17 @@ func _() {
 	_ = x[TokStringLiteral-5]
 	_ = x[TokVersion-6]
 	_ = x[TokKWLSpec-7]
-	_ = x[TokKWDeclare-8]
-	_ = x[TokKWLexerTokenTypes-9]
-	_ = x[TokBraceOpen-10]
-	_ = x[TokBraceClose-11]
-	_ = x[TokSemicolon-12]
-	_ = x[TokComma-13]
-	_ = x[TokLineComment-14]
-	_ = x[TokBlockComment-15]
+	_ = x[TokBraceOpen-8]
+	_ = x[TokBraceClose-9]
+	_ = x[TokSemicolon-10]
+	_ = x[TokComma-11]
+	_ = x[TokLineComment-12]
+	_ = x[TokBlockComment-13]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokDashesTokHeaderSeparatorTokStringLiteralTokVersionTokKWLSpecTokKWDeclareTokKWLexerTokenTypesTokBraceOpenTokBraceCloseTokSemicolonTokCommaTokLineCommentTokBlockComment"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokDashesTokHeaderSeparatorTokStringLiteralTokVersionTokKWLSpecTokBraceOpenTokBraceCloseTokSemicolonTokCommaTokLineCommentTokBlockComment"
 
-var _LangSpecLexerTokenType_index = [...]uint8{0, 6, 19, 28, 46, 62, 72, 82, 94, 114, 126, 139, 151, 159, 173, 188}
+var _LangSpecLexerTokenType_index = [...]uint8{0, 6, 19, 28, 46, 62, 72, 82, 94, 107, 119, 127, 141, 156}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1
