@@ -28,6 +28,9 @@
 // while remaining decoupled from runtime concerns such as memory allocation,
 // streaming configuration, and performance tuning.
 //
+// Editor IR for syntax highlighting (e.g. Sublime Text) is built from the same
+// grammar via the editor package's structural helpers and nest state builder.
+//
 // Subpackages typically include:
 //
 //   - ast        — syntax tree representation of the DSL

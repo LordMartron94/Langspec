@@ -118,30 +118,59 @@ TokenOverrideFunc generates a custom rule and optional auxiliary states for a to
 */
 type TokenOverrideFunc func(ctx *TokenOverrideContext) (mainRule StateRule, extraStates []State)
 
-type NestOverrideContext struct {
+/*
+NestOverrideContext provides utilities and state to a NestOverrideFunc. GetRegEx resolves
+a token to its regex pattern using the grammar's token map; the client need not close over
+a ruleset.
+*/
+type NestOverrideContext[TToken comparable] struct {
 	NestLabel      string
 	ScopeExtension string
+	getRegEx      func(TToken) string
 }
 
-func (ctx *NestOverrideContext) DeriveStateID(suffix string) StateID {
+/*
+GetRegEx returns the regex string for the given token. Used when building custom nest
+states so the client does not need access to the lexing ruleset.
+*/
+func (ctx *NestOverrideContext[TToken]) GetRegEx(token TToken) string {
+	return ctx.getRegEx(token)
+}
+
+/*
+DeriveStateID generates a deterministic ID for auxiliary states using the editor package's internal hasher.
+*/
+func (ctx *NestOverrideContext[TToken]) DeriveStateID(suffix string) StateID {
 	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.NestLabel, suffix)))
 }
 
-func (ctx *NestOverrideContext) ApplyScope(scope string) string {
+/*
+ApplyScope appends the configured scope extension to a base scope string.
+*/
+func (ctx *NestOverrideContext[TToken]) ApplyScope(scope string) string {
 	return getScopeString(scope, ctx.ScopeExtension)
 }
 
-type NestOverrideFunc func(ctx *NestOverrideContext) (entryStateID StateID, states []State)
+/*
+NestOverrideFunc generates a custom entry state ID and states for a grammar nest.
+*/
+type NestOverrideFunc[TToken comparable] func(ctx *NestOverrideContext[TToken]) (entryStateID StateID, states []State)
 
 // ------------------------------------------------------------------ CONFIGURATION
 
+/*
+PushDownAutomatonIRConfiguration holds scope provider, token formatter, scope extension,
+token overrides, nest overrides, and prototype token roles. Create with
+PushDownAutomatonIRConfigurationCreate, then add overrides and prototype roles before
+calling PushDownAutomatonIRCreate.
+*/
 type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
 	scopeProvider       ScopeProvider[TToken]
 	formatter           TokenFormatter[TToken]
 	scopeExtension      string
 	overrides           map[TToken]TokenOverrideFunc
 	prototypeTokenRoles []TTokenRole
-	nestOverrides       map[syntaxa.GrammarID]NestOverrideFunc
+	nestOverrides       map[syntaxa.GrammarID]NestOverrideFunc[TToken]
 }
 
 func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
@@ -155,15 +184,26 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 		scopeExtension:      scopeExtension,
 		overrides:           make(map[TToken]TokenOverrideFunc),
 		prototypeTokenRoles: make([]TTokenRole, 0),
-		nestOverrides:       make(map[syntaxa.GrammarID]NestOverrideFunc),
+		nestOverrides:       make(map[syntaxa.GrammarID]NestOverrideFunc[TToken]),
 	}
 }
 
+/*
+AddOverride registers a custom rule and optional extra states for a token. When building
+the IR, this function is invoked with a TokenOverrideContext; use the structural helpers
+TokenOverrideDelimitedRegion or TokenOverrideMatchWithCapture, or build StateRule/State by hand.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token TToken, fn TokenOverrideFunc) {
 	c.overrides[token] = fn
 }
 
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarID, fn NestOverrideFunc) {
+/*
+AddNestOverride registers a custom state sequence for a grammar nest (e.g. a nested
+production identified by ruleID). The callback receives a NestOverrideContext with
+GetRegEx for token lookup; use BuildNestStateSequence with declarative NestStep slices
+to build states without manual construction.
+*/
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarID, fn NestOverrideFunc[TToken]) {
 	c.nestOverrides[ruleID] = fn
 }
 
@@ -178,7 +218,10 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeToken
 // ------------------------------------------------------------------ IR ORCHESTRATOR
 
 /*
-PushDownAutomatonIR is the IR used by editors that are stack-based.
+PushDownAutomatonIR is the IR used by editors that are stack-based. It contains
+language name/version, a slice of States (contexts with rules), and a scope extension
+appended to all scopes. Downstream consumers (e.g. sublime package) serialize it
+to editor-specific formats.
 */
 type PushDownAutomatonIR struct {
 	LanguageName    string
@@ -187,6 +230,12 @@ type PushDownAutomatonIR struct {
 	ScopeExtension  string
 }
 
+/*
+PushDownAutomatonIRCreate builds a PushDownAutomatonIR from the given configuration,
+lexing ruleset, and grammar package. It extracts tokens from the ruleset, builds base
+states (using token overrides when registered), injects nest states (using nest
+overrides when registered), and adds the prototype state for prototype token roles.
+*/
 func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
@@ -307,9 +356,15 @@ func injectNestStates[TToken, TTokenRole comparable](
 		openStateID := getBaseStateID(nest.Open)
 
 		if overrideFn, exists := config.nestOverrides[nest.OwnerRule]; exists {
-			ctx := &NestOverrideContext{
+			getRegEx := func(tok TToken) string {
+				p := tokenPatternMap[tok]
+				r, _ := p.ToRegEx()
+				return r
+			}
+			ctx := &NestOverrideContext[TToken]{
 				NestLabel:      nestLabel,
 				ScopeExtension: config.scopeExtension,
+				getRegEx:      getRegEx,
 			}
 
 			entryStateID, customStates := overrideFn(ctx)

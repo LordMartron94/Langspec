@@ -10,6 +10,10 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+// SublimeTextGenerateSyntaxFile writes a Sublime Text YAML syntax definition to
+// syntaxFile using the given editor IR. fileExtensions is the list of extensions
+// (e.g. []string{".lspec"}) to associate with the language. Returns an error
+// if metadata or rules cannot be serialized or if the file cannot be written.
 func SublimeTextGenerateSyntaxFile(
 	editorIR *editor.PushDownAutomatonIR,
 	syntaxFile string,

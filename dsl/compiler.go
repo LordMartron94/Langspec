@@ -306,6 +306,13 @@ func LangSpecCompilerCompile(
 	return err
 }
 
+/*
+LangSpecCompilerBuildSublimeSyntax generates a Sublime Text syntax definition file from the
+compiler's grammar and lexer. It builds an editor IR via PushDownAutomatonIRConfiguration
+with token overrides (using the editor's structural helpers for delimited regions and
+match-with-capture) and a nest override for the HEADER production (using
+BuildNestStateSequence), then writes the result to syntaxFile via the sublime package.
+*/
 func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile string) error {
 	editorIRConfig := editor.PushDownAutomatonIRConfigurationCreate[LangSpecLexerTokenType, LangSpecLexerTokenRole](
 		getTokenScopes,
@@ -321,132 +328,55 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 	editorIRConfig.AddOverride(TokBlockComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
 		openRegex, _ := pattern.LiteralString(factory, "/*").ToRegEx()
 		closeRegex, _ := pattern.LiteralString(factory, "*/").ToRegEx()
-
-		bodyStateID := ctx.DeriveStateID("body")
-
-		mainRule := editor.StateRule{
-			ID:           editor.StateRuleID(ctx.BaseID),
-			Label:        ctx.Label + "_open",
-			RegEx:        openRegex,
-			Scope:        ctx.ApplyScope("punctuation.definition.comment.begin"),
-			Action:       editor.ACTION_PUSH,
-			ActionTarget: bodyStateID,
-		}
-
-		bodyState := editor.State{
-			ID:        bodyStateID,
-			Label:     ctx.Label + "_body",
-			MetaScope: ctx.ApplyScope(ctx.BaseScope),
-			Rules: []editor.StateRule{
-				{
-					ID:     editor.StateRuleID(ctx.DeriveStateID("close")),
-					Label:  ctx.Label + "_close",
-					RegEx:  closeRegex,
-					Scope:  ctx.ApplyScope("punctuation.definition.comment.end"),
-					Action: editor.ACTION_POP,
-				},
-			},
-			OmitPrototype: true,
-		}
-
-		return mainRule, []editor.State{bodyState}
+		return editor.TokenOverrideDelimitedRegion(ctx,
+			openRegex, closeRegex,
+			"punctuation.definition.comment.begin",
+			ctx.BaseScope,
+			"punctuation.definition.comment.end",
+		)
 	})
 
 	editorIRConfig.AddOverride(TokLineComment, func(ctx *editor.TokenOverrideContext) (editor.StateRule, []editor.State) {
 		slashes := pattern.LiteralString(factory, "//").Capture()
-
 		notTerminator := factory.NegatedClass(
 			factory.Range('\n', '\n'),
 			factory.Range('\r', '\r'),
 		).Star().Capture()
-
-		fullPattern := slashes.Then(notTerminator)
-
-		regex, _ := fullPattern.ToRegEx()
-
-		mainRule := editor.StateRule{
-			ID:    editor.StateRuleID(ctx.BaseID),
-			Label: ctx.Label,
-			RegEx: regex,
-
-			Scope: ctx.ApplyScope("comment.line.double-slash"),
-
-			Captures: map[int]string{
-				1: ctx.ApplyScope("punctuation.definition.comment"),
-			},
-			Action: editor.ACTION_MATCH,
-		}
-
-		return mainRule, nil
+		regex, _ := slashes.Then(notTerminator).ToRegEx()
+		return editor.TokenOverrideMatchWithCapture(ctx,
+			regex,
+			"comment.line.double-slash",
+			"punctuation.definition.comment",
+		)
 	})
 
-	editorIRConfig.AddNestOverride("HEADER", func(ctx *editor.NestOverrideContext) (editor.StateID, []editor.State) {
-		strRegex := editor.MustGetRegEx(TokStringLiteral, compiler.lexingRuleSet)
-		verRegex := editor.MustGetRegEx(TokVersion, compiler.lexingRuleSet)
-		pipeRegex := editor.MustGetRegEx(TokHeaderSeparator, compiler.lexingRuleSet)
-		closeRegex := editor.MustGetRegEx(TokDashes, compiler.lexingRuleSet)
-		lspecRegex := editor.MustGetRegEx(TokKWLSpec, compiler.lexingRuleSet)
-
-		expectNameID := ctx.DeriveStateID("expect_name")
-		expectVersionID := ctx.DeriveStateID("expect_version")
-		expectTailID := ctx.DeriveStateID("expect_tail")
-
-		state1 := editor.State{
-			ID:            expectNameID,
-			Label:         ctx.NestLabel + "_expect_name",
-			IsRootContext: false,
-			MetaScope:     ctx.ApplyScope("meta.block.header"), // DEFINED ONLY ONCE
-			Rules: []editor.StateRule{
-				{
-					ID:           editor.StateRuleID(ctx.DeriveStateID("rule_name")),
-					Label:        "match_dsl_name",
-					RegEx:        strRegex,
-					Scope:        ctx.ApplyScope("entity.name.language"),
-					Action:       editor.ACTION_PUSH, // <--- PUSH, NOT SET
-					ActionTarget: expectVersionID,
+	editorIRConfig.AddNestOverride("HEADER", func(ctx *editor.NestOverrideContext[LangSpecLexerTokenType]) (editor.StateID, []editor.State) {
+		steps := []editor.NestStep[LangSpecLexerTokenType]{
+			{
+				LabelSuffix: "expect_name",
+				MetaScope:   "meta.block.header",
+				Rules: []editor.NestStepRule[LangSpecLexerTokenType]{
+					{Token: TokStringLiteral, Scope: "entity.name.language", Action: editor.NestRuleActionPushNext},
+				},
+			},
+			{
+				LabelSuffix: "expect_version",
+				Rules: []editor.NestStepRule[LangSpecLexerTokenType]{
+					{Token: TokVersion, Scope: "constant.numeric.version", Action: editor.NestRuleActionPushNext},
+				},
+			},
+			{
+				LabelSuffix: "expect_tail",
+				Rules: []editor.NestStepRule[LangSpecLexerTokenType]{
+					{Token: TokDashes, Scope: "punctuation.definition.separator", Action: editor.NestRuleActionPop, PopCount: 3},
+					{Token: TokHeaderSeparator, Scope: "punctuation.section.header", Action: editor.NestRuleActionMatch},
+					{Token: TokStringLiteral, Scope: "string.quoted.double", Action: editor.NestRuleActionMatch},
+					{Token: TokKWLSpec, Scope: "keyword.declaration.lspec", Action: editor.NestRuleActionMatch},
+					{Token: TokVersion, Scope: "constant.numeric.version", Action: editor.NestRuleActionMatch},
 				},
 			},
 		}
-
-		state2 := editor.State{
-			ID:            expectVersionID,
-			Label:         ctx.NestLabel + "_expect_version",
-			IsRootContext: false,
-			// NO METASCOPE HERE. Inherited from state1.
-			Rules: []editor.StateRule{
-				{
-					ID:           editor.StateRuleID(ctx.DeriveStateID("rule_ver")),
-					Label:        "match_dsl_ver",
-					RegEx:        verRegex,
-					Scope:        ctx.ApplyScope("constant.numeric.version"),
-					Action:       editor.ACTION_PUSH, // <--- PUSH, NOT SET
-					ActionTarget: expectTailID,
-				},
-			},
-		}
-
-		state3 := editor.State{
-			ID:            expectTailID,
-			Label:         ctx.NestLabel + "_expect_tail",
-			IsRootContext: false,
-			// NO METASCOPE HERE. Inherited from state1.
-			Rules: []editor.StateRule{
-				{
-					ID:       editor.StateRuleID(ctx.DeriveStateID("rule_close")),
-					Label:    "match_close",
-					RegEx:    closeRegex,
-					Scope:    ctx.ApplyScope("punctuation.definition.separator"),
-					Action:   editor.ACTION_POP,
-					PopCount: 3, // <--- COLLAPSE ALL 3 STATES AT ONCE
-				},
-				{RegEx: pipeRegex, Scope: ctx.ApplyScope("punctuation.section.header"), Action: editor.ACTION_MATCH},
-				{RegEx: strRegex, Scope: ctx.ApplyScope("string.quoted.double"), Action: editor.ACTION_MATCH},
-				{RegEx: lspecRegex, Scope: ctx.ApplyScope("keyword.declaration.lspec"), Action: editor.ACTION_MATCH},
-				{RegEx: verRegex, Scope: ctx.ApplyScope("constant.numeric.version"), Action: editor.ACTION_MATCH},
-			},
-		}
-
-		return expectNameID, []editor.State{state1, state2, state3}
+		return editor.BuildNestStateSequence(ctx, steps)
 	})
 
 	editorIR := editor.PushDownAutomatonIRCreate(
