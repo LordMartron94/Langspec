@@ -13,11 +13,12 @@ func _() {
 	_ = x[ACTION_SET-2]
 	_ = x[ACTION_MATCH-3]
 	_ = x[ACTION_NONE-4]
+	_ = x[ACTION_EMBED-5]
 }
 
-const _RuleAction_name = "ACTION_PUSHACTION_POPACTION_SETACTION_MATCHACTION_NONE"
+const _RuleAction_name = "ACTION_PUSHACTION_POPACTION_SETACTION_MATCHACTION_NONEACTION_EMBED"
 
-var _RuleAction_index = [...]uint8{0, 11, 21, 31, 43, 54}
+var _RuleAction_index = [...]uint8{0, 11, 21, 31, 43, 54, 66}
 
 func (i RuleAction) String() string {
 	idx := int(i) - 0

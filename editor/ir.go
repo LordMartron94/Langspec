@@ -50,6 +50,7 @@ type StateRuleID uint64
 
 /*
 RuleAction represents an action to do for a rule.
+Only one of PUSH, POP, SET, EMBED may be used per rule (per ST4 syntax).
 */
 //go:generate stringer -type RuleAction
 type RuleAction uint8
@@ -60,6 +61,7 @@ const (
 	ACTION_SET
 	ACTION_MATCH
 	ACTION_NONE
+	ACTION_EMBED // Embed another syntax; use Embed, EmbedScope, Escape, EscapeCaptures. Mutually exclusive with PUSH/SET/POP.
 )
 
 type State struct {
@@ -73,14 +75,19 @@ type State struct {
 }
 
 type StateRule struct {
-	ID           StateRuleID
-	Label        string
-	RegEx        string
-	Scope        string
-	Action       RuleAction
-	ActionTarget StateID
-	Captures     map[int]string
-	PopCount     int
+	ID              StateRuleID
+	Label           string
+	RegEx           string
+	Scope           string
+	Action          RuleAction
+	ActionTarget    StateID
+	Captures        map[int]string
+	PopCount        int
+	// Embed fields: only used when Action == ACTION_EMBED (ST4 embed/escape).
+	Embed           string            // Target context to embed, e.g. scope:source.regexp
+	EmbedScope      string            // Scope applied to the embedded region
+	Escape         string            // Regex that ends the embedded region (required when using embed)
+	EscapeCaptures  map[int]string    // Scopes for capture groups of the escape pattern; 0 = entire escape match
 }
 
 type ScopeProvider[T any] func(item T) string

@@ -101,6 +101,19 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		)
 	})
 
+	// RegExp literal: backtick-delimited; embed ST's built-in RegExp syntax until closing backtick.
+	backtickRegex, _ := pattern.LiteralString(runeFactory, "\x60").ToRegEx()
+	editorIRConfig.AddOverride(dsl.TokRegexLiteral, func(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
+		return langspeceditor.TokenOverrideEmbed(ctx,
+			backtickRegex,
+			"punctuation.definition.string.begin.lspec",
+			"scope:source.regexp",
+			"meta.embedded.regexp.lspec",
+			"\x60",
+			map[int]string{0: "punctuation.definition.string.end.lspec"},
+		)
+	})
+
 	editorIRConfig.AddNestOverrideByPredicate(
 		func(nest *syntaxa.NestSpec[dsl.LangSpecLexerTokenType]) bool { return nest.OwnerRule == dsl.GrammarIDHeader },
 		func(ctx *langspeceditor.NestOverrideContext[dsl.LangSpecLexerTokenType]) (langspeceditor.StateID, []langspeceditor.State) {

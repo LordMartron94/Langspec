@@ -170,3 +170,36 @@ func TokenOverrideMatchWithCapture(
 	}
 	return mainRule, nil
 }
+
+/*
+TokenOverrideEmbed builds a single StateRule that embeds another syntax (ST4 embed/escape).
+matchRegex matches the opening delimiter; embedTarget is the context to embed (e.g. scope:source.regexp);
+embedScope is applied to the embedded region; escapeRegex ends the embed; escapeCaptures scopes the
+escape pattern's capture groups (0 = entire escape match). scopeForMatch is applied to the opening
+delimiter. Returns one StateRule and no extra states. Use when the content until escape should be
+highlighted by another syntax.
+*/
+func TokenOverrideEmbed(
+	ctx *TokenOverrideContext,
+	matchRegex, scopeForMatch, embedTarget, embedScope, escapeRegex string,
+	escapeCaptures map[int]string,
+) (StateRule, []State) {
+	mainRule := StateRule{
+		ID:         StateRuleID(ctx.BaseID),
+		Label:      ctx.Label,
+		RegEx:      matchRegex,
+		Scope:      ctx.ApplyScope(scopeForMatch),
+		Action:     ACTION_EMBED,
+		Embed:      embedTarget,
+		EmbedScope: ctx.ApplyScope(embedScope),
+		Escape:     escapeRegex,
+	}
+	if len(escapeCaptures) > 0 {
+		applied := make(map[int]string, len(escapeCaptures))
+		for k, v := range escapeCaptures {
+			applied[k] = ctx.ApplyScope(v)
+		}
+		mainRule.EscapeCaptures = applied
+	}
+	return mainRule, nil
+}
