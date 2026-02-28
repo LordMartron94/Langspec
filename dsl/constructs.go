@@ -5,60 +5,6 @@ import (
 	"syntaxa"
 )
 
-// ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
-
-//go:generate stringer -type LangSpecLexerState
-type LangSpecLexerState uint8
-
-const (
-	LANG_SPEC_LEXER_STATE_DEFAULT LangSpecLexerState = iota + 1
-)
-
-//go:generate stringer -type LangSpecLexerTokenType
-type LangSpecLexerTokenType uint32
-
-const (
-	TokEOF LangSpecLexerTokenType = iota + 1
-	TokWhitespace
-	TokDashes
-	TokHeaderSeparator
-	TokStringLiteral
-	TokVersion
-	TokKWLSpec
-	TokBraceOpen
-	TokBraceClose
-	TokSemicolon
-	TokComma
-	TokLineComment
-	TokBlockComment
-)
-
-//go:generate stringer -type LangSpecLexerTokenRole
-type LangSpecLexerTokenRole uint8
-
-const (
-	LANG_SPEC_STRUCTURAL_ROLE LangSpecLexerTokenRole = iota + 1
-	LANG_SPEC_WHITESPACE_ROLE
-	LANG_SPEC_COMMENT_ROLE
-)
-
-//go:generate stringer -type LangSpecParserNodeKind
-type LangSpecParserNodeKind uint32
-
-const (
-	NodeError LangSpecParserNodeKind = iota + 1
-	NodeProgram
-	NodeHeader
-	NodeHeaderContent
-	NodeBody
-	NodeDSLName
-	NodeVersion
-	NodeLSPECName
-	NodeIdentifier
-)
-
-// ----------------------------------------------------------- TOKEN REGISTRY ENUMS
-
 /*
 TokenDefinition is the SSoT entry for one token: identity, role, scope, and how it matches.
 Pattern is nil for virtual tokens (e.g. TokEOF). The lexer engine adds a rule only when Pattern != nil.
@@ -69,6 +15,56 @@ type TokenDefinition struct {
 	Scope    string
 	Priority int
 	Pattern  *pattern.RegulaAST[rune]
+}
+
+// ----------------------------------------------------------- TOKEN BUILDER
+
+/*
+TokenBuilder configures a single token via a fluent API.
+DefineToken starts the chain; Build returns the TokenDefinition.
+*/
+type TokenBuilder struct {
+	def TokenDefinition
+}
+
+/*
+DefineToken starts a fluent token definition with sensible defaults:
+Role LANG_SPEC_STRUCTURAL_ROLE, Priority 0, Pattern nil.
+*/
+func DefineToken(t LangSpecLexerTokenType) *TokenBuilder {
+	return &TokenBuilder{
+		def: TokenDefinition{
+			Type:     t,
+			Role:     LANG_SPEC_STRUCTURAL_ROLE,
+			Priority: 0,
+		},
+	}
+}
+
+func (b *TokenBuilder) Role(r LangSpecLexerTokenRole) *TokenBuilder {
+	b.def.Role = r
+	return b
+}
+
+func (b *TokenBuilder) Scope(s string) *TokenBuilder {
+	b.def.Scope = s
+	return b
+}
+
+func (b *TokenBuilder) HighPriority() *TokenBuilder {
+	b.def.Priority = 1
+	return b
+}
+
+func (b *TokenBuilder) Pattern(p pattern.RegulaAST[rune]) *TokenBuilder {
+	q := new(pattern.RegulaAST[rune])
+	*q = p
+	b.def.Pattern = q
+	return b
+}
+
+func (b *TokenBuilder) Build() TokenDefinition {
+	return b.def
 }
 
 /*
@@ -135,6 +131,69 @@ type DSLHeaderExpectation struct {
 	NestOnly      bool
 }
 
+// ----------------------------------------------------------- EXPECT BUILDER
+
+/*
+ExpectBuilder configures a single header expectation via a fluent API.
+Expect starts the chain; Build returns the DSLHeaderExpectation.
+*/
+type ExpectBuilder struct {
+	expect DSLHeaderExpectation
+}
+
+/*
+Expect starts a fluent header expectation with sensible defaults:
+NestAction DSLNestActionMatch; other fields zero.
+*/
+func Expect(id syntaxa.GrammarID) *ExpectBuilder {
+	return &ExpectBuilder{
+		expect: DSLHeaderExpectation{
+			GrammarID:  id,
+			NestAction: DSLNestActionMatch,
+		},
+	}
+}
+
+func (b *ExpectBuilder) Node(kind LangSpecParserNodeKind) *ExpectBuilder {
+	b.expect.NodeKind = kind
+	return b
+}
+
+func (b *ExpectBuilder) Tokens(tokens ...LangSpecLexerTokenType) *ExpectBuilder {
+	b.expect.Tokens = tokens
+	return b
+}
+
+func (b *ExpectBuilder) Virtual() *ExpectBuilder {
+	b.expect.Virtual = true
+	return b
+}
+
+func (b *ExpectBuilder) PushNext() *ExpectBuilder {
+	b.expect.NestAction = DSLNestActionPushNext
+	return b
+}
+
+func (b *ExpectBuilder) Pop(count int) *ExpectBuilder {
+	b.expect.NestAction = DSLNestActionPop
+	b.expect.PopCount = count
+	return b
+}
+
+func (b *ExpectBuilder) ScopeOverride(scope string) *ExpectBuilder {
+	b.expect.ScopeOverride = scope
+	return b
+}
+
+func (b *ExpectBuilder) NestOnly() *ExpectBuilder {
+	b.expect.NestOnly = true
+	return b
+}
+
+func (b *ExpectBuilder) Build() DSLHeaderExpectation {
+	return b.expect
+}
+
 /*
 DSLHeaderNestStep is one state in the header nest (e.g. expect_name, expect_version, expect_tail).
 */
@@ -145,19 +204,6 @@ type DSLHeaderNestStep struct {
 }
 
 // ----------------------------------------------------------- HEADER SPEC FACTORIES
-
-func defHeaderExpect(grammarID syntaxa.GrammarID, nodeKind LangSpecParserNodeKind, tokens []LangSpecLexerTokenType, virtual bool, action DSLNestAction, popCount int, scopeOverride string, nestOnly bool) DSLHeaderExpectation {
-	return DSLHeaderExpectation{
-		GrammarID:     grammarID,
-		NodeKind:      nodeKind,
-		Tokens:        tokens,
-		Virtual:       virtual,
-		NestAction:    action,
-		PopCount:      popCount,
-		ScopeOverride: scopeOverride,
-		NestOnly:      nestOnly,
-	}
-}
 
 func defHeaderStep(labelSuffix string, metaScope string, expectations ...DSLHeaderExpectation) DSLHeaderNestStep {
 	return DSLHeaderNestStep{
