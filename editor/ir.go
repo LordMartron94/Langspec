@@ -49,6 +49,8 @@ type State struct {
 
 	MetaScope string
 	Rules     []StateRule
+
+	IsRootContext bool
 }
 
 type StateRule struct {
@@ -183,9 +185,10 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 
 		// Create the base state for this token
 		baseState := State{
-			ID:    id,
-			Label: label,
-			Rules: []StateRule{mainRule},
+			ID:            id,
+			Label:         label,
+			Rules:         []StateRule{mainRule},
+			IsRootContext: true,
 		}
 
 		allStates = append(allStates, baseState)

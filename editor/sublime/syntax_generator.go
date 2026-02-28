@@ -132,9 +132,12 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 
 		contexts[state.Label] = entries
 
-		rootIncludes = append(rootIncludes, contextEntry{
-			Include: &state.Label,
-		})
+		if state.IsRootContext {
+			labelCopy := state.Label
+			rootIncludes = append(rootIncludes, contextEntry{
+				Include: &labelCopy,
+			})
+		}
 	}
 
 	contexts["main"] = rootIncludes
