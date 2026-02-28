@@ -233,13 +233,18 @@ func buildHeaderRule(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
 }
 
 func buildPragmaRule(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.Sequence(
-		GrammarIDPragmaStatement,
+	pragmaBody := ruleBuilder.Rule.Sequence(
+		GrammarIDPragmaStatementBody,
 		NodePragmaStatement,
-		ruleBuilder.Token.ExpectVirtual(GrammarIDPragmaStart, TokPragmaStart),
 		ruleBuilder.Token.Expect(GrammarIDPragmaKey, NodePragmaKey, TokIdentifier),
 		ruleBuilder.Token.Expect(GrammarIDPragmaValue, NodePragmaValue, TokStringLiteral),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDPragmaEnd, TokSemicolon),
+	)
+
+	return ruleBuilder.Rule.Nest(
+		GrammarIDPragmaStatement,
+		NodePragmaStatement,
+		TokPragmaStart, TokSemicolon,
+		pragmaBody,
 	)
 }
 
@@ -416,10 +421,11 @@ const (
 	GrammarIDLangspecVersion syntaxa.GrammarID = "LANGSPEC VERSION"
 
 	// Pragma Section
-	GrammarIDPragmaSection   syntaxa.GrammarID = "PRAGMA SECTION"
-	GrammarIDPragmaStatement syntaxa.GrammarID = "PRAGMA STATEMENT"
-	GrammarIDPragmaStart     syntaxa.GrammarID = "PRAGMA START"
-	GrammarIDPragmaEnd       syntaxa.GrammarID = "PRAGMA END"
+	GrammarIDPragmaSection       syntaxa.GrammarID = "PRAGMA SECTION"
+	GrammarIDPragmaStatement     syntaxa.GrammarID = "PRAGMA STATEMENT"
+	GrammarIDPragmaStatementBody syntaxa.GrammarID = "PRAGMA STATEMENT BODY"
+	GrammarIDPragmaStart         syntaxa.GrammarID = "PRAGMA START"
+	GrammarIDPragmaEnd           syntaxa.GrammarID = "PRAGMA END"
 
 	GrammarIDPragmaKey   syntaxa.GrammarID = "PRAGMA KEY"
 	GrammarIDPragmaValue syntaxa.GrammarID = "PRAGMA VALUE"
