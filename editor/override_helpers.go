@@ -82,6 +82,12 @@ func BuildNestStateSequence[TToken comparable](
 			rules = append(rules, sr)
 		}
 
+		// Invalid fallback so the highlighter marks unexpected tokens in this state.
+		rules = append(rules, InvalidFallbackRule(
+			StateRuleID(ctx.DeriveStateID(step.LabelSuffix+"_invalid")),
+			ctx.ScopeExtension,
+		))
+
 		st := State{
 			ID:            stateIDs[i],
 			Label:         ctx.NestLabel + "_" + step.LabelSuffix,

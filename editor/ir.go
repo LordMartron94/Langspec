@@ -156,6 +156,12 @@ NestOverrideFunc generates a custom entry state ID and states for a grammar nest
 */
 type NestOverrideFunc[TToken comparable] func(ctx *NestOverrideContext[TToken]) (entryStateID StateID, states []State)
 
+/*
+NestOverridePredicate returns true if the given nest should use the associated override.
+The client can match by nest.OwnerRule, nest.Open/nest.Close, or any custom logic.
+*/
+type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken]) bool
+
 // ------------------------------------------------------------------ CONFIGURATION
 
 /*
@@ -164,13 +170,18 @@ token overrides, nest overrides, and prototype token roles. Create with
 PushDownAutomatonIRConfigurationCreate, then add overrides and prototype roles before
 calling PushDownAutomatonIRCreate.
 */
+type nestOverrideHandler[TToken comparable] struct {
+	pred NestOverridePredicate[TToken]
+	fn   NestOverrideFunc[TToken]
+}
+
 type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
-	scopeProvider       ScopeProvider[TToken]
-	formatter           TokenFormatter[TToken]
-	scopeExtension      string
-	overrides           map[TToken]TokenOverrideFunc
-	prototypeTokenRoles []TTokenRole
-	nestOverrides       map[syntaxa.GrammarID]NestOverrideFunc[TToken]
+	scopeProvider         ScopeProvider[TToken]
+	formatter             TokenFormatter[TToken]
+	scopeExtension        string
+	overrides             map[TToken]TokenOverrideFunc
+	prototypeTokenRoles   []TTokenRole
+	nestOverrideHandlers  []nestOverrideHandler[TToken]
 }
 
 func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
@@ -179,12 +190,12 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 	scopeExtension string,
 ) *PushDownAutomatonIRConfiguration[TToken, TTokenRole] {
 	return &PushDownAutomatonIRConfiguration[TToken, TTokenRole]{
-		scopeProvider:       provider,
-		formatter:           formatter,
-		scopeExtension:      scopeExtension,
-		overrides:           make(map[TToken]TokenOverrideFunc),
-		prototypeTokenRoles: make([]TTokenRole, 0),
-		nestOverrides:       make(map[syntaxa.GrammarID]NestOverrideFunc[TToken]),
+		scopeProvider:        provider,
+		formatter:            formatter,
+		scopeExtension:       scopeExtension,
+		overrides:            make(map[TToken]TokenOverrideFunc),
+		prototypeTokenRoles:  make([]TTokenRole, 0),
+		nestOverrideHandlers: nil,
 	}
 }
 
@@ -198,13 +209,24 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token
 }
 
 /*
-AddNestOverride registers a custom state sequence for a grammar nest (e.g. a nested
-production identified by ruleID). The callback receives a NestOverrideContext with
-GetRegEx for token lookup; use BuildNestStateSequence with declarative NestStep slices
-to build states without manual construction.
+AddNestOverride registers a custom state sequence for a nest whose OwnerRule equals
+ruleID. It is a convenience over AddNestOverrideByPredicate that registers a predicate
+nest.OwnerRule == ruleID.
 */
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarID, fn NestOverrideFunc[TToken]) {
-	c.nestOverrides[ruleID] = fn
+	c.AddNestOverrideByPredicate(func(nest *syntaxa.NestSpec[TToken]) bool {
+		return nest.OwnerRule == ruleID
+	}, fn)
+}
+
+/*
+AddNestOverrideByPredicate registers a custom state sequence for any nest that matches
+pred. The first registered predicate that returns true for a nest wins. The callback
+receives a NestOverrideContext with GetRegEx for token lookup; use BuildNestStateSequence
+with declarative NestStep slices to build states without manual construction.
+*/
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverrideByPredicate(pred NestOverridePredicate[TToken], fn NestOverrideFunc[TToken]) {
+	c.nestOverrideHandlers = append(c.nestOverrideHandlers, nestOverrideHandler[TToken]{pred: pred, fn: fn})
 }
 
 /*
@@ -250,6 +272,7 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 
 	allStates = injectNestStates(config, allStates, grammarPackage, tokenPatternMap)
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
+	allStates = injectMainState(allStates, config.scopeExtension)
 
 	return &PushDownAutomatonIR{
 		LanguageName:    grammarPackage.Name,
@@ -355,7 +378,14 @@ func injectNestStates[TToken, TTokenRole comparable](
 		nestLabel := sanitizeContextName(string(nest.OwnerRule))
 		openStateID := getBaseStateID(nest.Open)
 
-		if overrideFn, exists := config.nestOverrides[nest.OwnerRule]; exists {
+		var overrideFn NestOverrideFunc[TToken]
+		for _, h := range config.nestOverrideHandlers {
+			if h.pred(&nest) {
+				overrideFn = h.fn
+				break
+			}
+		}
+		if overrideFn != nil {
 			getRegEx := func(tok TToken) string {
 				p := tokenPatternMap[tok]
 				r, _ := p.ToRegEx()
@@ -397,13 +427,7 @@ func injectNestStates[TToken, TTokenRole comparable](
 					Scope:  getScopeString(config.scopeProvider(nest.Close), config.scopeExtension),
 					Action: ACTION_POP,
 				},
-				{
-					ID:     StateRuleID(produceStateID(nestLabel + "_invalid")),
-					Label:  "invalid_fallback",
-					RegEx:  `\S+`,
-					Scope:  "invalid.illegal.unexpected-token" + config.scopeExtension,
-					Action: ACTION_MATCH,
-				},
+				InvalidFallbackRule(StateRuleID(produceStateID(nestLabel+"_invalid")), config.scopeExtension),
 			},
 		}
 
@@ -430,6 +454,30 @@ func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []Stat
 	}
 
 	return append(allStates, protoState)
+}
+
+/*
+injectMainState adds a "main" state that includes all root contexts and an invalid
+fallback rule after those includes. So at the root level, invalid constructs are
+highlighted; the Sublime generator emits this state as contexts["main"] when present.
+*/
+func injectMainState(allStates []State, scopeExtension string) []State {
+	var rootIncludes []StateID
+	for _, st := range allStates {
+		if st.IsRootContext {
+			rootIncludes = append(rootIncludes, st.ID)
+		}
+	}
+	mainState := State{
+		ID:            StateID(produceStateID("main")),
+		Label:         "main",
+		IsRootContext: false,
+		Includes:      rootIncludes,
+		Rules: []StateRule{
+			InvalidFallbackRule(StateRuleID(produceStateID("main_invalid")), scopeExtension),
+		},
+	}
+	return append(allStates, mainState)
 }
 
 // ------------------------------------------------------------------ UTILITY EXTRACTORS
@@ -466,6 +514,28 @@ func buildIncludesWhitelist[TToken comparable](
 		}
 	}
 	return includes
+}
+
+// ------------------------------------------------------------------ INVALID FALLBACK HELPER
+
+const invalidFallbackLabel = "invalid_fallback"
+
+const invalidFallbackBaseScope = "invalid.illegal.unexpected-token"
+
+/*
+InvalidFallbackRule returns a StateRule that matches any non-whitespace run and applies
+the invalid.illegal scope. Use it so the highlighter marks unexpected tokens in a state.
+The Sublime generator places rules with this label last (after includes). Pass a stable
+rule ID and the scope extension (e.g. config.scopeExtension or ctx.ScopeExtension).
+*/
+func InvalidFallbackRule(id StateRuleID, scopeExtension string) StateRule {
+	return StateRule{
+		ID:     id,
+		Label:  invalidFallbackLabel,
+		RegEx:  `\S+`,
+		Scope:  getScopeString(invalidFallbackBaseScope, scopeExtension),
+		Action: ACTION_MATCH,
+	}
 }
 
 // ------------------------------------------------------------------ PRIVATE HELPERS

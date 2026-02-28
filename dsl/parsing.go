@@ -88,45 +88,45 @@ func buildLangSpecDSLParserSpec() (
 
 func parseProgram(ruleBuilder *RuleBuilder) Rule {
 	return ruleBuilder.Rule.Root(
-		"PROGRAM",
+		GrammarIDProgram,
 		NodeProgram,
 		false,
 		parseHeader(ruleBuilder),
 		parseBody(ruleBuilder),
-		ruleBuilder.Token.ExpectVirtual("EOF", TokEOF),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDEOF, TokEOF),
 	)
 }
 
 func parseHeader(ruleBuilder *RuleBuilder) Rule {
 	return ruleBuilder.Rule.Nest(
-		"HEADER",
+		GrammarIDHeader,
 		NodeHeader,
 		TokDashes, TokDashes, // open + close
 		ruleBuilder.Rule.Sequence(
-			"HEAEDER CONTENT",
+			GrammarIDHeaderContent,
 			NodeHeaderContent,
-			ruleBuilder.Token.Expect("DSL NAME", NodeDSLName, TokStringLiteral),
-			ruleBuilder.Token.Expect("DSL VERSION", NodeVersion, TokVersion),
-			ruleBuilder.Token.ExpectVirtual("HEADER SEPARATOR", TokHeaderSeparator),
-			ruleBuilder.Token.ExpectOneOf("LANGSPEC NAME", NodeLSPECName, TokStringLiteral, TokKWLSpec),
-			ruleBuilder.Token.Expect("LANGSPEC VERSION", NodeVersion, TokVersion),
+			ruleBuilder.Token.Expect(GrammarIDDSLName, NodeDSLName, TokStringLiteral),
+			ruleBuilder.Token.Expect(GrammarIDDSLVersion, NodeVersion, TokVersion),
+			ruleBuilder.Token.ExpectVirtual(GrammarIDHeaderSeparator, TokHeaderSeparator),
+			ruleBuilder.Token.ExpectOneOf(GrammarIDLangspecName, NodeLSPECName, TokStringLiteral, TokKWLSpec),
+			ruleBuilder.Token.Expect(GrammarIDLangspecVersion, NodeVersion, TokVersion),
 		),
 	)
 }
 
 func parseBody(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.ZeroOrMore("DECLARATION BLOCKS", NodeDeclarationBlocks, parseDeclarationBlock(ruleBuilder))
+	return ruleBuilder.Rule.ZeroOrMore(GrammarIDDeclarationBlocks, NodeDeclarationBlocks, parseDeclarationBlock(ruleBuilder))
 }
 
 func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
 	return ruleBuilder.Rule.Block(
-		"DECLARATION BLOCK",
+		GrammarIDDeclarationBlock,
 		NodeDeclarationBlock,
 		TokSemicolon,
-		ruleBuilder.Token.ExpectVirtual("DECLARE KEYWORD", TokKWDeclare),
-		ruleBuilder.Token.ExpectOneOf("DECLARE IDENTIFIER", NodeIdentifier, TokKWLexerTokenTypes),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDDeclareKeyword, TokKWDeclare),
+		ruleBuilder.Token.ExpectOneOf(GrammarIDDeclareIdentifier, NodeIdentifier, TokKWLexerTokenTypes),
 		ruleBuilder.Token.List(
-			"DECLARE LIST",
+			GrammarIDDeclareList,
 			TokBraceOpen,
 			TokStringLiteral, TokComma,
 			TokBraceClose,
@@ -134,6 +134,6 @@ func parseDeclarationBlock(ruleBuilder *RuleBuilder) Rule {
 			true, // Allow empty list
 			rule.TrailingOptional,
 		),
-		ruleBuilder.Token.ExpectVirtual("BLOCK CLOSE", TokSemicolon),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDBlockClose, TokSemicolon),
 	)
 }

@@ -350,7 +350,10 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 		)
 	})
 
-	editorIRConfig.AddNestOverride("HEADER", func(ctx *editor.NestOverrideContext[LangSpecLexerTokenType]) (editor.StateID, []editor.State) {
+	// Override the HEADER nest (GrammarIDHeader) with a custom state sequence for Sublime highlighting.
+	editorIRConfig.AddNestOverrideByPredicate(
+		func(nest *syntaxa.NestSpec[LangSpecLexerTokenType]) bool { return nest.OwnerRule == GrammarIDHeader },
+		func(ctx *editor.NestOverrideContext[LangSpecLexerTokenType]) (editor.StateID, []editor.State) {
 		steps := []editor.NestStep[LangSpecLexerTokenType]{
 			{
 				LabelSuffix: "expect_name",
@@ -377,7 +380,8 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 			},
 		}
 		return editor.BuildNestStateSequence(ctx, steps)
-	})
+		},
+	)
 
 	editorIR := editor.PushDownAutomatonIRCreate(
 		editorIRConfig,

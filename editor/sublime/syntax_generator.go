@@ -139,7 +139,10 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 		}
 	}
 
-	contexts["main"] = rootIncludes
+	// If the editor did not inject a "main" state (e.g. legacy IR), build main from root includes only.
+	if _, ok := contexts["main"]; !ok {
+		contexts["main"] = rootIncludes
+	}
 
 	if value, err := yaml.Marshal(contextsSection{Contexts: contexts}); err != nil {
 		return fmt.Errorf("error marshaling context: %w", err)
