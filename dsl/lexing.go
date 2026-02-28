@@ -164,7 +164,7 @@ func commentBlock() ruleDef {
 
 // --- Atoms
 
-func stringLiteralStandard() ruleDef {
+func stringLiteral() ruleDef {
 	// 1. Normal characters: Not ", Not \, Not \n, Not \r
 	normalChar := factory.NegatedClass(
 		factory.Range('"', '"'),
@@ -254,7 +254,7 @@ func buildLangSpecDSLLexerSpec() (
 		litRune('}', TokBraceClose),
 
 		// atoms (priority 1)
-		stringLiteralStandard(),
+		stringLiteral(),
 		versionSemverV3(),
 
 		// keywords (priority 1)

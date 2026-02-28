@@ -3,171 +3,163 @@ package editor
 import (
 	"autarch/pattern"
 	"fmt"
-	"reflect"
+	"foundation/bytes"
+	"foundation/hash"
+	"lexarch"
+	"syntaxa"
 )
+
+var xxh3Hasher = hash.XXH3HasherCreateWithSeed(42)
+
+// ------------------------------------------------------------------ TYPES
 
 /*
 Pattern is the observation pattern type used for token recognition in the editor IR.
 It is an alias for the Regula AST from autarch/pattern.
 */
-type Pattern[TObservation any] = pattern.RegulaAST[TObservation]
+type Pattern = pattern.RegulaAST[rune]
 
 /*
-TokenID uniquely identifies a token definition within an EditorIR.
-Used in boundaries, valid paths, and global trivia.
+StateID is a unique identifier for a state.
 */
-type TokenID uint32
+type StateID uint64
 
 /*
-ContextID uniquely identifies an editor context (a grammar rule or nest boundary).
-Derived from grammar ID and node path; used as the key for context lookup.
+StateRuleID is a unique identifier for a state rule.
 */
-type ContextID uint64
+type StateRuleID uint64
 
 /*
-PathElementType discriminates between a token step and a context-reference step in a valid path.
+RuleAction represents an action to do for a rule.
 */
-type PathElementType uint8
+//go:generate stringer -type RuleAction
+type RuleAction uint8
 
 const (
-	ElementToken       PathElementType = iota // Step consumes a token
-	ElementContextRef                         // Step enters a nested context
+	ACTION_PUSH RuleAction = iota
+	ACTION_POP
+	ACTION_SET
+	ACTION_MATCH
+	ACTION_NONE
 )
 
-/*
-PathElement is one step in a StrictSequence expected path: either a token to match or a context to enter.
-*/
-type PathElement struct {
-	Type          PathElementType
-	Token         TokenID
-	TargetContext ContextID
+type State struct {
+	ID    StateID
+	Label string
+
+	Rules []StateRule
 }
 
-/*
-MetadataProvider returns optional keyed data from a metadata value.
-Used by the IR to let consumers attach domain-specific data to tokens or contexts.
-*/
-type MetadataProvider[TMetadata any] func(metadata TMetadata, key string) (result any, ok bool)
+type StateRule struct {
+	ID    StateRuleID
+	Label string
 
-/*
-Annotation attaches optional metadata to a token definition, boundary, or sequence.
-*/
-type Annotation[TMeta any] struct {
-	Metadata TMeta
+	RegEx  string
+	Scopes []string
+	Action RuleAction
 }
 
-/*
-TokenDefinition describes a single token for the editor: ID, name, recognition pattern, priority, and optional annotation.
-*/
-type TokenDefinition[TObservation, TMeta any, TTokenKind comparable] struct {
-	ID         TokenID
-	Name       string
-	Pattern    Pattern[TObservation]
-	Priority   int
-	Annotation Annotation[TMeta]
+type ScopeProvider[T any] func(item T) []string
+
+type TokenFormatter[TToken any] func(token TToken) string
+
+// ------------------------------------------------------------------ CONFIGURATION
+
+type PushDownAutomatonIRConfiguration[TToken any] struct {
+	scopeProvider  ScopeProvider[TToken]
+	formatter      TokenFormatter[TToken]
+	scopeExtension string
 }
 
-/*
-Boundary describes a transition: when a given token is seen, optionally enter or exit a context and emit an annotation.
-*/
-type Boundary[TMeta any] struct {
-	OnTrigger      TokenID
-	IsExit         bool
-	TargetContext  ContextID
-	EmitAnnotation Annotation[TMeta]
-}
-
-/*
-StrictSequence is one valid path through a context: a sequence of path elements (tokens and/or context refs) and optional annotation.
-*/
-type StrictSequence[TMeta any] struct {
-	ExpectedPath       []PathElement
-	SequenceAnnotation Annotation[TMeta]
-}
-
-/*
-EditorContext represents one editing context (e.g. a grammar rule or nest): ID, name for debug, boundaries, valid paths, and final flag.
-*/
-type EditorContext[TMeta any] struct {
-	ID         ContextID
-	Name       string // Rule name or grammar ID for debug display
-	Boundaries []Boundary[TMeta]
-	ValidPaths []StrictSequence[TMeta]
-	IsFinal    bool
-}
-
-/*
-EditorIR is the intermediate representation for editor/IDE integration: tokens, global trivia, contexts, start context, and metadata providers.
-Not constructed directly; use EditorIRCreate or EditorIRConstruct from grammar and lexical rules.
-*/
-type EditorIR[TObservation, TTokenMeta, TContextMeta any, TTokenKind comparable] struct {
-	tokenMeta    MetadataProvider[TTokenMeta]
-	contextMeta  MetadataProvider[TContextMeta]
-	tokens       []TokenDefinition[TObservation, TTokenMeta, TTokenKind]
-	globalTrivia []TokenID
-	contexts     map[ContextID]*EditorContext[TContextMeta]
-	start        ContextID
-}
-
-/*
-EditorIRCreate builds an EditorIR from pre-built tokens, global trivia, contexts, start context, and metadata providers.
-Use when you have already constructed the context map and token list; otherwise use EditorIRConstruct from a grammar package.
-*/
-func EditorIRCreate[TObservation, TTokenMeta, TContextMeta any, TTokenKind comparable](
-	tokenMeta MetadataProvider[TTokenMeta],
-	contextMeta MetadataProvider[TContextMeta],
-	tokens []TokenDefinition[TObservation, TTokenMeta, TTokenKind],
-	globalTrivia []TokenID,
-	contexts map[ContextID]*EditorContext[TContextMeta],
-	start ContextID,
-) *EditorIR[TObservation, TTokenMeta, TContextMeta, TTokenKind] {
-	return &EditorIR[TObservation, TTokenMeta, TContextMeta, TTokenKind]{
-		tokenMeta:    tokenMeta,
-		contextMeta:  contextMeta,
-		tokens:       tokens,
-		globalTrivia: globalTrivia,
-		contexts:     contexts,
-		start:        start,
+func PushDownAutomatonIRConfigurationCreate[TToken any](
+	provider ScopeProvider[TToken],
+	formatter TokenFormatter[TToken],
+	scopeExtension string,
+) *PushDownAutomatonIRConfiguration[TToken] {
+	return &PushDownAutomatonIRConfiguration[TToken]{
+		scopeProvider:  provider,
+		formatter:      formatter,
+		scopeExtension: scopeExtension,
 	}
 }
 
-/*
-ExtractTokenMetadata looks up a key in the token metadata using the IR's token metadata provider.
-Returns the value typed as TRequest, or an error if the provider did not return that type.
-*/
-func ExtractTokenMetadata[TObservation, TTokenMeta, TContextMeta, TRequest any, TTokenKind comparable](
-	editor *EditorIR[TObservation, TTokenMeta, TContextMeta, TTokenKind],
-	metadata TTokenMeta,
-	key string,
-) (result TRequest, ok bool, err error) {
-	return extractCore[TTokenMeta, TRequest](editor.tokenMeta, metadata, key)
-}
+// ------------------------------------------------------------------ IR
 
 /*
-ExtractContextMetadata looks up a key in the context metadata using the IR's context metadata provider.
-Returns the value typed as TRequest, or an error if the provider did not return that type.
+PushDownAutomatonIR is the IR used by editors that are stack-based.
 */
-func ExtractContextMetadata[TObservation, TTokenMeta, TContextMeta, TRequest any, TTokenKind comparable](
-	editor *EditorIR[TObservation, TTokenMeta, TContextMeta, TTokenKind],
-	metadata TContextMeta,
-	key string,
-) (result TRequest, ok bool, err error) {
-	return extractCore[TContextMeta, TRequest](editor.contextMeta, metadata, key)
+type PushDownAutomatonIR struct {
+	LanguageName    string
+	LanguageVersion string
+
+	States []State
+
+	ScopeExtension string
 }
 
-func extractCore[TMeta, TRequest any](
-	provider MetadataProvider[TMeta],
-	metadata TMeta,
-	key string,
-) (result TRequest, ok bool, err error) {
-	var zero TRequest
-	res, ok := provider(metadata, key)
-	if !ok {
-		return zero, ok, nil
+func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken],
+	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
+	grammarPackage syntaxa.GrammarPackage[TToken],
+) *PushDownAutomatonIR {
+	tokensInUse := make([]TToken, 0)
+	tokenPatternMap := make(map[TToken]Pattern)
+
+	for _, lexerRule := range lexingRuleSet.GetRules() {
+		tokensInUse = append(tokensInUse, lexerRule.Token)
+		tokenPatternMap[lexerRule.Token] = lexerRule.Pattern
 	}
-	typed, assertOk := res.(TRequest)
-	if !assertOk {
-		return zero, ok, fmt.Errorf("returned value does not match %T", reflect.TypeFor[TRequest]())
+
+	states := make([]State, len(tokensInUse))
+	for i, token := range tokensInUse {
+		label := config.formatter(token)
+		id := produceStateID(label)
+		defaultRegex, _ := tokenPatternMap[token].ToRegEx()
+
+		states[i] = State{
+			ID:    StateID(id),
+			Label: label,
+			Rules: []StateRule{
+				{
+					ID:     StateRuleID(id),
+					Label:  label,
+					Action: ACTION_MATCH,
+					Scopes: formatScopes(config.scopeProvider(token), config.scopeExtension),
+					RegEx:  defaultRegex,
+				},
+			},
+		}
 	}
-	return typed, ok, nil
+
+	// TODO - RegEx overrides optional by client
+
+	return &PushDownAutomatonIR{
+		LanguageName:    grammarPackage.Name,
+		LanguageVersion: grammarPackage.Version,
+		States:          states,
+		ScopeExtension:  config.scopeExtension,
+	}
+}
+
+// ------------------------------------------------------------------ PRIVATE HELPERS
+
+func formatScopes(scopes []string, scopeExtension string) []string {
+	cp := make([]string, len(scopes))
+	copy(cp, scopes)
+
+	for i, scope := range cp {
+		cp[i] = getScopeString(scope, scopeExtension)
+	}
+
+	return cp
+}
+
+func getScopeString(baseScope, scopeExtension string) string {
+	return fmt.Sprintf("%s%s", baseScope, scopeExtension)
+}
+
+func produceStateID(stateLabel string) uint64 {
+	bytes := bytes.StringSliceToBytes([]string{stateLabel}, ';')
+	id := hash.XXH3HasherHash64(xxh3Hasher, bytes)
+	return id
 }

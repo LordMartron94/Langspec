@@ -5,6 +5,7 @@ import (
 	"foundation/system"
 	"langspec"
 	"langspec/editor"
+	"langspec/editor/sublime"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
@@ -160,36 +161,6 @@ func LangSpecCompilerCompile(
 	fmt.Println(grammarPackageDump)
 	fmt.Println("=========================")
 
-	editorIR := editor.EditorIRConstruct(
-		grammarPackage,
-		[]LexingRuleset{*compiler.lexingRuleSet},
-		func(_ struct{}, _ string) (result any, ok bool) {
-			return nil, true
-		},
-		func(_ struct{}, _ string) (result any, ok bool) {
-			return nil, true
-		},
-		[]LangSpecLexerTokenRole{
-			LANG_SPEC_WHITESPACE_ROLE,
-			LANG_SPEC_COMMENT_ROLE,
-		},
-	)
-
-	editorIRDump := editorIR.DebugDump(&editor.EditorIRDebugFormatter[rune, struct{}, struct{}, LangSpecLexerTokenType]{
-		FormatPattern: func(p editor.Pattern[rune]) string {
-			regex, err := p.ToRegEx()
-			if err != nil {
-				panic(err)
-			}
-
-			return fmt.Sprintf("pattern{regex='%s'}", regex)
-		},
-	})
-
-	fmt.Println("\n===== EDITOR IR DEBUG DUMP =====")
-	fmt.Println(editorIRDump)
-	fmt.Println("=========================")
-
 	session := getSession(compiler, sourceFile)
 
 	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
@@ -334,7 +305,50 @@ func LangSpecCompilerCompile(
 	return err
 }
 
+func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile string) error {
+	editorIR := editor.PushDownAutomatonIRCreate(
+		editor.PushDownAutomatonIRConfigurationCreate(
+			getTokenScopes,
+			LangSpecLexerTokenType.String,
+			".lspec", // Scope Extension
+		),
+		compiler.lexingRuleSet,
+		compiler.programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0"),
+	)
+
+	return sublime.SublimeTextGenerateSyntaxFile(
+		editorIR,
+		syntaxFile,
+		[]string{".lspec"},
+	)
+}
+
 // --------------------------------------------------------------- PRIVATE HELPERS
+
+var tokenScopeMap = map[LangSpecLexerTokenType][]string{
+	TokEOF:               {"meta.eof"},
+	TokWhitespace:        {"punctuation.whitespace"},
+	TokDashes:            {"punctuation.definition.separator"},
+	TokHeaderSeparator:   {"punctuation.section.header"},
+	TokStringLiteral:     {"string.quoted.double"},
+	TokVersion:           {"constant.numeric.version"},
+	TokKWLSpec:           {"keyword.declaration.lspec"},
+	TokKWDeclare:         {"keyword.control.declare"},
+	TokKWLexerTokenTypes: {"meta.type.builtin"},
+	TokBraceOpen:         {"punctuation.section.braces.begin"},
+	TokBraceClose:        {"punctuation.section.braces.end"},
+	TokSemicolon:         {"punctuation.terminator.statement"},
+	TokComma:             {"punctuation.separator.comma"},
+	TokLineComment:       {"comment.line.double-slash"},
+	TokBlockComment:      {"comment.block"},
+}
+
+func getTokenScopes(token LangSpecLexerTokenType) []string {
+	if scopes, ok := tokenScopeMap[token]; ok {
+		return scopes
+	}
+	return []string{}
+}
 
 var runeFormatter = lexarch.RuneFormatterDefault()
 
