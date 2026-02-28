@@ -96,54 +96,42 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 	for _, state := range editorIR.States {
 		var entries []contextEntry
 
+		// 1. Meta Scope (Must be first)
 		if state.MetaScope != "" {
-			entries = append(entries, contextEntry{
-				MetaScope: &state.MetaScope,
-			})
+			entries = append(entries, contextEntry{MetaScope: &state.MetaScope})
 		}
 
+		// 2. High-Priority Rules (Exit/Pop rules and explicit overrides)
+		// We filter out the fallback to ensure it goes last
+		var fallbackRule *editor.StateRule
 		for _, rule := range state.Rules {
-			matchStr := rule.RegEx
-			entry := contextEntry{
-				Match: &matchStr,
+			if rule.Label == "invalid_fallback" {
+				fallbackRule = &rule
+				continue
 			}
+			entries = append(entries, convertRuleToEntry(rule, idToLabel))
+		}
 
-			if rule.Scope != "" {
-				entry.Scope = rule.Scope
+		// 3. Includes (The Whitelist)
+		for _, incID := range state.Includes {
+			targetLabel, ok := idToLabel[incID]
+			if !ok {
+				return fmt.Errorf("missing target ID %d for include in state %s", incID, state.Label)
 			}
+			labelCopy := targetLabel
+			entries = append(entries, contextEntry{Include: &labelCopy})
+		}
 
-			if len(rule.Captures) > 0 {
-				entry.Captures = rule.Captures
-			}
-
-			switch rule.Action {
-			case editor.ACTION_PUSH:
-				target, ok := idToLabel[rule.ActionTarget]
-				if !ok {
-					return fmt.Errorf("missing target ID %d for push action in state %s", rule.ActionTarget, state.Label)
-				}
-				entry.Push = &target
-			case editor.ACTION_SET:
-				target, ok := idToLabel[rule.ActionTarget]
-				if !ok {
-					return fmt.Errorf("missing target ID %d for set action in state %s", rule.ActionTarget, state.Label)
-				}
-				entry.Set = &target
-			case editor.ACTION_POP:
-				t := true
-				entry.Pop = &t
-			}
-
-			entries = append(entries, entry)
+		// 4. Low-Priority Fallback (The Trap)
+		if fallbackRule != nil {
+			entries = append(entries, convertRuleToEntry(*fallbackRule, idToLabel))
 		}
 
 		contexts[state.Label] = entries
 
 		if state.IsRootContext {
 			labelCopy := state.Label
-			rootIncludes = append(rootIncludes, contextEntry{
-				Include: &labelCopy,
-			})
+			rootIncludes = append(rootIncludes, contextEntry{Include: &labelCopy})
 		}
 	}
 
@@ -156,6 +144,34 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 	}
 
 	return nil
+}
+
+func convertRuleToEntry(rule editor.StateRule, idToLabel map[editor.StateID]string) contextEntry {
+	matchStr := rule.RegEx
+	entry := contextEntry{
+		Match: &matchStr,
+	}
+
+	if rule.Scope != "" {
+		entry.Scope = rule.Scope
+	}
+
+	if len(rule.Captures) > 0 {
+		entry.Captures = rule.Captures
+	}
+
+	switch rule.Action {
+	case editor.ACTION_PUSH:
+		target := idToLabel[rule.ActionTarget]
+		entry.Push = &target
+	case editor.ACTION_SET:
+		target := idToLabel[rule.ActionTarget]
+		entry.Set = &target
+	case editor.ACTION_POP:
+		t := true
+		entry.Pop = &t
+	}
+	return entry
 }
 
 func writeHeader(sb *strings.Builder, languageName, languageVersion string) {

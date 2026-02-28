@@ -31,9 +31,9 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
 
-	// if err := LangSpecCompilerCompile(compiler, TestFile); err != nil {
-	// 	t.Fatalf("Compilation failed with error: %s", err.Error())
-	// }
+	if err := LangSpecCompilerCompile(compiler, TestFile); err != nil {
+		t.Fatalf("Compilation failed with error: %s", err.Error())
+	}
 
 	if err := LangSpecCompilerBuildSublimeSyntax(compiler, TestSyntaxFile); err != nil {
 		t.Fatalf("Sublime Syntax generation failed with error: %s", err.Error())
