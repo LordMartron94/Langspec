@@ -12,20 +12,27 @@ func _() {
 	_ = x[NodeProgram-2]
 	_ = x[NodeHeader-3]
 	_ = x[NodeLexSection-4]
-	_ = x[NodeDSLName-5]
-	_ = x[NodeVersion-6]
-	_ = x[NodeLSPECName-7]
-	_ = x[NodeIdentifier-8]
-	_ = x[NodeLexKeyword-9]
-	_ = x[NodeLexRule-10]
-	_ = x[NodeLexRuleTokenName-11]
-	_ = x[NodeLexRuleScope-12]
-	_ = x[NodeLexRulePattern-13]
+	_ = x[NodePragmaStatement-5]
+	_ = x[NodePragmaKey-6]
+	_ = x[NodePragmaValue-7]
+	_ = x[NodeMetaSection-8]
+	_ = x[NodeMetaKeyValuePair-9]
+	_ = x[NodeMetaKey-10]
+	_ = x[NodeMetaValue-11]
+	_ = x[NodeDSLName-12]
+	_ = x[NodeVersion-13]
+	_ = x[NodeLSPECName-14]
+	_ = x[NodeIdentifier-15]
+	_ = x[NodeLexKeyword-16]
+	_ = x[NodeLexRule-17]
+	_ = x[NodeLexRuleTokenName-18]
+	_ = x[NodeLexRuleScope-19]
+	_ = x[NodeLexRulePattern-20]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodeDSLNameNodeVersionNodeLSPECNameNodeIdentifierNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePattern"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeIdentifierNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePattern"
 
-var _LangSpecParserNodeKind_index = [...]uint8{0, 9, 20, 30, 44, 55, 66, 79, 93, 107, 118, 138, 154, 172}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 213, 224, 244, 260, 278}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1
