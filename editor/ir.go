@@ -225,7 +225,7 @@ func injectNestStates[TToken comparable](
 	tokenPatternMap map[TToken]Pattern,
 ) []State {
 	getBaseStateID := func(tok TToken) StateID {
-		return StateID(produceStateID(config.formatter(tok)))
+		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
 	}
 
 	for _, nest := range grammarPackage.Nests {
@@ -239,11 +239,13 @@ func injectNestStates[TToken comparable](
 
 		closeRegex, _ := tokenPatternMap[nest.Close].ToRegEx()
 
+		metaScopeBase := fmt.Sprintf("meta.block.%s", strings.ToLower(nestLabel))
+
 		nestState := State{
 			ID:            bodyStateID,
 			Label:         nestLabel + "_body",
 			IsRootContext: false,
-			MetaScope:     getScopeString(config.scopeProvider(nest.Open)+".block", config.scopeExtension),
+			MetaScope:     getScopeString(metaScopeBase, config.scopeExtension),
 			Includes:      includes,
 			Rules: []StateRule{
 				{
