@@ -9,11 +9,11 @@ import (
 // ----------------------------------------------------------- SINGLE SOURCE OF TRUTH
 
 /*
-BuildLanguageSpec is the only place where language constructs are declared.
+buildLanguageSpec is the only place where language constructs are declared.
 Returns a LanguageSpec with tokens (each carrying its pattern directly) and header steps.
 No init() or package-level registries; all definition data lives in the returned value.
 */
-func BuildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTemplates[rune]) LanguageSpec {
+func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTemplates[rune]) LanguageSpec {
 	spec := LanguageSpec{}
 
 	spec.Tokens = []TokenDefinition{
@@ -67,10 +67,26 @@ func BuildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Pattern(f.Literal('}')).
 			Build(),
 
+		DefineToken(TokRuleAssignment).
+			Scope("keyword.operator.assignment").
+			Pattern(f.Literal(':')).
+			Build(),
+
+		DefineToken(TokChainSeparator).
+			Scope("punctuation.separator.chain").
+			Pattern(pattern.LiteralString(f, "->")).
+			Build(),
+
 		DefineToken(TokStringLiteral).
 			Scope("string.quoted.double").
 			HighPriority().
 			Pattern(buildStringLiteralPattern(f)).
+			Build(),
+
+		DefineToken(TokRegexLiteral).
+			Scope("string.regexp").
+			HighPriority().
+			Pattern(buildRawStringLiteral(f)).
 			Build(),
 
 		DefineToken(TokVersion).
@@ -83,6 +99,12 @@ func BuildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Scope("keyword.declaration.lspec").
 			HighPriority().
 			Pattern(pattern.LiteralString(f, "lspec")).
+			Build(),
+
+		DefineToken(TokKWLex).
+			Scope("keyword.declaration.lex").
+			HighPriority().
+			Pattern(pattern.LiteralString(f, "LEX")).
 			Build(),
 	}
 
@@ -131,13 +153,99 @@ func BuildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 }
 
 /*
-DSLSpecFactoryAndTemplates creates the factory and templates used by BuildLanguageSpec.
+dslSpecFactoryAndTemplates creates the factory and templates used by BuildLanguageSpec.
 Exported so the compiler or spec_builder can create them without depending on package-level state.
 */
-func DSLSpecFactoryAndTemplates() (*pattern.RegulaASTFactory[rune], *pattern.RegulaTemplates[rune]) {
+func dslSpecFactoryAndTemplates() (*pattern.RegulaASTFactory[rune], *pattern.RegulaTemplates[rune]) {
 	f := pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 	t := pattern.RegulaTemplatesCreate(f)
 	return f, t
+}
+
+/*
+buildProgramRule builds the full program rule (header + optional LEX body + EOF) using the
+parsing engine's RuleBuilder. All grammar construction for the DSL lives here.
+*/
+func buildProgramRule(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
+	headerRule := buildHeaderRule(ruleBuilder, spec)
+	bodyRule := buildLexSectionRule(ruleBuilder)
+	return ruleBuilder.Rule.Root(
+		GrammarIDProgram,
+		NodeProgram,
+		false,
+		ruleBuilder.Rule.Required(headerRule, "must have header"),
+		ruleBuilder.Rule.Required(bodyRule, "must have lex ruleset"),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDEOF, TokEOF),
+	)
+}
+
+func buildHeaderRule(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
+	flat := LanguageSpecHeaderExpectationsFlat(spec)
+	sequenceRules := make([]Rule, 0, len(flat))
+	for _, e := range flat {
+		if e.Virtual {
+			if len(e.Tokens) > 0 {
+				sequenceRules = append(sequenceRules, ruleBuilder.Token.ExpectVirtual(e.GrammarID, e.Tokens[0]))
+			}
+			continue
+		}
+		if len(e.Tokens) == 1 {
+			sequenceRules = append(sequenceRules, ruleBuilder.Token.Expect(e.GrammarID, e.NodeKind, e.Tokens[0]))
+		} else if len(e.Tokens) > 1 {
+			sequenceRules = append(sequenceRules, ruleBuilder.Token.ExpectOneOf(e.GrammarID, e.NodeKind, e.Tokens...))
+		}
+	}
+
+	headerContent := ruleBuilder.Rule.Sequence(
+		GrammarIDHeaderContent,
+		NodeHeader,
+		sequenceRules...,
+	)
+
+	return ruleBuilder.Rule.TransparentNest(
+		GrammarIDHeader,
+		TokDashes, TokDashes,
+		headerContent,
+	)
+}
+
+func buildLexSectionRule(ruleBuilder *RuleBuilder) Rule {
+	lexSection := ruleBuilder.Rule.Sequence(
+		GrammarIDLexSection,
+		NodeLexSection,
+		ruleBuilder.Token.Expect(GrammarIDLexKeyword, NodeLexKeyword, TokKWLex),
+		ruleBuilder.Rule.TransparentNest(
+			GrammarIDLexSectionBody,
+			TokBraceOpen, TokBraceClose,
+			buildLexRuleList(ruleBuilder),
+		),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDLexSection, TokSemicolon),
+	)
+
+	return lexSection
+}
+
+func buildLexRuleList(ruleBuilder *RuleBuilder) Rule {
+	lexRule := buildLexRule(ruleBuilder)
+	lexRuleWithRecovery := ruleBuilder.Rule.RecoverSync(lexRule, TokSemicolon)
+
+	return ruleBuilder.Rule.TransparentZeroOrMore(
+		GrammarIDLexRuleList,
+		lexRuleWithRecovery,
+	)
+}
+
+func buildLexRule(ruleBuilder *RuleBuilder) Rule {
+	return ruleBuilder.Rule.Sequence(
+		GrammarIDLexRule,
+		NodeLexRule,
+		ruleBuilder.Token.Expect(GrammarIDLexRuleTokenName, NodeLexRuleTokenName, TokStringLiteral),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokChainSeparator),
+		ruleBuilder.Token.Expect(GrammarIDLexRuleScope, NodeLexRuleScope, TokStringLiteral),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokRuleAssignment),
+		ruleBuilder.Token.Expect(GrammarIDLexRulePattern, NodeLexRulePattern, TokRegexLiteral),
+		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokSemicolon),
+	)
 }
 
 // ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
@@ -153,19 +261,30 @@ const (
 type LangSpecLexerTokenType uint32
 
 const (
+	// -- Control & Whitespace --
 	TokEOF LangSpecLexerTokenType = iota + 1
 	TokWhitespace
+	TokLineComment
+	TokBlockComment
+
+	// -- Punctuation & Operators --
 	TokDashes
 	TokHeaderSeparator
-	TokStringLiteral
-	TokVersion
-	TokKWLSpec
 	TokBraceOpen
 	TokBraceClose
 	TokSemicolon
 	TokComma
-	TokLineComment
-	TokBlockComment
+	TokChainSeparator
+	TokRuleAssignment
+
+	// -- Literals --
+	TokStringLiteral
+	TokRegexLiteral
+	TokVersion
+
+	// -- Keywords --
+	TokKWLSpec
+	TokKWLex
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -182,33 +301,58 @@ type LangSpecParserNodeKind uint32
 
 const (
 	NodeError LangSpecParserNodeKind = iota + 1
+
+	// -- Root & Top Level --
 	NodeProgram
 	NodeHeader
-	NodeHeaderContent
-	NodeBody
+	NodeLexSection
+
+	// -- Header Elements --
 	NodeDSLName
 	NodeVersion
 	NodeLSPECName
 	NodeIdentifier
+
+	// -- Lex Elements --
+	NodeLexKeyword
+	NodeLexRule
+	NodeLexRuleTokenName
+	NodeLexRuleScope
+	NodeLexRulePattern
 )
 
 const (
-	GrammarIDProgram           syntaxa.GrammarID = "PROGRAM"
-	GrammarIDHeader            syntaxa.GrammarID = "HEADER"
-	GrammarIDHeaderContent     syntaxa.GrammarID = "HEADER CONTENT"
+	// Root & General
+	GrammarIDProgram    syntaxa.GrammarID = "PROGRAM"
+	GrammarIDEOF        syntaxa.GrammarID = "EOF"
+	GrammarIDBlockClose syntaxa.GrammarID = "BLOCK CLOSE"
+
+	// Header
+	GrammarIDHeader          syntaxa.GrammarID = "HEADER"
+	GrammarIDHeaderContent   syntaxa.GrammarID = "HEADER CONTENT"
+	GrammarIDHeaderSeparator syntaxa.GrammarID = "HEADER SEPARATOR"
+	GrammarIDHeaderDashes    syntaxa.GrammarID = "HEADER DASHES"
+	GrammarIDDSLName         syntaxa.GrammarID = "DSL NAME"
+	GrammarIDDSLVersion      syntaxa.GrammarID = "DSL VERSION"
+	GrammarIDLangspecName    syntaxa.GrammarID = "LANGSPEC NAME"
+	GrammarIDLangspecVersion syntaxa.GrammarID = "LANGSPEC VERSION"
+
+	// Declarations
 	GrammarIDDeclarationBlocks syntaxa.GrammarID = "DECLARATION BLOCKS"
 	GrammarIDDeclarationBlock  syntaxa.GrammarID = "DECLARATION BLOCK"
 	GrammarIDDeclareList       syntaxa.GrammarID = "DECLARE LIST"
-	GrammarIDEOF               syntaxa.GrammarID = "EOF"
-	GrammarIDHeaderSeparator   syntaxa.GrammarID = "HEADER SEPARATOR"
-	GrammarIDHeaderDashes      syntaxa.GrammarID = "HEADER DASHES"
-	GrammarIDDSLName           syntaxa.GrammarID = "DSL NAME"
-	GrammarIDDSLVersion        syntaxa.GrammarID = "DSL VERSION"
-	GrammarIDLangspecName      syntaxa.GrammarID = "LANGSPEC NAME"
-	GrammarIDLangspecVersion   syntaxa.GrammarID = "LANGSPEC VERSION"
 	GrammarIDDeclareKeyword    syntaxa.GrammarID = "DECLARE KEYWORD"
 	GrammarIDDeclareIdentifier syntaxa.GrammarID = "DECLARE IDENTIFIER"
-	GrammarIDBlockClose        syntaxa.GrammarID = "BLOCK CLOSE"
+
+	// Lex Section
+	GrammarIDLexSection       syntaxa.GrammarID = "LEX SECTION"
+	GrammarIDLexSectionBody   syntaxa.GrammarID = "LEX SECTION BODY"
+	GrammarIDLexRuleList      syntaxa.GrammarID = "LEX RULE LIST"
+	GrammarIDLexKeyword       syntaxa.GrammarID = "LEX KEYWORD"
+	GrammarIDLexRule          syntaxa.GrammarID = "LEX RULE"
+	GrammarIDLexRuleTokenName syntaxa.GrammarID = "LEX RULE TOKEN NAME"
+	GrammarIDLexRuleScope     syntaxa.GrammarID = "LEX RULE SCOPE"
+	GrammarIDLexRulePattern   syntaxa.GrammarID = "LEX RULE PATTERN"
 )
 
 // ----------------------------------------------------------- PATTERN HELPERS (used only by BuildLanguageSpec)
@@ -262,6 +406,31 @@ func buildStringLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.Regula
 	body := f.AnyOf(normalChar, escapeSequence).Star()
 	quote := f.Literal('"')
 	return f.Sequence(quote, body, quote)
+}
+
+func buildRawStringLiteral(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	quote := f.Literal('`')
+	body := buildRawStringBody(f)
+
+	return f.Sequence(quote, body, quote)
+}
+
+func buildRawStringBody(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	normalChar := f.NegatedClass(
+		f.Range('`', '`'),
+		f.Range('\\', '\\'),
+	)
+
+	escapeSequence := buildPassThroughEscape(f)
+
+	return f.AnyOf(normalChar, escapeSequence).Star()
+}
+
+func buildPassThroughEscape(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	escapeTrigger := f.Literal('\\')
+	anyChar := f.NegatedClass()
+
+	return f.Sequence(escapeTrigger, anyChar)
 }
 
 func buildVersionSemverV3Pattern(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTemplates[rune]) pattern.RegulaAST[rune] {

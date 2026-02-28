@@ -3,6 +3,7 @@ package dsl
 import (
 	"langspec"
 	"lexarch"
+	"syntaxa/rule"
 )
 
 func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangParserSession[rune] {
@@ -21,15 +22,20 @@ func buildLangSpecDSLSpec() (
 	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	Rule,
 ) {
-	factory, templates := DSLSpecFactoryAndTemplates()
-	spec := BuildLanguageSpec(factory, templates)
+	factory, templates := dslSpecFactoryAndTemplates()
+	spec := buildLanguageSpec(factory, templates)
 
 	lexerSpec, ruleset := buildLangSpecDSLLexerSpec(spec)
 	lexerSpec.WithDFADebugFormatter(
 		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
 	)
 
-	parserSpec, programRule := buildLangSpecDSLParserSpec(spec)
+	ruleBuilder := rule.RuleBuilderCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
+		LangSpecLexerTokenType.String,
+	)
+	programRule := buildProgramRule(ruleBuilder, spec)
+
+	parserSpec, _ := buildLangSpecDSLParserSpec(programRule)
 
 	dslSpec := langspec.LangSpecCreate(
 		lexerSpec,

@@ -56,6 +56,11 @@ func (b *TokenBuilder) HighPriority() *TokenBuilder {
 	return b
 }
 
+func (b *TokenBuilder) Priority(priority int) *TokenBuilder {
+	b.def.Priority = priority
+	return b
+}
+
 func (b *TokenBuilder) Pattern(p pattern.RegulaAST[rune]) *TokenBuilder {
 	q := new(pattern.RegulaAST[rune])
 	*q = p

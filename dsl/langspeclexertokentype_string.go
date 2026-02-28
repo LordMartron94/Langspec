@@ -10,22 +10,26 @@ func _() {
 	var x [1]struct{}
 	_ = x[TokEOF-1]
 	_ = x[TokWhitespace-2]
-	_ = x[TokDashes-3]
-	_ = x[TokHeaderSeparator-4]
-	_ = x[TokStringLiteral-5]
-	_ = x[TokVersion-6]
-	_ = x[TokKWLSpec-7]
-	_ = x[TokBraceOpen-8]
-	_ = x[TokBraceClose-9]
-	_ = x[TokSemicolon-10]
-	_ = x[TokComma-11]
-	_ = x[TokLineComment-12]
-	_ = x[TokBlockComment-13]
+	_ = x[TokLineComment-3]
+	_ = x[TokBlockComment-4]
+	_ = x[TokDashes-5]
+	_ = x[TokHeaderSeparator-6]
+	_ = x[TokBraceOpen-7]
+	_ = x[TokBraceClose-8]
+	_ = x[TokSemicolon-9]
+	_ = x[TokComma-10]
+	_ = x[TokChainSeparator-11]
+	_ = x[TokRuleAssignment-12]
+	_ = x[TokStringLiteral-13]
+	_ = x[TokRegexLiteral-14]
+	_ = x[TokVersion-15]
+	_ = x[TokKWLSpec-16]
+	_ = x[TokKWLex-17]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokDashesTokHeaderSeparatorTokStringLiteralTokVersionTokKWLSpecTokBraceOpenTokBraceCloseTokSemicolonTokCommaTokLineCommentTokBlockComment"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokDashesTokHeaderSeparatorTokBraceOpenTokBraceCloseTokSemicolonTokCommaTokChainSeparatorTokRuleAssignmentTokStringLiteralTokRegexLiteralTokVersionTokKWLSpecTokKWLex"
 
-var _LangSpecLexerTokenType_index = [...]uint8{0, 6, 19, 28, 46, 62, 72, 82, 94, 107, 119, 127, 141, 156}
+var _LangSpecLexerTokenType_index = [...]uint8{0, 6, 19, 33, 48, 57, 75, 87, 100, 112, 120, 137, 154, 170, 185, 195, 205, 213}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1

@@ -76,10 +76,10 @@ parse trace, syntax errors (if any), and validation entries (when validation was
 Callers can inspect the result without parsing stdout.
 */
 type LangSpecCompileResult struct {
-	RootNode           *Node
-	Trace              *syntaxa.ParseTrace[LangSpecLexerTokenType]
-	SyntaxErrors       *syntaxa.SyntaxErrors[rune]
-	ValidationEntries  *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	RootNode          *Node
+	Trace             *syntaxa.ParseTrace[LangSpecLexerTokenType]
+	SyntaxErrors      *syntaxa.SyntaxErrors[rune]
+	ValidationEntries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 }
 
 /*
@@ -221,7 +221,7 @@ func LangSpecCompilerCompile(
 		result.ValidationEntries = validationEntries
 
 		if validationEntries != nil && len(validationEntries.Results) > 0 {
-			renderValidationEntries(w, validationEntries)
+			renderValidationEntries(w, contentRune, validationEntries)
 
 			errorAmount := 0
 			for _, stage := range validationEntries.Results {
