@@ -55,11 +55,11 @@ type StateRule struct {
 	Label string
 
 	RegEx  string
-	Scopes []string
+	Scope  string
 	Action RuleAction
 }
 
-type ScopeProvider[T any] func(item T) []string
+type ScopeProvider[T any] func(item T) string
 
 type TokenFormatter[TToken any] func(token TToken) string
 
@@ -124,7 +124,7 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 					ID:     StateRuleID(id),
 					Label:  label,
 					Action: ACTION_MATCH,
-					Scopes: formatScopes(config.scopeProvider(token), config.scopeExtension),
+					Scope:  getScopeString(config.scopeProvider(token), config.scopeExtension),
 					RegEx:  defaultRegex,
 				},
 			},
@@ -142,17 +142,6 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 }
 
 // ------------------------------------------------------------------ PRIVATE HELPERS
-
-func formatScopes(scopes []string, scopeExtension string) []string {
-	cp := make([]string, len(scopes))
-	copy(cp, scopes)
-
-	for i, scope := range cp {
-		cp[i] = getScopeString(scope, scopeExtension)
-	}
-
-	return cp
-}
 
 func getScopeString(baseScope, scopeExtension string) string {
 	return fmt.Sprintf("%s%s", baseScope, scopeExtension)

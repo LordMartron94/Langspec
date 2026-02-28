@@ -325,29 +325,29 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 
 // --------------------------------------------------------------- PRIVATE HELPERS
 
-var tokenScopeMap = map[LangSpecLexerTokenType][]string{
-	TokEOF:               {"meta.eof"},
-	TokWhitespace:        {"punctuation.whitespace"},
-	TokDashes:            {"punctuation.definition.separator"},
-	TokHeaderSeparator:   {"punctuation.section.header"},
-	TokStringLiteral:     {"string.quoted.double"},
-	TokVersion:           {"constant.numeric.version"},
-	TokKWLSpec:           {"keyword.declaration.lspec"},
-	TokKWDeclare:         {"keyword.control.declare"},
-	TokKWLexerTokenTypes: {"meta.type.builtin"},
-	TokBraceOpen:         {"punctuation.section.braces.begin"},
-	TokBraceClose:        {"punctuation.section.braces.end"},
-	TokSemicolon:         {"punctuation.terminator.statement"},
-	TokComma:             {"punctuation.separator.comma"},
-	TokLineComment:       {"comment.line.double-slash"},
-	TokBlockComment:      {"comment.block"},
+var tokenScopeMap = map[LangSpecLexerTokenType]string{
+	TokEOF:               "meta.eof",
+	TokWhitespace:        "punctuation.whitespace",
+	TokDashes:            "punctuation.definition.separator",
+	TokHeaderSeparator:   "punctuation.section.header",
+	TokStringLiteral:     "string.quoted.double",
+	TokVersion:           "constant.numeric.version",
+	TokKWLSpec:           "keyword.declaration.lspec",
+	TokKWDeclare:         "keyword.control.declare",
+	TokKWLexerTokenTypes: "meta.type.builtin",
+	TokBraceOpen:         "punctuation.section.braces.begin",
+	TokBraceClose:        "punctuation.section.braces.end",
+	TokSemicolon:         "punctuation.terminator.statement",
+	TokComma:             "punctuation.separator.comma",
+	TokLineComment:       "comment.line.double-slash",
+	TokBlockComment:      "comment.block",
 }
 
-func getTokenScopes(token LangSpecLexerTokenType) []string {
-	if scopes, ok := tokenScopeMap[token]; ok {
-		return scopes
+func getTokenScopes(token LangSpecLexerTokenType) string {
+	if scope, ok := tokenScopeMap[token]; ok {
+		return scope
 	}
-	return []string{}
+	return ""
 }
 
 var runeFormatter = lexarch.RuneFormatterDefault()

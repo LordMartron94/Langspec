@@ -90,7 +90,7 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 		for _, rule := range state.Rules {
 			entries = append(entries, contextEntry{
 				Match: &rule.RegEx,
-				Scope: rule.Scopes[0],
+				Scope: rule.Scope,
 			})
 		}
 
