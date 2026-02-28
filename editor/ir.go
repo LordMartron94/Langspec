@@ -15,6 +15,23 @@ var xxh3Hasher = hash.XXH3HasherCreateWithSeed(42)
 
 // ------------------------------------------------------------------ TYPES
 
+func MustGetRegEx[TToken, TTokenRole comparable](
+	token TToken,
+	ruleset *lexarch.LexingRuleset[rune, TToken, TTokenRole],
+) string {
+	pattern, ok := ruleset.GetPattern(token)
+	if !ok {
+		panic(fmt.Sprintf("editor.MustGetRegEx: token %v not found in lexing ruleset", token))
+	}
+
+	regex, err := pattern.ToRegEx()
+	if err != nil {
+		panic(fmt.Sprintf("editor.MustGetRegEx: failed to emit regex for token %v: %v", token, err))
+	}
+
+	return regex
+}
+
 /*
 Pattern is the observation pattern type used for token recognition in the editor IR.
 It is an alias for the Regula AST from autarch/pattern.
@@ -52,7 +69,7 @@ type State struct {
 	Rules         []StateRule
 	Includes      []StateID
 	IsRootContext bool
-	OmitPrototype bool // REQUIRED: Set to true for string/comment bodies to prevent prototype recursion
+	OmitPrototype bool
 }
 
 type StateRule struct {
@@ -63,6 +80,7 @@ type StateRule struct {
 	Action       RuleAction
 	ActionTarget StateID
 	Captures     map[int]string
+	PopCount     int
 }
 
 type ScopeProvider[T any] func(item T) string
@@ -100,6 +118,21 @@ TokenOverrideFunc generates a custom rule and optional auxiliary states for a to
 */
 type TokenOverrideFunc func(ctx *TokenOverrideContext) (mainRule StateRule, extraStates []State)
 
+type NestOverrideContext struct {
+	NestLabel      string
+	ScopeExtension string
+}
+
+func (ctx *NestOverrideContext) DeriveStateID(suffix string) StateID {
+	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.NestLabel, suffix)))
+}
+
+func (ctx *NestOverrideContext) ApplyScope(scope string) string {
+	return getScopeString(scope, ctx.ScopeExtension)
+}
+
+type NestOverrideFunc func(ctx *NestOverrideContext) (entryStateID StateID, states []State)
+
 // ------------------------------------------------------------------ CONFIGURATION
 
 type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
@@ -108,6 +141,7 @@ type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
 	scopeExtension      string
 	overrides           map[TToken]TokenOverrideFunc
 	prototypeTokenRoles []TTokenRole
+	nestOverrides       map[syntaxa.GrammarID]NestOverrideFunc
 }
 
 func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
@@ -121,11 +155,16 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 		scopeExtension:      scopeExtension,
 		overrides:           make(map[TToken]TokenOverrideFunc),
 		prototypeTokenRoles: make([]TTokenRole, 0),
+		nestOverrides:       make(map[syntaxa.GrammarID]NestOverrideFunc),
 	}
 }
 
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token TToken, fn TokenOverrideFunc) {
 	c.overrides[token] = fn
+}
+
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarID, fn NestOverrideFunc) {
+	c.nestOverrides[ruleID] = fn
 }
 
 /*
@@ -265,6 +304,20 @@ func injectNestStates[TToken, TTokenRole comparable](
 
 	for _, nest := range grammarPackage.Nests {
 		nestLabel := sanitizeContextName(string(nest.OwnerRule))
+		openStateID := getBaseStateID(nest.Open)
+
+		if overrideFn, exists := config.nestOverrides[nest.OwnerRule]; exists {
+			ctx := &NestOverrideContext{
+				NestLabel:      nestLabel,
+				ScopeExtension: config.scopeExtension,
+			}
+
+			entryStateID, customStates := overrideFn(ctx)
+			linkOpenTokenToPushAction(allStates, openStateID, entryStateID)
+			allStates = append(allStates, customStates...)
+			continue
+		}
+
 		bodyStateID := StateID(produceStateID(nestLabel + "_body"))
 
 		linkOpenTokenToPushAction(allStates, getBaseStateID(nest.Open), bodyStateID)

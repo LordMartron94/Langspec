@@ -73,7 +73,7 @@ type contextEntry struct {
 	Scope     string         `yaml:"scope,omitempty"`
 	Push      *string        `yaml:"push,omitempty"`
 	Set       *string        `yaml:"set,omitempty"`
-	Pop       *bool          `yaml:"pop,omitempty"`
+	Pop       any            `yaml:"pop,omitempty"`
 	Include   *string        `yaml:"include,omitempty"`
 	Captures  map[int]string `yaml:"captures,omitempty"`
 }
@@ -168,8 +168,12 @@ func convertRuleToEntry(rule editor.StateRule, idToLabel map[editor.StateID]stri
 		target := idToLabel[rule.ActionTarget]
 		entry.Set = &target
 	case editor.ACTION_POP:
-		t := true
-		entry.Pop = &t
+		if rule.PopCount > 1 {
+			entry.Pop = rule.PopCount
+		} else {
+			t := true
+			entry.Pop = &t
+		}
 	}
 	return entry
 }

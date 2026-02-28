@@ -380,6 +380,75 @@ func LangSpecCompilerBuildSublimeSyntax(compiler *LangSpecCompiler, syntaxFile s
 		return mainRule, nil
 	})
 
+	editorIRConfig.AddNestOverride("HEADER", func(ctx *editor.NestOverrideContext) (editor.StateID, []editor.State) {
+		strRegex := editor.MustGetRegEx(TokStringLiteral, compiler.lexingRuleSet)
+		verRegex := editor.MustGetRegEx(TokVersion, compiler.lexingRuleSet)
+		pipeRegex := editor.MustGetRegEx(TokHeaderSeparator, compiler.lexingRuleSet)
+		closeRegex := editor.MustGetRegEx(TokDashes, compiler.lexingRuleSet)
+		lspecRegex := editor.MustGetRegEx(TokKWLSpec, compiler.lexingRuleSet)
+
+		expectNameID := ctx.DeriveStateID("expect_name")
+		expectVersionID := ctx.DeriveStateID("expect_version")
+		expectTailID := ctx.DeriveStateID("expect_tail")
+
+		state1 := editor.State{
+			ID:            expectNameID,
+			Label:         ctx.NestLabel + "_expect_name",
+			IsRootContext: false,
+			MetaScope:     ctx.ApplyScope("meta.block.header"), // DEFINED ONLY ONCE
+			Rules: []editor.StateRule{
+				{
+					ID:           editor.StateRuleID(ctx.DeriveStateID("rule_name")),
+					Label:        "match_dsl_name",
+					RegEx:        strRegex,
+					Scope:        ctx.ApplyScope("entity.name.language"),
+					Action:       editor.ACTION_PUSH, // <--- PUSH, NOT SET
+					ActionTarget: expectVersionID,
+				},
+			},
+		}
+
+		state2 := editor.State{
+			ID:            expectVersionID,
+			Label:         ctx.NestLabel + "_expect_version",
+			IsRootContext: false,
+			// NO METASCOPE HERE. Inherited from state1.
+			Rules: []editor.StateRule{
+				{
+					ID:           editor.StateRuleID(ctx.DeriveStateID("rule_ver")),
+					Label:        "match_dsl_ver",
+					RegEx:        verRegex,
+					Scope:        ctx.ApplyScope("constant.numeric.version"),
+					Action:       editor.ACTION_PUSH, // <--- PUSH, NOT SET
+					ActionTarget: expectTailID,
+				},
+			},
+		}
+
+		state3 := editor.State{
+			ID:            expectTailID,
+			Label:         ctx.NestLabel + "_expect_tail",
+			IsRootContext: false,
+			// NO METASCOPE HERE. Inherited from state1.
+			Rules: []editor.StateRule{
+				{
+					ID:       editor.StateRuleID(ctx.DeriveStateID("rule_close")),
+					Label:    "match_close",
+					RegEx:    closeRegex,
+					Scope:    ctx.ApplyScope("punctuation.definition.separator"),
+					Action:   editor.ACTION_POP,
+					PopCount: 3, // <--- COLLAPSE ALL 3 STATES AT ONCE
+				},
+				{RegEx: pipeRegex, Scope: ctx.ApplyScope("punctuation.section.header"), Action: editor.ACTION_MATCH},
+				{RegEx: strRegex, Scope: ctx.ApplyScope("string.quoted.double"), Action: editor.ACTION_MATCH},
+				{RegEx: lspecRegex, Scope: ctx.ApplyScope("keyword.declaration.lspec"), Action: editor.ACTION_MATCH},
+				{RegEx: verRegex, Scope: ctx.ApplyScope("constant.numeric.version"), Action: editor.ACTION_MATCH},
+			},
+		}
+
+		return expectNameID, []editor.State{state1, state2, state3}
+	})
+
 	editorIR := editor.PushDownAutomatonIRCreate(
 		editorIRConfig,
 		compiler.lexingRuleSet,
