@@ -153,10 +153,13 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
 	grammarPackage syntaxa.GrammarPackage[TToken],
 ) *PushDownAutomatonIR {
+	entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
+	rootTokens := extractRootWhitelistFromGrammar(entryGrammar)
 
 	tokensInUse, tokenPatternMap, prototypeTokens := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
 
-	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens)
+	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens, rootTokens)
+
 	allStates = injectNestStates(config, allStates, grammarPackage, tokenPatternMap)
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
 
@@ -194,6 +197,7 @@ func buildBaseStates[TToken, TTokenRole comparable](
 	tokensInUse []TToken,
 	tokenPatternMap map[TToken]Pattern,
 	prototypeTokens map[TToken]bool,
+	rootTokens map[TToken]struct{},
 ) ([]State, []StateID) {
 	var allStates []State
 	var prototypeIncludes []StateID
@@ -228,11 +232,14 @@ func buildBaseStates[TToken, TTokenRole comparable](
 
 		isProto := prototypeTokens[token]
 
+		_, isStructurallyRoot := rootTokens[token]
+		isRoot := isStructurallyRoot && !isProto
+
 		baseState := State{
 			ID:            id,
 			Label:         label,
 			Rules:         []StateRule{mainRule},
-			IsRootContext: !isProto,
+			IsRootContext: isRoot,
 		}
 
 		if isProto {
@@ -393,6 +400,35 @@ func collectTokensForSubtree[TToken comparable](
 	case syntaxa.GEpsilon:
 		// No tokens consumed
 	}
+}
+
+func extractRootWhitelistFromGrammar[TToken comparable](g *syntaxa.Grammar[TToken]) map[TToken]struct{} {
+	validTokens := make(map[TToken]struct{})
+	visited := make(map[*syntaxa.Grammar[TToken]]bool)
+
+	var walk func(node *syntaxa.Grammar[TToken])
+	walk = func(node *syntaxa.Grammar[TToken]) {
+		if node == nil || visited[node] {
+			return
+		}
+		visited[node] = true
+
+		switch node.Kind {
+		case syntaxa.GToken:
+			validTokens[node.Token] = struct{}{}
+
+		case syntaxa.GNest:
+			validTokens[*node.OpenToken] = struct{}{}
+
+		case syntaxa.GConcat, syntaxa.GChoice, syntaxa.GRepeat, syntaxa.GOptional:
+			for _, child := range node.Children {
+				walk(child)
+			}
+		}
+	}
+
+	walk(g)
+	return validTokens
 }
 
 func sanitizeContextName(name string) string {

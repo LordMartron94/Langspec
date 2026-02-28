@@ -19,6 +19,7 @@ const (
 	// ROOT
 	NodeProgram
 	NodeHeader
+	NodeHeaderContent
 	NodeBody
 
 	// AGGREGATIONS
@@ -97,16 +98,19 @@ func parseProgram(ruleBuilder *RuleBuilder) Rule {
 }
 
 func parseHeader(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.Sequence(
+	return ruleBuilder.Rule.Nest(
 		"HEADER",
 		NodeHeader,
-		ruleBuilder.Token.ExpectVirtual("HEADER START", TokDashes),
-		ruleBuilder.Token.Expect("DSL NAME", NodeDSLName, TokStringLiteral),
-		ruleBuilder.Token.Expect("DSL VERSION", NodeVersion, TokVersion),
-		ruleBuilder.Token.ExpectVirtual("HEADER SEPARATOR", TokHeaderSeparator),
-		ruleBuilder.Token.ExpectOneOf("LANGSPEC NAME", NodeLSPECName, TokStringLiteral, TokKWLSpec),
-		ruleBuilder.Token.Expect("LANGSPEC VERSION", NodeVersion, TokVersion),
-		ruleBuilder.Token.ExpectVirtual("HEADER END", TokDashes),
+		TokDashes, TokDashes, // open + close
+		ruleBuilder.Rule.Sequence(
+			"HEAEDER CONTENT",
+			NodeHeaderContent,
+			ruleBuilder.Token.Expect("DSL NAME", NodeDSLName, TokStringLiteral),
+			ruleBuilder.Token.Expect("DSL VERSION", NodeVersion, TokVersion),
+			ruleBuilder.Token.ExpectVirtual("HEADER SEPARATOR", TokHeaderSeparator),
+			ruleBuilder.Token.ExpectOneOf("LANGSPEC NAME", NodeLSPECName, TokStringLiteral, TokKWLSpec),
+			ruleBuilder.Token.Expect("LANGSPEC VERSION", NodeVersion, TokVersion),
+		),
 	)
 }
 

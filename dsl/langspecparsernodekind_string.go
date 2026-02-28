@@ -11,20 +11,21 @@ func _() {
 	_ = x[NodeError-1]
 	_ = x[NodeProgram-2]
 	_ = x[NodeHeader-3]
-	_ = x[NodeBody-4]
-	_ = x[NodeDeclarationBlocks-5]
-	_ = x[NodeDeclarationBlock-6]
-	_ = x[NodeList-7]
-	_ = x[NodeDSLName-8]
-	_ = x[NodeVersion-9]
-	_ = x[NodeLSPECName-10]
-	_ = x[NodeDeclareIdentifier-11]
-	_ = x[NodeIdentifier-12]
+	_ = x[NodeHeaderContent-4]
+	_ = x[NodeBody-5]
+	_ = x[NodeDeclarationBlocks-6]
+	_ = x[NodeDeclarationBlock-7]
+	_ = x[NodeList-8]
+	_ = x[NodeDSLName-9]
+	_ = x[NodeVersion-10]
+	_ = x[NodeLSPECName-11]
+	_ = x[NodeDeclareIdentifier-12]
+	_ = x[NodeIdentifier-13]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeBodyNodeDeclarationBlocksNodeDeclarationBlockNodeListNodeDSLNameNodeVersionNodeLSPECNameNodeDeclareIdentifierNodeIdentifier"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeHeaderContentNodeBodyNodeDeclarationBlocksNodeDeclarationBlockNodeListNodeDSLNameNodeVersionNodeLSPECNameNodeDeclareIdentifierNodeIdentifier"
 
-var _LangSpecParserNodeKind_index = [...]uint8{0, 9, 20, 30, 38, 59, 79, 87, 98, 109, 122, 143, 157}
+var _LangSpecParserNodeKind_index = [...]uint8{0, 9, 20, 30, 47, 55, 76, 96, 104, 115, 126, 139, 160, 174}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1
