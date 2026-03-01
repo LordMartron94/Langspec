@@ -3,7 +3,6 @@ package dsl
 import (
 	"autarch/pattern"
 	"foundation/domain"
-	"syntaxa"
 )
 
 // ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
@@ -25,19 +24,23 @@ const (
 	TokLineComment
 	TokBlockComment
 	TokPragmaStart
+	TokVarRef // $
 
 	// -- Punctuation & Operators --
 	TokDashes
-	TokHeaderSeparator
 	TokBraceOpen
 	TokBraceClose
 	TokSemicolon
 	TokComma
 	TokChainSeparator
-	TokRuleAssignment
+	TokAssignment // :
 	TokEqualsOperator
-	TokMetaSection
-	TokIdentifier
+	TokMetaSection // %%
+
+	TokPipe
+	TokConcat
+	TokRange
+	TokStar
 
 	// -- Literals --
 	TokStringLiteral
@@ -45,9 +48,12 @@ const (
 	TokVersion
 	TokInteger
 
+	TokIdentifier
+
 	// -- Keywords --
 	TokKWLSpec
 	TokKWLex
+	TokKWPattern
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -71,7 +77,6 @@ const (
 	NodeLexSection
 
 	// Pragmas
-
 	NodePragmaStatement
 	NodePragmaKey
 	NodePragmaValue
@@ -87,7 +92,6 @@ const (
 	NodeDSLName
 	NodeVersion
 	NodeLSPECName
-	NodeIdentifier
 
 	// -- Lex Elements --
 	NodeLexKeyword
@@ -96,53 +100,6 @@ const (
 	NodeLexRuleScope
 	NodeLexRulePattern
 	NodeLexRulePriority
-)
-
-const (
-	// Root & General
-	GrammarIDProgram    syntaxa.GrammarID = "PROGRAM"
-	GrammarIDEOF        syntaxa.GrammarID = "EOF"
-	GrammarIDBlockClose syntaxa.GrammarID = "BLOCK CLOSE"
-
-	// Header
-	GrammarIDHeader          syntaxa.GrammarID = "HEADER"
-	GrammarIDHeaderContent   syntaxa.GrammarID = "HEADER CONTENT"
-	GrammarIDHeaderSeparator syntaxa.GrammarID = "HEADER SEPARATOR"
-	GrammarIDHeaderDashes    syntaxa.GrammarID = "HEADER DASHES"
-	GrammarIDDSLName         syntaxa.GrammarID = "DSL NAME"
-	GrammarIDDSLVersion      syntaxa.GrammarID = "DSL VERSION"
-	GrammarIDLangspecName    syntaxa.GrammarID = "LANGSPEC NAME"
-	GrammarIDLangspecVersion syntaxa.GrammarID = "LANGSPEC VERSION"
-
-	// Pragma Section
-	GrammarIDPragmaSection       syntaxa.GrammarID = "PRAGMA SECTION"
-	GrammarIDPragmaStatement     syntaxa.GrammarID = "PRAGMA STATEMENT"
-	GrammarIDPragmaStatementBody syntaxa.GrammarID = "PRAGMA STATEMENT BODY"
-	GrammarIDPragmaStart         syntaxa.GrammarID = "PRAGMA START"
-	GrammarIDPragmaEnd           syntaxa.GrammarID = "PRAGMA END"
-
-	GrammarIDPragmaKey   syntaxa.GrammarID = "PRAGMA KEY"
-	GrammarIDPragmaValue syntaxa.GrammarID = "PRAGMA VALUE"
-
-	// Meta Section
-	GrammarIDMetaSection      syntaxa.GrammarID = "META SECTION"
-	GrammarIDMetaKeyValuePair syntaxa.GrammarID = "META KEY VALUE PAIR"
-	GrammarIDMetaKeyValueSeq  syntaxa.GrammarID = "META KEY VALUE SEQUENCE"
-
-	GrammarIDMetaKey        syntaxa.GrammarID = "META KEY"
-	GrammarIDMetaValue      syntaxa.GrammarID = "META VALUE"
-	GrammarIDMetaAssignment syntaxa.GrammarID = "META ASSIGNMENT"
-
-	// Lex Section
-	GrammarIDLexSection       syntaxa.GrammarID = "LEX SECTION"
-	GrammarIDLexSectionBody   syntaxa.GrammarID = "LEX SECTION BODY"
-	GrammarIDLexRuleList      syntaxa.GrammarID = "LEX RULE LIST"
-	GrammarIDLexKeyword       syntaxa.GrammarID = "LEX KEYWORD"
-	GrammarIDLexRule          syntaxa.GrammarID = "LEX RULE"
-	GrammarIDLexRuleTokenName syntaxa.GrammarID = "LEX RULE TOKEN NAME"
-	GrammarIDLexRuleScope     syntaxa.GrammarID = "LEX RULE SCOPE"
-	GrammarIDLexRulePattern   syntaxa.GrammarID = "LEX RULE PATTERN"
-	GrammarIDLexRulePriority  syntaxa.GrammarID = "LEX RULE PRIORITY"
 )
 
 // ----------------------------------------------------------- SINGLE SOURCE OF TRUTH
@@ -191,8 +148,8 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Pattern(pattern.LiteralString(f, "%%")).
 			Build(),
 
-		DefineToken(TokHeaderSeparator).
-			Scope("punctuation.section.header").
+		DefineToken(TokPipe).
+			Scope("punctuation.pipe").
 			Pattern(f.Literal('|')).
 			Build(),
 
@@ -216,7 +173,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Pattern(f.Literal('}')).
 			Build(),
 
-		DefineToken(TokRuleAssignment).
+		DefineToken(TokAssignment).
 			Scope("keyword.operator.assignment").
 			Pattern(f.Literal(':')).
 			Build(),
@@ -298,7 +255,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 				Build(),
 
 			Expect(GrammarIDHeaderSeparator).
-				Tokens(TokHeaderSeparator).
+				Tokens(TokPipe).
 				Virtual().
 				Build(),
 
@@ -332,23 +289,25 @@ buildProgramRule builds the full program rule (header + optional LEX body + EOF)
 GrammarDefiner. All grammar construction for the DSL lives here.
 */
 func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
-	headerRule   := buildHeaderRule(g, spec)
-	bodyRule     := buildLexSectionRule(g)
-	pragmaRule   := buildPragmaRule(g)
+	headerRule := buildHeaderRule(g, spec)
+	pragmaRule := buildPragmaRule(g)
+
+	lexSectionRule := buildLexSectionRule(g)
+
 	return g.rb.Rule.Root(
 		GrammarIDProgram,
 		NodeProgram,
 		false,
 		g.rb.Rule.Required(headerRule, "must have header"),
 		g.rb.Rule.TransparentZeroOrMore(GrammarIDPragmaSection, pragmaRule),
-		g.rb.Rule.Required(bodyRule, "must have lex ruleset"),
-		g.ExpectVirtual(GrammarIDEOF, TokEOF),
+		g.rb.Rule.Required(lexSectionRule, "must have lex ruleset"),
+		g.expectVirtual(GrammarIDEOF, TokEOF),
 	)
 }
 
 func buildHeaderRule(g *GrammarDefiner, spec LanguageSpec) Rule {
-	flat          := LanguageSpecHeaderExpectationsFlat(spec)
-	sequenceRules := LangSpecBuildHeaderRules(g, flat)
+	flat := LanguageSpecHeaderExpectationsFlat(spec)
+	sequenceRules := langSpecBuildHeaderRules(g, flat)
 	headerContent := g.rb.Rule.Sequence(
 		GrammarIDHeaderContent,
 		NodeHeader,
@@ -362,10 +321,10 @@ func buildHeaderRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 }
 
 func buildPragmaRule(g *GrammarDefiner) Rule {
-	pragmaBody := g.Sequence(GrammarIDPragmaStatementBody, NodePragmaStatement).
-		ExpectToken(NodePragmaKey, TokIdentifier).
-		ExpectToken(NodePragmaValue, TokStringLiteral).
-		Build()
+	pragmaBody := g.sequence(GrammarIDPragmaStatementBody, NodePragmaStatement).
+		expectToken(NodePragmaKey, TokIdentifier).
+		expectToken(NodePragmaValue, TokStringLiteral).
+		build()
 	return g.rb.Rule.Nest(
 		GrammarIDPragmaStatement,
 		NodePragmaStatement,
@@ -375,23 +334,18 @@ func buildPragmaRule(g *GrammarDefiner) Rule {
 }
 
 func buildLexSectionRule(g *GrammarDefiner) Rule {
-	lexSection := g.rb.Rule.Sequence(
+	return g.block(
 		GrammarIDLexSection,
 		NodeLexSection,
-		g.ExpectToken(NodeLexKeyword, TokKWLex),
-		g.rb.Rule.TransparentNest(
-			GrammarIDLexSectionBody,
-			TokBraceOpen, TokBraceClose,
-			buildLexRuleList(g),
-		),
-		g.ExpectVirtual(GrammarIDLexSection, TokSemicolon),
+		NodeLexKeyword,
+		TokKWLex,
+		buildLexRuleList(g),
 	)
-	return lexSection
 }
 
 func buildLexRuleList(g *GrammarDefiner) Rule {
-	lexRule             := buildLexRule(g)
-	lexRuleWithRecovery  := g.rb.Rule.RecoverSync(lexRule, TokSemicolon)
+	lexRule := buildLexRule(g)
+	lexRuleWithRecovery := g.rb.Rule.RecoverSync(lexRule, TokSemicolon)
 	return g.rb.Rule.TransparentZeroOrMore(
 		GrammarIDLexRuleList,
 		lexRuleWithRecovery,
@@ -399,16 +353,16 @@ func buildLexRuleList(g *GrammarDefiner) Rule {
 }
 
 func buildLexRule(g *GrammarDefiner) Rule {
-	return g.Sequence(GrammarIDLexRule, NodeLexRule).
-		OptionalToken(NodeLexRulePriority, TokInteger).
-		ExpectToken(NodeLexRuleTokenName, TokStringLiteral).
-		ExpectVirtual(GrammarIDLexRule, TokChainSeparator).
-		ExpectToken(NodeLexRuleScope, TokStringLiteral).
-		ExpectVirtual(GrammarIDLexRule, TokRuleAssignment).
-		ExpectToken(NodeLexRulePattern, TokRegexLiteral).
-		OptionalRule(buildMetaSectionRule(g)).
-		ExpectVirtual(GrammarIDLexRule, TokSemicolon).
-		Build()
+	return g.sequence(GrammarIDLexRule, NodeLexRule).
+		optionalToken(NodeLexRulePriority, TokInteger).
+		expectToken(NodeLexRuleTokenName, TokStringLiteral).
+		expectVirtual(GrammarIDLexRule, TokChainSeparator).
+		expectToken(NodeLexRuleScope, TokStringLiteral).
+		expectVirtual(GrammarIDLexRule, TokAssignment).
+		expectToken(NodeLexRulePattern, TokRegexLiteral).
+		optionalRule(buildMetaSectionRule(g)).
+		expectVirtual(GrammarIDLexRule, TokSemicolon).
+		build()
 }
 
 func buildMetaSectionRule(g *GrammarDefiner) Rule {
@@ -424,11 +378,11 @@ func buildMetaSectionRule(g *GrammarDefiner) Rule {
 func buildMetaSectionBodyRule(g *GrammarDefiner) Rule {
 	return g.rb.Rule.TransparentZeroOrMore(
 		GrammarIDMetaKeyValuePair,
-		g.Sequence(GrammarIDMetaKeyValueSeq, NodeMetaKeyValuePair).
-			ExpectToken(NodeMetaKey, TokIdentifier).
-			ExpectVirtual(GrammarIDMetaAssignment, TokEqualsOperator).
-			ExpectToken(NodeMetaValue, TokStringLiteral).
-			Build(),
+		g.sequence(GrammarIDMetaKeyValueSeq, NodeMetaKeyValuePair).
+			expectToken(NodeMetaKey, TokIdentifier).
+			expectVirtual(GrammarIDMetaAssignment, TokEqualsOperator).
+			expectToken(NodeMetaValue, TokStringLiteral).
+			build(),
 	)
 }
 
@@ -462,6 +416,33 @@ func buildBlockCommentPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaA
 		stars,
 		f.Literal('/'),
 	)
+}
+
+func buildCharLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	normalChar := f.NegatedClass(
+		f.Range('\'', '\''),
+		f.Range('\\', '\\'),
+		f.Range('\n', '\n'),
+		f.Range('\r', '\r'),
+	)
+
+	escapeTrigger := f.Literal('\\')
+
+	escapedChar := f.Class(
+		f.Range('\'', '\''),
+		f.Range('\\', '\\'),
+		f.Range('n', 'n'),
+		f.Range('r', 'r'),
+		f.Range('t', 't'),
+	)
+
+	escapeSequence := f.Sequence(escapeTrigger, escapedChar)
+
+	charContent := f.AnyOf(normalChar, escapeSequence)
+
+	quote := f.Literal('\'')
+
+	return f.Sequence(quote, charContent, quote)
 }
 
 func buildStringLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {

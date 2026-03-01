@@ -33,8 +33,8 @@ func buildLangSpecDSLSpec() (
 	ruleBuilder := rule.RuleBuilderCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
 		LangSpecLexerTokenType.String,
 	)
-	g              := GrammarDefinerCreate(ruleBuilder)
-	programRule     := buildProgramRule(g, spec)
+	g := grammarDefinerCreate(ruleBuilder)
+	programRule := buildProgramRule(g, spec)
 
 	parserSpec, _ := buildLangSpecDSLParserSpec(programRule)
 

@@ -22,18 +22,17 @@ func _() {
 	_ = x[NodeDSLName-12]
 	_ = x[NodeVersion-13]
 	_ = x[NodeLSPECName-14]
-	_ = x[NodeIdentifier-15]
-	_ = x[NodeLexKeyword-16]
-	_ = x[NodeLexRule-17]
-	_ = x[NodeLexRuleTokenName-18]
-	_ = x[NodeLexRuleScope-19]
-	_ = x[NodeLexRulePattern-20]
-	_ = x[NodeLexRulePriority-21]
+	_ = x[NodeLexKeyword-15]
+	_ = x[NodeLexRule-16]
+	_ = x[NodeLexRuleTokenName-17]
+	_ = x[NodeLexRuleScope-18]
+	_ = x[NodeLexRulePattern-19]
+	_ = x[NodeLexRulePriority-20]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeIdentifierNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriority"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriority"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 213, 224, 244, 260, 278, 297}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 210, 230, 246, 264, 283}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1
