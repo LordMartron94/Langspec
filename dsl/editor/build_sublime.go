@@ -69,6 +69,9 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefTarget), "variable.other")
 	editorIRConfig.AddNodeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRef), langspeceditor.OverrideConfig{MetaScope: "meta.variable.reference"})
 
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodeLexRuleTokenName), "entity.name.token")
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodeLexRuleRole), "entity.name.token-role")
+
 	lexingRuleSet := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	programRule := dsl.LangSpecCompilerProgramRule(compiler)
 

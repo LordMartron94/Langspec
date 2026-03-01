@@ -100,7 +100,7 @@ const (
 	NodeLexKeyword
 	NodeLexRule
 	NodeLexRuleTokenName
-	NodeLexRuleScope
+	NodeLexRuleRole
 	NodeLexRulePattern
 	NodeLexRulePriority
 
@@ -370,7 +370,7 @@ func buildLexRule(g *GrammarDefiner) Rule {
 		optionalToken(NodeLexRulePriority, TokInteger).
 		expectToken(NodeLexRuleTokenName, TokStringLiteral).
 		expectVirtualInRule(TokChainSeparator).
-		expectToken(NodeLexRuleScope, TokStringLiteral).
+		expectToken(NodeLexRuleRole, TokStringLiteral).
 		expectVirtualInRule(TokAssignment).
 		expectToken(NodeLexRulePattern, TokRegexLiteral).
 		optionalRule(buildMetaSectionRule(g)).
