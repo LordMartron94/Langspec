@@ -294,11 +294,11 @@ func renderParseTrace[TToken any](
 	fmt.Fprintln(w, "======================")
 }
 
-func renderASTDump(w io.Writer, dump string) {
+func renderLSTDump(w io.Writer, dump string) {
 	if w == nil || dump == "" {
 		return
 	}
-	fmt.Fprintln(w, "\n===== AST DEBUG DUMP =====")
+	fmt.Fprintln(w, "\n===== LST DEBUG DUMP =====")
 	fmt.Fprintln(w, dump)
 	fmt.Fprintln(w, "=========================")
 }

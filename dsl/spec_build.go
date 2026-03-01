@@ -369,9 +369,8 @@ func buildPragmaRule(g *GrammarDefiner) Rule {
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectToken(NodePragmaValue, TokStringLiteral).
 		build()
-	return g.rb.Rule.Nest(
+	return g.rb.Rule.TransparentNest(
 		LangSpecGrammarIDFromNode(NodePragmaStatement, ""),
-		NodePragmaStatement,
 		TokPragmaStart, TokSemicolon,
 		pragmaBody,
 	)

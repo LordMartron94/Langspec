@@ -7,7 +7,7 @@ import (
 
 /*
 LangSpecDiagnosticSink directs compilation diagnostics (syntax errors, parse trace,
-validation results, AST dumps) to an io.Writer. When Writer is nil, no diagnostic
+validation results, LST dumps) to an io.Writer. When Writer is nil, no diagnostic
 output is produced. Use DefaultLangSpecDiagnosticSink for stdout, or pass a
 bytes.Buffer in tests to capture output.
 */

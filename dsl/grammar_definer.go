@@ -23,7 +23,7 @@ func grammarDefinerCreate(rb *RuleBuilder) *GrammarDefiner {
 }
 
 /*
-expectToken returns a rule that expects the token and creates an AST node of that kind.
+expectToken returns a rule that expects the token and creates an LST node of that kind.
 GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
@@ -32,7 +32,7 @@ func (g *GrammarDefiner) expectToken(node LangSpecParserNodeKind, tok LangSpecLe
 }
 
 /*
-expectTokenWithGrammarID returns a rule that expects the token and creates an AST node,
+expectTokenWithGrammarID returns a rule that expects the token and creates an LST node,
 using the given grammarID. Use for header expectations when the node maps to multiple
 grammar IDs (e.g. NodeVersion for DSL vs Langspec version) via GrammarIDOverride.
 */
@@ -41,7 +41,7 @@ func (g *GrammarDefiner) expectTokenWithGrammarID(grammarID syntaxa.GrammarID, n
 }
 
 /*
-expectVirtual returns a rule that consumes the token without creating an AST node.
+expectVirtual returns a rule that consumes the token without creating an LST node.
 Uses VirtualGrammarIDToGrammarID to resolve the virtual ID to syntaxa.GrammarID.
 */
 func (g *GrammarDefiner) expectVirtual(v VirtualGrammarID, tok LangSpecLexerTokenType) Rule {
@@ -58,7 +58,7 @@ func (g *GrammarDefiner) expectVirtualInRule(node LangSpecParserNodeKind, tok La
 }
 
 /*
-expectOneOf returns a rule that expects one of the given tokens and creates an AST node
+expectOneOf returns a rule that expects one of the given tokens and creates an LST node
 of that kind. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectOneOf(node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
@@ -68,14 +68,14 @@ func (g *GrammarDefiner) expectOneOf(node LangSpecParserNodeKind, tokens ...Lang
 
 /*
 expectOneOfWithGrammarID returns a rule that expects one of the tokens and creates an
-AST node, using the given grammarID. Use when the node maps to multiple grammar IDs.
+LST node, using the given grammarID. Use when the node maps to multiple grammar IDs.
 */
 func (g *GrammarDefiner) expectOneOfWithGrammarID(grammarID syntaxa.GrammarID, node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
 	return g.rb.Token.ExpectOneOf(grammarID, node, tokens...)
 }
 
 /*
-expectPair returns a rule that expects two tokens in sequence and creates a single AST node
+expectPair returns a rule that expects two tokens in sequence and creates a single LST node
 with both lexemes attached. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectPair(node LangSpecParserNodeKind, firstToken, secondToken LangSpecLexerTokenType) Rule {
@@ -137,7 +137,7 @@ type SequenceBuilder struct {
 }
 
 /*
-expectToken appends a rule that expects the token and creates an AST node (derived GrammarID).
+expectToken appends a rule that expects the token and creates an LST node (derived GrammarID).
 */
 func (s *SequenceBuilder) expectToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.expectToken(node, tok))

@@ -20,12 +20,12 @@ type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerT
 type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
-type ValidationStage = validation.ASTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
-type ValidationStageCtx = validation.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
-type Node = syntaxa.SyntaxaASTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type Node = syntaxa.SyntaxaLSTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
 	return syntaxa.AttributeAs[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, TAttribute](
@@ -38,7 +38,7 @@ func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 /* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
-	stageReporter             validation.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 	diagnosticSink            *LangSpecDiagnosticSink
 }
 
@@ -46,11 +46,11 @@ type LangSpecCompilerConfiguration struct {
 LangSpecCompilerConfigurationCreate creates an instance of the compiler configuration.
 
 Stage reporter is optional. DiagnosticSink is optional; when set, compilation diagnostics
-(syntax errors, trace, validation, AST dump) are written to the sink's Writer.
+(syntax errors, trace, validation, LST dump) are written to the sink's Writer.
 */
 func LangSpecCompilerConfigurationCreate(
 	scratchAllocationFunction memarch.AllocationFn,
-	stageReporter validation.ASTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
+	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 ) *LangSpecCompilerConfiguration {
 	return &LangSpecCompilerConfiguration{
 		scratchAllocationFunction: scratchAllocationFunction,
@@ -71,7 +71,7 @@ func (c *LangSpecCompilerConfiguration) WithDiagnosticSink(sink *LangSpecDiagnos
 // --------------------------------------------------------------- COMPILER
 
 /*
-LangSpecCompileResult holds the result of compiling a .lspec file: the parsed AST,
+LangSpecCompileResult holds the result of compiling a .lspec file: the parsed LST,
 parse trace, syntax errors (if any), and validation entries (when validation was run).
 Callers can inspect the result without parsing stdout.
 */
@@ -91,7 +91,7 @@ type LangSpecCompiler struct {
 	languageSpec LanguageSpec
 
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-	validatorConfig *validation.ASTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 	programRule   Rule
@@ -109,7 +109,7 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	)
 	parser := langspec.LangParserCreate(langParserConfig)
 
-	validationConfig := validation.ASTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]()
+	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]()
 	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
 		getValidationStages()...,
 	)
@@ -136,7 +136,7 @@ func LangSpecCompilerDestroy(compiler *LangSpecCompiler) {
 /*
 LangSpecCompilerCompile compiles a .lspec file and returns a structured result plus an error.
 When the file is not .lspec or lexing fails, result is nil. Otherwise result is populated
-with the parsed AST, trace, syntax errors, and validation entries (if validation ran).
+with the parsed LST, trace, syntax errors, and validation entries (if validation ran).
 Diagnostic output is written only when config's DiagnosticSink is set.
 */
 func LangSpecCompilerCompile(
@@ -213,7 +213,7 @@ func LangSpecCompilerCompile(
 
 	// Validation entries
 	if !syntaxErrors.HasErrors() {
-		validationEntries, validationErr := validation.ASTValidatorRun(compiler.validatorConfig, rootNode)
+		validationEntries, validationErr := validation.LSTValidatorRun(compiler.validatorConfig, rootNode)
 		if validationErr != nil {
 			err = validationErr
 		}
@@ -238,9 +238,9 @@ func LangSpecCompilerCompile(
 		}
 	}
 
-	// AST dump (visual ground truth)
+	// LST dump (visual ground truth)
 	dump := rootNode.DebugDump(
-		syntaxa.ASTDebugFormatter[
+		syntaxa.LSTDebugFormatter[
 			rune,
 			LangSpecLexerTokenType,
 			LangSpecLexerTokenRole,
@@ -283,7 +283,7 @@ func LangSpecCompilerCompile(
 		},
 	)
 
-	renderASTDump(w, dump)
+	renderLSTDump(w, dump)
 
 	return result, err
 }

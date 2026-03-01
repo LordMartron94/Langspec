@@ -55,7 +55,7 @@ func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind, suffix string) synta
 }
 
 /*
-VirtualGrammarID identifies a grammar rule that has no AST node (e.g. EOF, punctuation-only slots).
+VirtualGrammarID identifies a grammar rule that has no LST node (e.g. EOF, punctuation-only slots).
 Used for virtual expectations; the string form is produced by VirtualGrammarIDToGrammarID.
 */
 type VirtualGrammarID uint8

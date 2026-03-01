@@ -8,7 +8,7 @@ import (
 
 // ------------------------------------------------------------- TYPES
 
-type ValidationCtx = validation.ASTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 type ValidationCode string
 
