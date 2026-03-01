@@ -27,13 +27,14 @@ func _() {
 	_ = x[TokStringLiteral-17]
 	_ = x[TokRegexLiteral-18]
 	_ = x[TokVersion-19]
-	_ = x[TokKWLSpec-20]
-	_ = x[TokKWLex-21]
+	_ = x[TokInteger-20]
+	_ = x[TokKWLSpec-21]
+	_ = x[TokKWLex-22]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokPragmaStartTokDashesTokHeaderSeparatorTokBraceOpenTokBraceCloseTokSemicolonTokCommaTokChainSeparatorTokRuleAssignmentTokEqualsOperatorTokMetaSectionTokIdentifierTokStringLiteralTokRegexLiteralTokVersionTokKWLSpecTokKWLex"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokPragmaStartTokDashesTokHeaderSeparatorTokBraceOpenTokBraceCloseTokSemicolonTokCommaTokChainSeparatorTokRuleAssignmentTokEqualsOperatorTokMetaSectionTokIdentifierTokStringLiteralTokRegexLiteralTokVersionTokIntegerTokKWLSpecTokKWLex"
 
-var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 62, 71, 89, 101, 114, 126, 134, 151, 168, 185, 199, 212, 228, 243, 253, 263, 271}
+var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 62, 71, 89, 101, 114, 126, 134, 151, 168, 185, 199, 212, 228, 243, 253, 263, 273, 281}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1

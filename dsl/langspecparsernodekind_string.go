@@ -28,11 +28,12 @@ func _() {
 	_ = x[NodeLexRuleTokenName-18]
 	_ = x[NodeLexRuleScope-19]
 	_ = x[NodeLexRulePattern-20]
+	_ = x[NodeLexRulePriority-21]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeIdentifierNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePattern"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeIdentifierNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriority"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 213, 224, 244, 260, 278}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 213, 224, 244, 260, 278, 297}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

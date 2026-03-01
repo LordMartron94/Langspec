@@ -6,6 +6,145 @@ import (
 	"syntaxa"
 )
 
+// ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
+
+//go:generate stringer -type LangSpecLexerState
+type LangSpecLexerState uint8
+
+const (
+	LANG_SPEC_LEXER_STATE_DEFAULT LangSpecLexerState = iota + 1
+)
+
+//go:generate stringer -type LangSpecLexerTokenType
+type LangSpecLexerTokenType uint32
+
+const (
+	// -- Control & Whitespace --
+	TokEOF LangSpecLexerTokenType = iota + 1
+	TokWhitespace
+	TokLineComment
+	TokBlockComment
+	TokPragmaStart
+
+	// -- Punctuation & Operators --
+	TokDashes
+	TokHeaderSeparator
+	TokBraceOpen
+	TokBraceClose
+	TokSemicolon
+	TokComma
+	TokChainSeparator
+	TokRuleAssignment
+	TokEqualsOperator
+	TokMetaSection
+	TokIdentifier
+
+	// -- Literals --
+	TokStringLiteral
+	TokRegexLiteral
+	TokVersion
+	TokInteger
+
+	// -- Keywords --
+	TokKWLSpec
+	TokKWLex
+)
+
+//go:generate stringer -type LangSpecLexerTokenRole
+type LangSpecLexerTokenRole uint8
+
+const (
+	LANG_SPEC_STRUCTURAL_ROLE LangSpecLexerTokenRole = iota + 1
+	LANG_SPEC_WHITESPACE_ROLE
+	LANG_SPEC_COMMENT_ROLE
+)
+
+//go:generate stringer -type LangSpecParserNodeKind
+type LangSpecParserNodeKind uint32
+
+const (
+	NodeError LangSpecParserNodeKind = iota + 1
+
+	// -- Root & Top Level --
+	NodeProgram
+	NodeHeader
+	NodeLexSection
+
+	// Pragmas
+
+	NodePragmaStatement
+	NodePragmaKey
+	NodePragmaValue
+
+	// Meta
+	NodeMetaSection
+	NodeMetaKeyValuePair
+
+	NodeMetaKey
+	NodeMetaValue
+
+	// -- Header Elements --
+	NodeDSLName
+	NodeVersion
+	NodeLSPECName
+	NodeIdentifier
+
+	// -- Lex Elements --
+	NodeLexKeyword
+	NodeLexRule
+	NodeLexRuleTokenName
+	NodeLexRuleScope
+	NodeLexRulePattern
+	NodeLexRulePriority
+)
+
+const (
+	// Root & General
+	GrammarIDProgram    syntaxa.GrammarID = "PROGRAM"
+	GrammarIDEOF        syntaxa.GrammarID = "EOF"
+	GrammarIDBlockClose syntaxa.GrammarID = "BLOCK CLOSE"
+
+	// Header
+	GrammarIDHeader          syntaxa.GrammarID = "HEADER"
+	GrammarIDHeaderContent   syntaxa.GrammarID = "HEADER CONTENT"
+	GrammarIDHeaderSeparator syntaxa.GrammarID = "HEADER SEPARATOR"
+	GrammarIDHeaderDashes    syntaxa.GrammarID = "HEADER DASHES"
+	GrammarIDDSLName         syntaxa.GrammarID = "DSL NAME"
+	GrammarIDDSLVersion      syntaxa.GrammarID = "DSL VERSION"
+	GrammarIDLangspecName    syntaxa.GrammarID = "LANGSPEC NAME"
+	GrammarIDLangspecVersion syntaxa.GrammarID = "LANGSPEC VERSION"
+
+	// Pragma Section
+	GrammarIDPragmaSection       syntaxa.GrammarID = "PRAGMA SECTION"
+	GrammarIDPragmaStatement     syntaxa.GrammarID = "PRAGMA STATEMENT"
+	GrammarIDPragmaStatementBody syntaxa.GrammarID = "PRAGMA STATEMENT BODY"
+	GrammarIDPragmaStart         syntaxa.GrammarID = "PRAGMA START"
+	GrammarIDPragmaEnd           syntaxa.GrammarID = "PRAGMA END"
+
+	GrammarIDPragmaKey   syntaxa.GrammarID = "PRAGMA KEY"
+	GrammarIDPragmaValue syntaxa.GrammarID = "PRAGMA VALUE"
+
+	// Meta Section
+	GrammarIDMetaSection      syntaxa.GrammarID = "META SECTION"
+	GrammarIDMetaKeyValuePair syntaxa.GrammarID = "META KEY VALUE PAIR"
+	GrammarIDMetaKeyValueSeq  syntaxa.GrammarID = "META KEY VALUE SEQUENCE"
+
+	GrammarIDMetaKey        syntaxa.GrammarID = "META KEY"
+	GrammarIDMetaValue      syntaxa.GrammarID = "META VALUE"
+	GrammarIDMetaAssignment syntaxa.GrammarID = "META ASSIGNMENT"
+
+	// Lex Section
+	GrammarIDLexSection       syntaxa.GrammarID = "LEX SECTION"
+	GrammarIDLexSectionBody   syntaxa.GrammarID = "LEX SECTION BODY"
+	GrammarIDLexRuleList      syntaxa.GrammarID = "LEX RULE LIST"
+	GrammarIDLexKeyword       syntaxa.GrammarID = "LEX KEYWORD"
+	GrammarIDLexRule          syntaxa.GrammarID = "LEX RULE"
+	GrammarIDLexRuleTokenName syntaxa.GrammarID = "LEX RULE TOKEN NAME"
+	GrammarIDLexRuleScope     syntaxa.GrammarID = "LEX RULE SCOPE"
+	GrammarIDLexRulePattern   syntaxa.GrammarID = "LEX RULE PATTERN"
+	GrammarIDLexRulePriority  syntaxa.GrammarID = "LEX RULE PRIORITY"
+)
+
 // ----------------------------------------------------------- SINGLE SOURCE OF TRUTH
 
 /*
@@ -40,6 +179,11 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		DefineToken(TokDashes).
 			Scope("punctuation.definition.separator").
 			Pattern(pattern.LiteralString(f, "---")).
+			Build(),
+
+		DefineToken(TokInteger).
+			Scope("constant.numeric").
+			Pattern(t.Digit()).
 			Build(),
 
 		DefineToken(TokMetaSection).
@@ -280,6 +424,9 @@ func buildLexRule(ruleBuilder *RuleBuilder) Rule {
 	return ruleBuilder.Rule.Sequence(
 		GrammarIDLexRule,
 		NodeLexRule,
+		ruleBuilder.Rule.Optional(
+			ruleBuilder.Token.Expect(GrammarIDLexRulePriority, NodeLexRulePriority, TokInteger),
+		),
 		ruleBuilder.Token.Expect(GrammarIDLexRuleTokenName, NodeLexRuleTokenName, TokStringLiteral),
 		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokChainSeparator),
 		ruleBuilder.Token.Expect(GrammarIDLexRuleScope, NodeLexRuleScope, TokStringLiteral),
@@ -313,142 +460,6 @@ func buildMetaSectionBodyRule(ruleBuilder *RuleBuilder) Rule {
 		),
 	)
 }
-
-// ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
-
-//go:generate stringer -type LangSpecLexerState
-type LangSpecLexerState uint8
-
-const (
-	LANG_SPEC_LEXER_STATE_DEFAULT LangSpecLexerState = iota + 1
-)
-
-//go:generate stringer -type LangSpecLexerTokenType
-type LangSpecLexerTokenType uint32
-
-const (
-	// -- Control & Whitespace --
-	TokEOF LangSpecLexerTokenType = iota + 1
-	TokWhitespace
-	TokLineComment
-	TokBlockComment
-	TokPragmaStart
-
-	// -- Punctuation & Operators --
-	TokDashes
-	TokHeaderSeparator
-	TokBraceOpen
-	TokBraceClose
-	TokSemicolon
-	TokComma
-	TokChainSeparator
-	TokRuleAssignment
-	TokEqualsOperator
-	TokMetaSection
-	TokIdentifier
-
-	// -- Literals --
-	TokStringLiteral
-	TokRegexLiteral
-	TokVersion
-
-	// -- Keywords --
-	TokKWLSpec
-	TokKWLex
-)
-
-//go:generate stringer -type LangSpecLexerTokenRole
-type LangSpecLexerTokenRole uint8
-
-const (
-	LANG_SPEC_STRUCTURAL_ROLE LangSpecLexerTokenRole = iota + 1
-	LANG_SPEC_WHITESPACE_ROLE
-	LANG_SPEC_COMMENT_ROLE
-)
-
-//go:generate stringer -type LangSpecParserNodeKind
-type LangSpecParserNodeKind uint32
-
-const (
-	NodeError LangSpecParserNodeKind = iota + 1
-
-	// -- Root & Top Level --
-	NodeProgram
-	NodeHeader
-	NodeLexSection
-
-	// Pragmas
-
-	NodePragmaStatement
-	NodePragmaKey
-	NodePragmaValue
-
-	// Meta
-	NodeMetaSection
-	NodeMetaKeyValuePair
-
-	NodeMetaKey
-	NodeMetaValue
-
-	// -- Header Elements --
-	NodeDSLName
-	NodeVersion
-	NodeLSPECName
-	NodeIdentifier
-
-	// -- Lex Elements --
-	NodeLexKeyword
-	NodeLexRule
-	NodeLexRuleTokenName
-	NodeLexRuleScope
-	NodeLexRulePattern
-)
-
-const (
-	// Root & General
-	GrammarIDProgram    syntaxa.GrammarID = "PROGRAM"
-	GrammarIDEOF        syntaxa.GrammarID = "EOF"
-	GrammarIDBlockClose syntaxa.GrammarID = "BLOCK CLOSE"
-
-	// Header
-	GrammarIDHeader          syntaxa.GrammarID = "HEADER"
-	GrammarIDHeaderContent   syntaxa.GrammarID = "HEADER CONTENT"
-	GrammarIDHeaderSeparator syntaxa.GrammarID = "HEADER SEPARATOR"
-	GrammarIDHeaderDashes    syntaxa.GrammarID = "HEADER DASHES"
-	GrammarIDDSLName         syntaxa.GrammarID = "DSL NAME"
-	GrammarIDDSLVersion      syntaxa.GrammarID = "DSL VERSION"
-	GrammarIDLangspecName    syntaxa.GrammarID = "LANGSPEC NAME"
-	GrammarIDLangspecVersion syntaxa.GrammarID = "LANGSPEC VERSION"
-
-	// Pragma Section
-	GrammarIDPragmaSection       syntaxa.GrammarID = "PRAGMA SECTION"
-	GrammarIDPragmaStatement     syntaxa.GrammarID = "PRAGMA STATEMENT"
-	GrammarIDPragmaStatementBody syntaxa.GrammarID = "PRAGMA STATEMENT BODY"
-	GrammarIDPragmaStart         syntaxa.GrammarID = "PRAGMA START"
-	GrammarIDPragmaEnd           syntaxa.GrammarID = "PRAGMA END"
-
-	GrammarIDPragmaKey   syntaxa.GrammarID = "PRAGMA KEY"
-	GrammarIDPragmaValue syntaxa.GrammarID = "PRAGMA VALUE"
-
-	// Meta Section
-	GrammarIDMetaSection      syntaxa.GrammarID = "META SECTION"
-	GrammarIDMetaKeyValuePair syntaxa.GrammarID = "META KEY VALUE PAIR"
-	GrammarIDMetaKeyValueSeq  syntaxa.GrammarID = "META KEY VALUE SEQUENCE"
-
-	GrammarIDMetaKey        syntaxa.GrammarID = "META KEY"
-	GrammarIDMetaValue      syntaxa.GrammarID = "META VALUE"
-	GrammarIDMetaAssignment syntaxa.GrammarID = "META ASSIGNMENT"
-
-	// Lex Section
-	GrammarIDLexSection       syntaxa.GrammarID = "LEX SECTION"
-	GrammarIDLexSectionBody   syntaxa.GrammarID = "LEX SECTION BODY"
-	GrammarIDLexRuleList      syntaxa.GrammarID = "LEX RULE LIST"
-	GrammarIDLexKeyword       syntaxa.GrammarID = "LEX KEYWORD"
-	GrammarIDLexRule          syntaxa.GrammarID = "LEX RULE"
-	GrammarIDLexRuleTokenName syntaxa.GrammarID = "LEX RULE TOKEN NAME"
-	GrammarIDLexRuleScope     syntaxa.GrammarID = "LEX RULE SCOPE"
-	GrammarIDLexRulePattern   syntaxa.GrammarID = "LEX RULE PATTERN"
-)
 
 // ----------------------------------------------------------- PATTERN HELPERS (used only by BuildLanguageSpec)
 
