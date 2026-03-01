@@ -1,89 +1,89 @@
 package dsl
 
 import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
 	"syntaxa"
 )
 
-const (
-	// Root & General
-	GrammarIDProgram    syntaxa.GrammarID = "PROGRAM"
-	GrammarIDEOF        syntaxa.GrammarID = "EOF"
-	GrammarIDBlockClose syntaxa.GrammarID = "BLOCK CLOSE"
-
-	GrammarIDVariableReference   syntaxa.GrammarID = "VARIABLE REFERENCE"
-	GrammarIDRange               syntaxa.GrammarID = "RANGE"
-	GrammarIDCharacterRangeStart syntaxa.GrammarID = "RANGE START"
-	GrammarIDCharacterRangeEnd   syntaxa.GrammarID = "RANGE END"
-	GrammarIDCharacterLiteral    syntaxa.GrammarID = "CHARACTER LITERAL"
-
-	// Header
-	GrammarIDHeader          syntaxa.GrammarID = "HEADER"
-	GrammarIDHeaderContent   syntaxa.GrammarID = "HEADER CONTENT"
-	GrammarIDHeaderSeparator syntaxa.GrammarID = "HEADER SEPARATOR"
-	GrammarIDHeaderDashes    syntaxa.GrammarID = "HEADER DASHES"
-	GrammarIDDSLName         syntaxa.GrammarID = "DSL NAME"
-	GrammarIDDSLVersion      syntaxa.GrammarID = "DSL VERSION"
-	GrammarIDLangspecName    syntaxa.GrammarID = "LANGSPEC NAME"
-	GrammarIDLangspecVersion syntaxa.GrammarID = "LANGSPEC VERSION"
-
-	// Pragma Section
-	GrammarIDPragmaSection       syntaxa.GrammarID = "PRAGMA SECTION"
-	GrammarIDPragmaStatement     syntaxa.GrammarID = "PRAGMA STATEMENT"
-	GrammarIDPragmaStatementBody syntaxa.GrammarID = "PRAGMA STATEMENT BODY"
-	GrammarIDPragmaStart         syntaxa.GrammarID = "PRAGMA START"
-	GrammarIDPragmaEnd           syntaxa.GrammarID = "PRAGMA END"
-
-	GrammarIDPragmaKey   syntaxa.GrammarID = "PRAGMA KEY"
-	GrammarIDPragmaValue syntaxa.GrammarID = "PRAGMA VALUE"
-
-	// Meta Section
-	GrammarIDMetaSection      syntaxa.GrammarID = "META SECTION"
-	GrammarIDMetaKeyValuePair syntaxa.GrammarID = "META KEY VALUE PAIR"
-	GrammarIDMetaKeyValueSeq  syntaxa.GrammarID = "META KEY VALUE SEQUENCE"
-
-	GrammarIDMetaKey        syntaxa.GrammarID = "META KEY"
-	GrammarIDMetaValue      syntaxa.GrammarID = "META VALUE"
-	GrammarIDMetaAssignment syntaxa.GrammarID = "META ASSIGNMENT"
-
-	// Lex Section
-	GrammarIDLexSection       syntaxa.GrammarID = "LEX SECTION"
-	GrammarIDLexSectionBody   syntaxa.GrammarID = "LEX SECTION BODY"
-	GrammarIDLexRuleList      syntaxa.GrammarID = "LEX RULE LIST"
-	GrammarIDLexKeyword       syntaxa.GrammarID = "LEX KEYWORD"
-	GrammarIDLexRule          syntaxa.GrammarID = "LEX RULE"
-	GrammarIDLexRuleTokenName syntaxa.GrammarID = "LEX RULE TOKEN NAME"
-	GrammarIDLexRuleScope     syntaxa.GrammarID = "LEX RULE SCOPE"
-	GrammarIDLexRulePattern   syntaxa.GrammarID = "LEX RULE PATTERN"
-	GrammarIDLexRulePriority  syntaxa.GrammarID = "LEX RULE PRIORITY"
-)
-
 /*
-LangSpec grammar registry: canonical mapping from LangSpecParserNodeKind to syntaxa.GrammarID
-for nodes that produce an AST slot. Used by GrammarDefiner to resolve GrammarID from NodeKind
-so callers can pass only node and token. Virtual expectations still pass GrammarID explicitly.
+pascalCaseToSpaceUppercase converts a PascalCase identifier to space-separated uppercase
+(e.g. "DSLName" -> "DSL NAME"). Used to derive a stable GrammarID from a node kind name.
 */
-
-var langSpecNodeToGrammarID = map[LangSpecParserNodeKind]syntaxa.GrammarID{
-	NodeDSLName:          GrammarIDDSLName,
-	NodeVersion:          GrammarIDDSLVersion,
-	NodeLSPECName:        GrammarIDLangspecName,
-	NodePragmaKey:        GrammarIDPragmaKey,
-	NodePragmaValue:      GrammarIDPragmaValue,
-	NodeMetaKey:          GrammarIDMetaKey,
-	NodeMetaValue:        GrammarIDMetaValue,
-	NodeLexKeyword:       GrammarIDLexKeyword,
-	NodeLexRuleTokenName: GrammarIDLexRuleTokenName,
-	NodeLexRuleScope:     GrammarIDLexRuleScope,
-	NodeLexRulePattern:   GrammarIDLexRulePattern,
-	NodeLexRulePriority:  GrammarIDLexRulePriority,
+func pascalCaseToSpaceUppercase(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	var prevLower bool
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		isUpper := unicode.IsUpper(r)
+		if isUpper && (b.Len() > 0 && prevLower) {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(unicode.ToUpper(r))
+		prevLower = unicode.IsLower(r)
+	}
+	return b.String()
 }
 
 /*
-langSpecGrammarIDForNode returns the canonical GrammarID for the given node kind, if any.
-Used by GrammarDefiner for ExpectToken and ExpectOneOf. Returns false for node kinds
-that have no single canonical grammar ID (e.g. structural or context-dependent).
+LangSpecGrammarIDFromNode returns a stable syntaxa.GrammarID for the given node kind.
+If suffix is non-empty, the result is derivedBase + " " + suffix (e.g. NodeHeader + "CONTENT" -> "HEADER CONTENT").
+NodeLSPECName is special-cased to "LANGSPEC NAME" for display consistency.
+NodeMetaKeyValuePair + suffix "SEQUENCE" is special-cased to "META KEY VALUE SEQUENCE".
 */
-func langSpecGrammarIDForNode(node LangSpecParserNodeKind) (syntaxa.GrammarID, bool) {
-	id, ok := langSpecNodeToGrammarID[node]
-	return id, ok
+func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind, suffix string) syntaxa.GrammarID {
+	if node == NodeMetaKeyValuePair && suffix == "SEQUENCE" {
+		return "META KEY VALUE SEQUENCE"
+	}
+	name := node.String()
+	if strings.HasPrefix(name, "Node") {
+		name = name[len("Node"):]
+	}
+	if name == "LSPECName" {
+		name = "LANGSPEC NAME"
+	} else {
+		name = pascalCaseToSpaceUppercase(name)
+	}
+	if suffix != "" {
+		return syntaxa.GrammarID(name + " " + suffix)
+	}
+	return syntaxa.GrammarID(name)
+}
+
+/*
+VirtualGrammarID identifies a grammar rule that has no AST node (e.g. EOF, punctuation-only slots).
+Used for virtual expectations; the string form is produced by VirtualGrammarIDToGrammarID.
+*/
+type VirtualGrammarID uint8
+
+const (
+	VirtualEOF VirtualGrammarID = iota + 1
+	VirtualHeaderDashes
+	VirtualHeaderSeparator
+	VirtualMetaAssignment
+)
+
+/*
+VirtualGrammarIDToGrammarID returns the canonical syntaxa.GrammarID string for the virtual ID.
+Stable and used by GrammarDefiner when building virtual expectations.
+*/
+func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarID {
+	switch v {
+	case VirtualEOF:
+		return "EOF"
+	case VirtualHeaderDashes:
+		return "HEADER DASHES"
+	case VirtualHeaderSeparator:
+		return "HEADER SEPARATOR"
+	case VirtualMetaAssignment:
+		return "META ASSIGNMENT"
+	default:
+		return syntaxa.GrammarID("VIRTUAL_UNKNOWN")
+	}
 }

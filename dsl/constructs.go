@@ -2,7 +2,6 @@ package dsl
 
 import (
 	"autarch/pattern"
-	"syntaxa"
 )
 
 /*
@@ -122,18 +121,21 @@ const (
 )
 
 /*
-DSLHeaderExpectation is one slot in the header content: grammar ID, node kind, token(s),
-and nest action. ScopeOverride and NestOnly are optional.
+DSLHeaderExpectation is one slot in the header content: either a virtual expectation
+(VirtualID + Tokens) or a node-backed one (NodeKind + optional Suffix/GrammarIDOverride + Tokens).
+NestAction, ScopeOverride, and NestOnly are optional.
 */
 type DSLHeaderExpectation struct {
-	GrammarID     syntaxa.GrammarID
-	NodeKind      LangSpecParserNodeKind
-	Tokens        []LangSpecLexerTokenType
-	Virtual       bool
-	NestAction    DSLNestAction
-	PopCount      int
-	ScopeOverride string
-	NestOnly      bool
+	Virtual          bool
+	VirtualID        VirtualGrammarID
+	NodeKind         LangSpecParserNodeKind
+	Suffix           string
+	GrammarIDOverride string
+	Tokens           []LangSpecLexerTokenType
+	NestAction       DSLNestAction
+	PopCount         int
+	ScopeOverride    string
+	NestOnly         bool
 }
 
 // ----------------------------------------------------------- EXPECT BUILDER
@@ -147,20 +149,45 @@ type ExpectBuilder struct {
 }
 
 /*
-Expect starts a fluent header expectation with sensible defaults:
-NestAction DSLNestActionMatch; other fields zero.
+ExpectNode starts a fluent header expectation for a node-backed slot. GrammarID is
+derived from node and optional suffix; use GrammarID for context-dependent overrides
+(e.g. "DSL VERSION" vs "LANGSPEC VERSION" for NodeVersion). NestAction defaults to Match.
 */
-func Expect(id syntaxa.GrammarID) *ExpectBuilder {
+func ExpectNode(node LangSpecParserNodeKind) *ExpectBuilder {
 	return &ExpectBuilder{
 		expect: DSLHeaderExpectation{
-			GrammarID:  id,
+			NodeKind:   node,
 			NestAction: DSLNestActionMatch,
+		},
+	}
+}
+
+/*
+ExpectVirtual starts a fluent header expectation for a virtual slot (no AST node).
+NestAction defaults to Match.
+*/
+func ExpectVirtual(v VirtualGrammarID) *ExpectBuilder {
+	return &ExpectBuilder{
+		expect: DSLHeaderExpectation{
+			Virtual:    true,
+			VirtualID:   v,
+			NestAction:  DSLNestActionMatch,
 		},
 	}
 }
 
 func (b *ExpectBuilder) Node(kind LangSpecParserNodeKind) *ExpectBuilder {
 	b.expect.NodeKind = kind
+	return b
+}
+
+func (b *ExpectBuilder) Suffix(suffix string) *ExpectBuilder {
+	b.expect.Suffix = suffix
+	return b
+}
+
+func (b *ExpectBuilder) GrammarID(id string) *ExpectBuilder {
+	b.expect.GrammarIDOverride = id
 	return b
 }
 

@@ -116,7 +116,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 
 	editorIRConfig.AddNestOverrideByPredicate(
 		func(nest *syntaxa.NestSpec[dsl.LangSpecLexerTokenType]) bool {
-			return nest.OwnerRule == dsl.GrammarIDHeader
+			return nest.OwnerRule == dsl.LangSpecGrammarIDFromNode(dsl.NodeHeader, "")
 		},
 		func(ctx *langspeceditor.NestOverrideContext[dsl.LangSpecLexerTokenType]) (langspeceditor.StateID, []langspeceditor.State) {
 			steps := dslHeaderSpecToNestSteps(headerSpec, scopeResolver)

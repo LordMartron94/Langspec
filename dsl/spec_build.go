@@ -232,40 +232,36 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 
 	spec.Headers = []DSLHeaderNestStep{
 		defHeaderStep("expect_name", "meta.block.header",
-			Expect(GrammarIDDSLName).
-				Node(NodeDSLName).
+			ExpectNode(NodeDSLName).
 				Tokens(TokStringLiteral).
 				PushNext().
 				ScopeOverride("entity.name.language").
 				Build(),
 		),
 		defHeaderStep("expect_version", "",
-			Expect(GrammarIDDSLVersion).
-				Node(NodeVersion).
+			ExpectNode(NodeVersion).
+				GrammarID("DSL VERSION").
 				Tokens(TokVersion).
 				PushNext().
 				Build(),
 		),
 		defHeaderStep("expect_tail", "",
-			Expect(GrammarIDHeaderDashes).
+			ExpectVirtual(VirtualHeaderDashes).
 				Tokens(TokDashes).
-				Virtual().
 				Pop(3).
 				NestOnly().
 				Build(),
 
-			Expect(GrammarIDHeaderSeparator).
+			ExpectVirtual(VirtualHeaderSeparator).
 				Tokens(TokPipe).
-				Virtual().
 				Build(),
 
-			Expect(GrammarIDLangspecName).
-				Node(NodeLSPECName).
+			ExpectNode(NodeLSPECName).
 				Tokens(TokStringLiteral, TokKWLSpec).
 				Build(),
 
-			Expect(GrammarIDLangspecVersion).
-				Node(NodeVersion).
+			ExpectNode(NodeVersion).
+				GrammarID("LANGSPEC VERSION").
 				Tokens(TokVersion).
 				Build(),
 		),
@@ -295,13 +291,13 @@ func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 	lexSectionRule := buildLexSectionRule(g)
 
 	return g.rb.Rule.Root(
-		GrammarIDProgram,
+		LangSpecGrammarIDFromNode(NodeProgram, ""),
 		NodeProgram,
 		false,
 		g.rb.Rule.Required(headerRule, "must have header"),
-		g.rb.Rule.TransparentZeroOrMore(GrammarIDPragmaSection, pragmaRule),
+		g.rb.Rule.TransparentZeroOrMore(LangSpecGrammarIDFromNode(NodePragmaStatement, ""), pragmaRule),
 		g.rb.Rule.Required(lexSectionRule, "must have lex ruleset"),
-		g.expectVirtual(GrammarIDEOF, TokEOF),
+		g.expectVirtual(VirtualEOF, TokEOF),
 	)
 }
 
@@ -309,24 +305,24 @@ func buildHeaderRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 	flat := LanguageSpecHeaderExpectationsFlat(spec)
 	sequenceRules := langSpecBuildHeaderRules(g, flat)
 	headerContent := g.rb.Rule.Sequence(
-		GrammarIDHeaderContent,
+		LangSpecGrammarIDFromNode(NodeHeader, "CONTENT"),
 		NodeHeader,
 		sequenceRules...,
 	)
 	return g.rb.Rule.TransparentNest(
-		GrammarIDHeader,
+		LangSpecGrammarIDFromNode(NodeHeader, ""),
 		TokDashes, TokDashes,
 		headerContent,
 	)
 }
 
 func buildPragmaRule(g *GrammarDefiner) Rule {
-	pragmaBody := g.sequence(GrammarIDPragmaStatementBody, NodePragmaStatement).
+	pragmaBody := g.sequence(NodePragmaStatement, "").
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectToken(NodePragmaValue, TokStringLiteral).
 		build()
 	return g.rb.Rule.Nest(
-		GrammarIDPragmaStatement,
+		LangSpecGrammarIDFromNode(NodePragmaStatement, ""),
 		NodePragmaStatement,
 		TokPragmaStart, TokSemicolon,
 		pragmaBody,
@@ -335,7 +331,6 @@ func buildPragmaRule(g *GrammarDefiner) Rule {
 
 func buildLexSectionRule(g *GrammarDefiner) Rule {
 	return g.block(
-		GrammarIDLexSection,
 		NodeLexSection,
 		NodeLexKeyword,
 		TokKWLex,
@@ -347,28 +342,28 @@ func buildLexRuleList(g *GrammarDefiner) Rule {
 	lexRule := buildLexRule(g)
 	lexRuleWithRecovery := g.rb.Rule.RecoverSync(lexRule, TokSemicolon)
 	return g.rb.Rule.TransparentZeroOrMore(
-		GrammarIDLexRuleList,
+		LangSpecGrammarIDFromNode(NodeLexRule, "LIST"),
 		lexRuleWithRecovery,
 	)
 }
 
 func buildLexRule(g *GrammarDefiner) Rule {
-	return g.sequence(GrammarIDLexRule, NodeLexRule).
+	return g.sequence(NodeLexRule, "").
 		optionalToken(NodeLexRulePriority, TokInteger).
 		expectToken(NodeLexRuleTokenName, TokStringLiteral).
-		expectVirtual(GrammarIDLexRule, TokChainSeparator).
+		expectVirtualInRule(TokChainSeparator).
 		expectToken(NodeLexRuleScope, TokStringLiteral).
-		expectVirtual(GrammarIDLexRule, TokAssignment).
+		expectVirtualInRule(TokAssignment).
 		expectToken(NodeLexRulePattern, TokRegexLiteral).
 		optionalRule(buildMetaSectionRule(g)).
-		expectVirtual(GrammarIDLexRule, TokSemicolon).
+		expectVirtualInRule(TokSemicolon).
 		build()
 }
 
 func buildMetaSectionRule(g *GrammarDefiner) Rule {
 	metaBodyRule := buildMetaSectionBodyRule(g)
 	return g.rb.Rule.Nest(
-		GrammarIDMetaSection,
+		LangSpecGrammarIDFromNode(NodeMetaSection, ""),
 		NodeMetaSection,
 		TokMetaSection, TokMetaSection,
 		metaBodyRule,
@@ -377,10 +372,10 @@ func buildMetaSectionRule(g *GrammarDefiner) Rule {
 
 func buildMetaSectionBodyRule(g *GrammarDefiner) Rule {
 	return g.rb.Rule.TransparentZeroOrMore(
-		GrammarIDMetaKeyValuePair,
-		g.sequence(GrammarIDMetaKeyValueSeq, NodeMetaKeyValuePair).
+		LangSpecGrammarIDFromNode(NodeMetaKeyValuePair, ""),
+		g.sequence(NodeMetaKeyValuePair, "SEQUENCE").
 			expectToken(NodeMetaKey, TokIdentifier).
-			expectVirtual(GrammarIDMetaAssignment, TokEqualsOperator).
+			expectVirtual(VirtualMetaAssignment, TokEqualsOperator).
 			expectToken(NodeMetaValue, TokStringLiteral).
 			build(),
 	)
