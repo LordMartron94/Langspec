@@ -329,62 +329,44 @@ func dslSpecFactoryAndTemplates() (*pattern.RegulaASTFactory[rune], *pattern.Reg
 
 /*
 buildProgramRule builds the full program rule (header + optional LEX body + EOF) using the
-parsing engine's RuleBuilder. All grammar construction for the DSL lives here.
+GrammarDefiner. All grammar construction for the DSL lives here.
 */
-func buildProgramRule(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
-	headerRule := buildHeaderRule(ruleBuilder, spec)
-	bodyRule := buildLexSectionRule(ruleBuilder)
-	pragmaRule := buildPragmaRule(ruleBuilder)
-	return ruleBuilder.Rule.Root(
+func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
+	headerRule   := buildHeaderRule(g, spec)
+	bodyRule     := buildLexSectionRule(g)
+	pragmaRule   := buildPragmaRule(g)
+	return g.rb.Rule.Root(
 		GrammarIDProgram,
 		NodeProgram,
 		false,
-		ruleBuilder.Rule.Required(headerRule, "must have header"),
-		ruleBuilder.Rule.TransparentZeroOrMore(GrammarIDPragmaSection, pragmaRule),
-		ruleBuilder.Rule.Required(bodyRule, "must have lex ruleset"),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDEOF, TokEOF),
+		g.rb.Rule.Required(headerRule, "must have header"),
+		g.rb.Rule.TransparentZeroOrMore(GrammarIDPragmaSection, pragmaRule),
+		g.rb.Rule.Required(bodyRule, "must have lex ruleset"),
+		g.ExpectVirtual(GrammarIDEOF, TokEOF),
 	)
 }
 
-func buildHeaderRule(ruleBuilder *RuleBuilder, spec LanguageSpec) Rule {
-	flat := LanguageSpecHeaderExpectationsFlat(spec)
-	sequenceRules := make([]Rule, 0, len(flat))
-	for _, e := range flat {
-		if e.Virtual {
-			if len(e.Tokens) > 0 {
-				sequenceRules = append(sequenceRules, ruleBuilder.Token.ExpectVirtual(e.GrammarID, e.Tokens[0]))
-			}
-			continue
-		}
-		if len(e.Tokens) == 1 {
-			sequenceRules = append(sequenceRules, ruleBuilder.Token.Expect(e.GrammarID, e.NodeKind, e.Tokens[0]))
-		} else if len(e.Tokens) > 1 {
-			sequenceRules = append(sequenceRules, ruleBuilder.Token.ExpectOneOf(e.GrammarID, e.NodeKind, e.Tokens...))
-		}
-	}
-
-	headerContent := ruleBuilder.Rule.Sequence(
+func buildHeaderRule(g *GrammarDefiner, spec LanguageSpec) Rule {
+	flat          := LanguageSpecHeaderExpectationsFlat(spec)
+	sequenceRules := LangSpecBuildHeaderRules(g, flat)
+	headerContent := g.rb.Rule.Sequence(
 		GrammarIDHeaderContent,
 		NodeHeader,
 		sequenceRules...,
 	)
-
-	return ruleBuilder.Rule.TransparentNest(
+	return g.rb.Rule.TransparentNest(
 		GrammarIDHeader,
 		TokDashes, TokDashes,
 		headerContent,
 	)
 }
 
-func buildPragmaRule(ruleBuilder *RuleBuilder) Rule {
-	pragmaBody := ruleBuilder.Rule.Sequence(
-		GrammarIDPragmaStatementBody,
-		NodePragmaStatement,
-		ruleBuilder.Token.Expect(GrammarIDPragmaKey, NodePragmaKey, TokIdentifier),
-		ruleBuilder.Token.Expect(GrammarIDPragmaValue, NodePragmaValue, TokStringLiteral),
-	)
-
-	return ruleBuilder.Rule.Nest(
+func buildPragmaRule(g *GrammarDefiner) Rule {
+	pragmaBody := g.Sequence(GrammarIDPragmaStatementBody, NodePragmaStatement).
+		ExpectToken(NodePragmaKey, TokIdentifier).
+		ExpectToken(NodePragmaValue, TokStringLiteral).
+		Build()
+	return g.rb.Rule.Nest(
 		GrammarIDPragmaStatement,
 		NodePragmaStatement,
 		TokPragmaStart, TokSemicolon,
@@ -392,72 +374,61 @@ func buildPragmaRule(ruleBuilder *RuleBuilder) Rule {
 	)
 }
 
-func buildLexSectionRule(ruleBuilder *RuleBuilder) Rule {
-	lexSection := ruleBuilder.Rule.Sequence(
+func buildLexSectionRule(g *GrammarDefiner) Rule {
+	lexSection := g.rb.Rule.Sequence(
 		GrammarIDLexSection,
 		NodeLexSection,
-		ruleBuilder.Token.Expect(GrammarIDLexKeyword, NodeLexKeyword, TokKWLex),
-		ruleBuilder.Rule.TransparentNest(
+		g.ExpectToken(NodeLexKeyword, TokKWLex),
+		g.rb.Rule.TransparentNest(
 			GrammarIDLexSectionBody,
 			TokBraceOpen, TokBraceClose,
-			buildLexRuleList(ruleBuilder),
+			buildLexRuleList(g),
 		),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDLexSection, TokSemicolon),
+		g.ExpectVirtual(GrammarIDLexSection, TokSemicolon),
 	)
-
 	return lexSection
 }
 
-func buildLexRuleList(ruleBuilder *RuleBuilder) Rule {
-	lexRule := buildLexRule(ruleBuilder)
-	lexRuleWithRecovery := ruleBuilder.Rule.RecoverSync(lexRule, TokSemicolon)
-
-	return ruleBuilder.Rule.TransparentZeroOrMore(
+func buildLexRuleList(g *GrammarDefiner) Rule {
+	lexRule             := buildLexRule(g)
+	lexRuleWithRecovery  := g.rb.Rule.RecoverSync(lexRule, TokSemicolon)
+	return g.rb.Rule.TransparentZeroOrMore(
 		GrammarIDLexRuleList,
 		lexRuleWithRecovery,
 	)
 }
 
-func buildLexRule(ruleBuilder *RuleBuilder) Rule {
-	metaSectionRule := buildMetaSectionRule(ruleBuilder)
-
-	return ruleBuilder.Rule.Sequence(
-		GrammarIDLexRule,
-		NodeLexRule,
-		ruleBuilder.Rule.Optional(
-			ruleBuilder.Token.Expect(GrammarIDLexRulePriority, NodeLexRulePriority, TokInteger),
-		),
-		ruleBuilder.Token.Expect(GrammarIDLexRuleTokenName, NodeLexRuleTokenName, TokStringLiteral),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokChainSeparator),
-		ruleBuilder.Token.Expect(GrammarIDLexRuleScope, NodeLexRuleScope, TokStringLiteral),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokRuleAssignment),
-		ruleBuilder.Token.Expect(GrammarIDLexRulePattern, NodeLexRulePattern, TokRegexLiteral),
-		ruleBuilder.Rule.Optional(metaSectionRule),
-		ruleBuilder.Token.ExpectVirtual(GrammarIDLexRule, TokSemicolon),
-	)
+func buildLexRule(g *GrammarDefiner) Rule {
+	return g.Sequence(GrammarIDLexRule, NodeLexRule).
+		OptionalToken(NodeLexRulePriority, TokInteger).
+		ExpectToken(NodeLexRuleTokenName, TokStringLiteral).
+		ExpectVirtual(GrammarIDLexRule, TokChainSeparator).
+		ExpectToken(NodeLexRuleScope, TokStringLiteral).
+		ExpectVirtual(GrammarIDLexRule, TokRuleAssignment).
+		ExpectToken(NodeLexRulePattern, TokRegexLiteral).
+		OptionalRule(buildMetaSectionRule(g)).
+		ExpectVirtual(GrammarIDLexRule, TokSemicolon).
+		Build()
 }
 
-func buildMetaSectionRule(ruleBuilder *RuleBuilder) Rule {
-	metaBodyRule := buildMetaSectionBodyRule(ruleBuilder)
-
-	return ruleBuilder.Rule.Nest(
+func buildMetaSectionRule(g *GrammarDefiner) Rule {
+	metaBodyRule := buildMetaSectionBodyRule(g)
+	return g.rb.Rule.Nest(
 		GrammarIDMetaSection,
 		NodeMetaSection,
-		TokMetaSection, TokMetaSection, // Open, Close
+		TokMetaSection, TokMetaSection,
 		metaBodyRule,
 	)
 }
 
-func buildMetaSectionBodyRule(ruleBuilder *RuleBuilder) Rule {
-	return ruleBuilder.Rule.TransparentZeroOrMore(
+func buildMetaSectionBodyRule(g *GrammarDefiner) Rule {
+	return g.rb.Rule.TransparentZeroOrMore(
 		GrammarIDMetaKeyValuePair,
-		ruleBuilder.Rule.Sequence(
-			GrammarIDMetaKeyValueSeq,
-			NodeMetaKeyValuePair,
-			ruleBuilder.Token.Expect(GrammarIDMetaKey, NodeMetaKey, TokIdentifier),
-			ruleBuilder.Token.ExpectVirtual(GrammarIDMetaAssignment, TokEqualsOperator),
-			ruleBuilder.Token.Expect(GrammarIDMetaValue, NodeMetaValue, TokStringLiteral),
-		),
+		g.Sequence(GrammarIDMetaKeyValueSeq, NodeMetaKeyValuePair).
+			ExpectToken(NodeMetaKey, TokIdentifier).
+			ExpectVirtual(GrammarIDMetaAssignment, TokEqualsOperator).
+			ExpectToken(NodeMetaValue, TokStringLiteral).
+			Build(),
 	)
 }
 
