@@ -27,7 +27,7 @@ expectToken returns a rule that expects the token and creates an LST node of tha
 GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNode(node, "")
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
 	return g.rb.Token.Expect(grammarID, node, tok)
 }
 
@@ -54,7 +54,7 @@ using the same GrammarID as the enclosing rule (derived from node). Use for
 punctuation slots inside a sequence (e.g. semicolon after a lex rule).
 */
 func (g *GrammarDefiner) expectVirtualInRule(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
-	return g.rb.Token.ExpectVirtual(LangSpecGrammarIDFromNode(node, ""), tok)
+	return g.rb.Token.ExpectVirtual(LangSpecGrammarIDFromNodeWithSuffix(node, ""), tok)
 }
 
 /*
@@ -62,7 +62,7 @@ expectOneOf returns a rule that expects one of the given tokens and creates an L
 of that kind. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectOneOf(node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNode(node, "")
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
 	return g.rb.Token.ExpectOneOf(grammarID, node, tokens...)
 }
 
@@ -79,7 +79,7 @@ expectPair returns a rule that expects two tokens in sequence and creates a sing
 with both lexemes attached. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectPair(node LangSpecParserNodeKind, firstToken, secondToken LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNode(node, "")
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
 	return g.rb.Token.ExpectPair(grammarID, node, firstToken, secondToken)
 }
 
@@ -88,7 +88,7 @@ sequence starts a chainable sequence for the given node kind. GrammarID is
 LangSpecGrammarIDFromNode(nodeKind, suffix). Call Build on the returned SequenceBuilder.
 */
 func (g *GrammarDefiner) sequence(nodeKind LangSpecParserNodeKind, suffix string) *SequenceBuilder {
-	grammarID := LangSpecGrammarIDFromNode(nodeKind, suffix)
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(nodeKind, suffix)
 	return &SequenceBuilder{
 		g:         g,
 		grammarID: grammarID,
@@ -108,7 +108,7 @@ func (g *GrammarDefiner) block(
 	kwTok LangSpecLexerTokenType,
 	bodyRule Rule,
 ) Rule {
-	grammarID := LangSpecGrammarIDFromNode(node, "")
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
 	return g.rb.Rule.Sequence(
 		grammarID,
 		node,
@@ -195,45 +195,4 @@ build returns the Sequence rule with the accumulated rules. The builder must not
 */
 func (s *SequenceBuilder) build() Rule {
 	return s.g.rb.Rule.Sequence(s.grammarID, s.nodeKind, s.rules...)
-}
-
-// ----------------------------------------------------------- Header expectations
-
-/*
-langSpecExpectationGrammarID returns the syntaxa.GrammarID for the given header expectation.
-Virtual expectations use VirtualID; node-backed use GrammarIDOverride if set, else
-LangSpecGrammarIDFromNode(NodeKind, Suffix).
-*/
-func langSpecExpectationGrammarID(e DSLHeaderExpectation) syntaxa.GrammarID {
-	if e.Virtual {
-		return VirtualGrammarIDToGrammarID(e.VirtualID)
-	}
-	if e.GrammarIDOverride != "" {
-		return syntaxa.GrammarID(e.GrammarIDOverride)
-	}
-	return LangSpecGrammarIDFromNode(e.NodeKind, e.Suffix)
-}
-
-/*
-langSpecBuildHeaderRules builds a slice of rules from the flat header expectations.
-Resolves GrammarID from each expectation via langSpecExpectationGrammarID. Virtual
-expectations use expectVirtual; node-backed use expectToken/expectOneOf with resolved ID.
-*/
-func langSpecBuildHeaderRules(g *GrammarDefiner, flat []DSLHeaderExpectation) []Rule {
-	out := make([]Rule, 0, len(flat))
-	for _, e := range flat {
-		id := langSpecExpectationGrammarID(e)
-		if e.Virtual {
-			if len(e.Tokens) > 0 {
-				out = append(out, g.expectVirtual(e.VirtualID, e.Tokens[0]))
-			}
-			continue
-		}
-		if len(e.Tokens) == 1 {
-			out = append(out, g.expectTokenWithGrammarID(id, e.NodeKind, e.Tokens[0]))
-		} else if len(e.Tokens) > 1 {
-			out = append(out, g.expectOneOfWithGrammarID(id, e.NodeKind, e.Tokens...))
-		}
-	}
-	return out
 }

@@ -299,14 +299,6 @@ func LangSpecCompilerScopeMap(compiler *LangSpecCompiler) map[LangSpecLexerToken
 }
 
 /*
-LangSpecCompilerHeaderSpec returns the header nest steps from the compiler's language spec.
-Used by editor integrations for Sublime nest overrides.
-*/
-func LangSpecCompilerHeaderSpec(compiler *LangSpecCompiler) []DSLHeaderNestStep {
-	return compiler.languageSpec.Headers
-}
-
-/*
 LangSpecCompilerLexingRuleSet returns the lexing ruleset used by the DSL compiler.
 Used by editor integrations to build syntax highlighting IR without depending on parser internals.
 */

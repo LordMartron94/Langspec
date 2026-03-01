@@ -32,14 +32,20 @@ func pascalCaseToSpaceUppercase(s string) string {
 }
 
 /*
-LangSpecGrammarIDFromNode returns a stable syntaxa.GrammarID for the given node kind.
+LangSpecGrammarIDFromNodeWithSuffix returns a stable syntaxa.GrammarID for the given node kind.
 If suffix is non-empty, the result is derivedBase + " " + suffix (e.g. NodeHeader + "CONTENT" -> "HEADER CONTENT").
 NodeLSPECName is special-cased to "LANGSPEC NAME" for display consistency.
 NodeMetaKeyValuePair + suffix "SEQUENCE" is special-cased to "META KEY VALUE SEQUENCE".
 */
-func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind, suffix string) syntaxa.GrammarID {
+func LangSpecGrammarIDFromNodeWithSuffix(node LangSpecParserNodeKind, suffix string) syntaxa.GrammarID {
 	if node == NodeMetaKeyValuePair && suffix == "SEQUENCE" {
 		return "META KEY VALUE SEQUENCE"
+	}
+	if node == NodeVersion && suffix == "DSL" {
+		return "DSL VERSION"
+	}
+	if node == NodeVersion && suffix == "LANGSPEC" {
+		return "LANGSPEC VERSION"
 	}
 	name := node.String()
 	name = strings.TrimPrefix(name, "Node")
@@ -54,6 +60,10 @@ func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind, suffix string) synta
 	return syntaxa.GrammarID(name)
 }
 
+func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind) syntaxa.GrammarID {
+	return LangSpecGrammarIDFromNodeWithSuffix(node, "")
+}
+
 /*
 VirtualGrammarID identifies a grammar rule that has no LST node (e.g. EOF, punctuation-only slots).
 Used for virtual expectations; the string form is produced by VirtualGrammarIDToGrammarID.
@@ -65,6 +75,7 @@ const (
 	VirtualHeaderDashes
 	VirtualHeaderSeparator
 	VirtualMetaAssignment
+	VirtualPatternExpression
 )
 
 /*
@@ -81,6 +92,8 @@ func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarID {
 		return "HEADER SEPARATOR"
 	case VirtualMetaAssignment:
 		return "META ASSIGNMENT"
+	case VirtualPatternExpression:
+		return "PATTERN EXPRESSION"
 	default:
 		return syntaxa.GrammarID("VIRTUAL_UNKNOWN")
 	}
