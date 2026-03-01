@@ -396,9 +396,23 @@ func processSingleNest[TToken, TTokenRole comparable](
 		return append(allStates, customStates...)
 	}
 
-	bodyStateID := StateID(produceStateID(nestLabel + "_body"))
-	bodyState := buildBodyState(config, nest, nestLabel, tokenPatternMap, bodyStateID)
-	allStates = append(allStates, bodyState)
+	var bodyNode *syntaxa.Grammar[TToken]
+	if len(nest.Node.Children) > 0 {
+		bodyNode = nest.Node.Children[0]
+	}
+
+	needsSequenceChain := bodyNode != nil && bodyNode.Kind == syntaxa.GConcat && hasNodeOverrides(config, bodyNode)
+
+	var bodyStateID StateID
+	if needsSequenceChain {
+		bodyStateID = StateID(produceStateID(nestLabel + "_step_0"))
+		dfaStates := buildSequenceChain(config, nest, nestLabel, tokenPatternMap, bodyStateID)
+		allStates = append(allStates, dfaStates...)
+	} else {
+		bodyStateID = StateID(produceStateID(nestLabel + "_body"))
+		bodyState := buildBodyState(config, nest, nestLabel, tokenPatternMap, bodyStateID)
+		allStates = append(allStates, bodyState)
+	}
 
 	if isUniqueToken {
 		mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
@@ -783,4 +797,167 @@ func sanitizeContextName(name string) string {
 		}
 	}
 	return sb.String()
+}
+
+// ------------------------------------------------------------------ SEQUENCE DFA COMPILATION
+
+func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole], node *syntaxa.Grammar[TToken]) bool {
+	if node == nil {
+		return false
+	}
+	if _, exists := config.nodeScopeOverrides[node.GrammarID]; exists && node.Kind == syntaxa.GToken {
+		return true
+	}
+	for _, c := range node.Children {
+		if hasNodeOverrides(config, c) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNodeNullable[TToken comparable](node *syntaxa.Grammar[TToken]) bool {
+	if node == nil {
+		return false
+	}
+	switch node.Kind {
+	case syntaxa.GEpsilon, syntaxa.GOptional:
+		return true
+	case syntaxa.GRepeat:
+		return node.Min == 0
+	case syntaxa.GChoice:
+		for _, c := range node.Children {
+			if isNodeNullable(c) {
+				return true
+			}
+		}
+	case syntaxa.GConcat:
+		for _, c := range node.Children {
+			if !isNodeNullable(c) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func buildSequenceChain[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nest syntaxa.NestSpec[TToken],
+	nestLabel string,
+	tokenPatternMap map[TToken]Pattern,
+	entryStateID StateID,
+) []State {
+	concat := nest.Node.Children[0]
+	var states []State
+	closeRegex, _ := tokenPatternMap[nest.Close].ToRegEx()
+	metaScopeBase := getScopeString(fmt.Sprintf("meta.block.%s", strings.ToLower(nestLabel)), config.scopeExtension)
+
+	stepCount := len(concat.Children)
+	for i := 0; i < stepCount; i++ {
+		child := concat.Children[i]
+		stateLabel := fmt.Sprintf("%s_step_%d", nestLabel, i)
+		id := StateID(produceStateID(stateLabel))
+		if i == 0 {
+			id = entryStateID
+		}
+
+		var nextID StateID
+		if i < stepCount-1 {
+			nextID = StateID(produceStateID(fmt.Sprintf("%s_step_%d", nestLabel, i+1)))
+		} else {
+			nextID = StateID(produceStateID(nestLabel + "_tail"))
+		}
+
+		var rules []StateRule
+
+		rules = append(rules, StateRule{
+			ID:     StateRuleID(produceStateID(stateLabel + "_close")),
+			Label:  stateLabel + "_close",
+			RegEx:  closeRegex,
+			Scope:  getScopeString(config.scopeProvider(nest.Close), config.scopeExtension),
+			Action: ACTION_POP,
+		})
+
+		rules = append(rules, generateRulesForNode(config, child, tokenPatternMap, nextID, stateLabel)...)
+
+		lookaheadIndex := i + 1
+		for isNodeNullable(child) && lookaheadIndex < stepCount {
+			nextChild := concat.Children[lookaheadIndex]
+			var targetID StateID
+			if lookaheadIndex < stepCount-1 {
+				targetID = StateID(produceStateID(fmt.Sprintf("%s_step_%d", nestLabel, lookaheadIndex+1)))
+			} else {
+				targetID = StateID(produceStateID(nestLabel + "_tail"))
+			}
+			rules = append(rules, generateRulesForNode(config, nextChild, tokenPatternMap, targetID, stateLabel)...)
+
+			if !isNodeNullable(nextChild) {
+				break
+			}
+			lookaheadIndex++
+			child = nextChild
+		}
+
+		rules = append(rules, InvalidFallbackRule(StateRuleID(produceStateID(stateLabel+"_invalid")), config.scopeExtension))
+
+		_, _, triggerIDs := extractContextIncludes(config, child, false)
+
+		states = append(states, State{
+			ID:            id,
+			Label:         stateLabel,
+			MetaScope:     metaScopeBase,
+			IsRootContext: false,
+			Rules:         rules,
+			Includes:      triggerIDs,
+		})
+	}
+
+	tailLabel := nestLabel + "_tail"
+	tailID := StateID(produceStateID(tailLabel))
+	tailState := buildBodyState(config, nest, tailLabel, tokenPatternMap, tailID)
+	tailState.Label = tailLabel
+	states = append(states, tailState)
+
+	return states
+}
+
+func generateRulesForNode[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	node *syntaxa.Grammar[TToken],
+	tokenPatternMap map[TToken]Pattern,
+	nextID StateID,
+	stateLabel string,
+) []StateRule {
+	var rules []StateRule
+
+	var walk func(n *syntaxa.Grammar[TToken])
+	walk = func(n *syntaxa.Grammar[TToken]) {
+		if n == nil {
+			return
+		}
+		switch n.Kind {
+		case syntaxa.GToken:
+			regex, _ := tokenPatternMap[n.Token].ToRegEx()
+			scope := config.scopeProvider(n.Token)
+			if custom, ok := config.nodeScopeOverrides[n.GrammarID]; ok {
+				scope = custom
+			}
+			rules = append(rules, StateRule{
+				ID:           StateRuleID(produceStateID(fmt.Sprintf("%s_match_%s_%v", stateLabel, n.GrammarID, n.Token))),
+				Label:        fmt.Sprintf("%s_match_%s", stateLabel, n.GrammarID),
+				RegEx:        regex,
+				Scope:        getScopeString(scope, config.scopeExtension),
+				Action:       ACTION_SET,
+				ActionTarget: nextID,
+			})
+		case syntaxa.GChoice, syntaxa.GOptional, syntaxa.GConcat:
+			for _, c := range n.Children {
+				walk(c)
+			}
+		}
+	}
+	walk(node)
+	return rules
 }
