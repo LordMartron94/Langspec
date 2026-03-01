@@ -42,9 +42,7 @@ func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind, suffix string) synta
 		return "META KEY VALUE SEQUENCE"
 	}
 	name := node.String()
-	if strings.HasPrefix(name, "Node") {
-		name = name[len("Node"):]
-	}
+	name = strings.TrimPrefix(name, "Node")
 	if name == "LSPECName" {
 		name = "LANGSPEC NAME"
 	} else {

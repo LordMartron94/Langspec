@@ -3,6 +3,8 @@ package dsl
 import (
 	"autarch/pattern"
 	"foundation/domain"
+	"syntaxa"
+	"syntaxa/rule"
 )
 
 // ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
@@ -45,6 +47,7 @@ const (
 	// -- Literals --
 	TokStringLiteral
 	TokRegexLiteral
+	TokCharLiteral
 	TokVersion
 	TokInteger
 
@@ -100,6 +103,18 @@ const (
 	NodeLexRuleScope
 	NodeLexRulePattern
 	NodeLexRulePriority
+
+	// -- Pattern Section --
+	NodePatternSection
+	NodePatternKeyword
+	NodePatternDefinition
+	NodePatternDefName
+	NodePatternVarRef
+	NodePatternRange
+	NodePatternCharLiteral
+	NodePatternStar
+	NodePatternConcat
+	NodePatternAlternation
 )
 
 // ----------------------------------------------------------- SINGLE SOURCE OF TRUTH
@@ -223,6 +238,38 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Pattern(pattern.LiteralString(f, "LEX")).
 			Build(),
 
+		DefineToken(TokKWPattern).
+			Scope("keyword.declaration.pattern").
+			HighPriority().
+			Pattern(pattern.LiteralString(f, "PATTERN")).
+			Build(),
+
+		DefineToken(TokVarRef).
+			Scope("keyword.operator.variable").
+			Pattern(f.Literal('$')).
+			Build(),
+
+		DefineToken(TokConcat).
+			Scope("keyword.operator.concat").
+			Pattern(f.Literal('&')).
+			Build(),
+
+		DefineToken(TokRange).
+			Scope("keyword.operator.range").
+			Pattern(pattern.LiteralString(f, "..")).
+			Build(),
+
+		DefineToken(TokStar).
+			Scope("keyword.operator.star").
+			Pattern(f.Literal('*')).
+			Build(),
+
+		DefineToken(TokCharLiteral).
+			Scope("string.quoted.single").
+			HighPriority().
+			Pattern(buildCharLiteralPattern(f)).
+			Build(),
+
 		DefineToken(TokIdentifier).
 			Scope("variable.other").
 			HighPriority().
@@ -296,6 +343,7 @@ func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 		false,
 		g.rb.Rule.Required(headerRule, "must have header"),
 		g.rb.Rule.TransparentZeroOrMore(LangSpecGrammarIDFromNode(NodePragmaStatement, ""), pragmaRule),
+		g.rb.Rule.Optional(buildPatternSectionRule(g)),
 		g.rb.Rule.Required(lexSectionRule, "must have lex ruleset"),
 		g.expectVirtual(VirtualEOF, TokEOF),
 	)
@@ -358,6 +406,86 @@ func buildLexRule(g *GrammarDefiner) Rule {
 		optionalRule(buildMetaSectionRule(g)).
 		expectVirtualInRule(TokSemicolon).
 		build()
+}
+
+// ----------------------------------------------------------- PATTERN SECTION
+
+func buildPatternSectionRule(g *GrammarDefiner) Rule {
+	return g.block(
+		NodePatternSection,
+		NodePatternKeyword,
+		TokKWPattern,
+		buildPatternDefinitionList(g),
+	)
+}
+
+func buildPatternDefinitionList(g *GrammarDefiner) Rule {
+	defRule := buildPatternDefinition(g)
+	defWithRecovery := g.rb.Rule.RecoverSync(defRule, TokSemicolon, TokBraceClose)
+	return g.rb.Rule.TransparentZeroOrMore(
+		LangSpecGrammarIDFromNode(NodePatternDefinition, "LIST"),
+		defWithRecovery,
+	)
+}
+
+func buildPatternDefinition(g *GrammarDefiner) Rule {
+	return g.sequence(NodePatternDefinition, "").
+		expectToken(NodePatternDefName, TokIdentifier).
+		expectVirtualInRule(TokAssignment).
+		requiredRule(buildPatternExprRule(g), "pattern definition must have an expression").
+		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
+func buildPatternExprRule(g *GrammarDefiner) Rule {
+	segmentPrimary := g.rb.Rule.OptionalSuffix(
+		LangSpecGrammarIDFromNode(NodePatternStar, ""),
+		NodePatternStar,
+		buildPatternSegmentRule(g),
+		TokStar,
+	)
+	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+		Primary:        segmentPrimary,
+		PrefixOps:      nil,
+		InfixOps:       nil,
+		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
+	}
+	cfg.InfixOps = []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		{Token: TokConcat, LeftBP: 20, RightBP: 19, NodeKind: NodePatternConcat},
+		{Token: TokPipe, LeftBP: 10, RightBP: 9, NodeKind: NodePatternAlternation},
+	}
+	return g.rb.Pratt.Expression(LangSpecGrammarIDFromNode(NodePatternConcat, ""), cfg)
+}
+
+func buildPatternSegmentRule(g *GrammarDefiner) Rule {
+	rangeRule := g.rb.Rule.Predict(
+		buildPatternRangeRule(g),
+		func(ctx *syntaxa.SelectRuleContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]) bool {
+			return ctx.Peek(1).Token == TokRange
+		},
+	)
+	return g.rb.Rule.Choice(
+		LangSpecGrammarIDFromNode(NodePatternVarRef, ""),
+		buildPatternVarRefRule(g),
+		rangeRule,
+		buildPatternCharLiteralRule(g),
+	)
+}
+
+func buildPatternVarRefRule(g *GrammarDefiner) Rule {
+	return g.expectPair(NodePatternVarRef, TokVarRef, TokIdentifier)
+}
+
+func buildPatternRangeRule(g *GrammarDefiner) Rule {
+	return g.sequence(NodePatternRange, "").
+		expectToken(NodePatternCharLiteral, TokCharLiteral).
+		expectVirtualInRule(TokRange).
+		expectToken(NodePatternCharLiteral, TokCharLiteral).
+		build()
+}
+
+func buildPatternCharLiteralRule(g *GrammarDefiner) Rule {
+	return g.expectToken(NodePatternCharLiteral, TokCharLiteral)
 }
 
 func buildMetaSectionRule(g *GrammarDefiner) Rule {

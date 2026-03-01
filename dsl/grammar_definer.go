@@ -75,6 +75,15 @@ func (g *GrammarDefiner) expectOneOfWithGrammarID(grammarID syntaxa.GrammarID, n
 }
 
 /*
+expectPair returns a rule that expects two tokens in sequence and creates a single AST node
+with both lexemes attached. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
+*/
+func (g *GrammarDefiner) expectPair(node LangSpecParserNodeKind, firstToken, secondToken LangSpecLexerTokenType) Rule {
+	grammarID := LangSpecGrammarIDFromNode(node, "")
+	return g.rb.Token.ExpectPair(grammarID, node, firstToken, secondToken)
+}
+
+/*
 sequence starts a chainable sequence for the given node kind. GrammarID is
 LangSpecGrammarIDFromNode(nodeKind, suffix). Call Build on the returned SequenceBuilder.
 */

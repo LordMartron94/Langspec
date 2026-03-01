@@ -28,11 +28,21 @@ func _() {
 	_ = x[NodeLexRuleScope-18]
 	_ = x[NodeLexRulePattern-19]
 	_ = x[NodeLexRulePriority-20]
+	_ = x[NodePatternSection-21]
+	_ = x[NodePatternKeyword-22]
+	_ = x[NodePatternDefinition-23]
+	_ = x[NodePatternDefName-24]
+	_ = x[NodePatternVarRef-25]
+	_ = x[NodePatternRange-26]
+	_ = x[NodePatternCharLiteral-27]
+	_ = x[NodePatternStar-28]
+	_ = x[NodePatternConcat-29]
+	_ = x[NodePatternAlternation-30]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriority"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternDefNameNodePatternVarRefNodePatternRangeNodePatternCharLiteralNodePatternStarNodePatternConcatNodePatternAlternation"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 210, 230, 246, 264, 283}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 210, 230, 246, 264, 283, 301, 319, 340, 358, 375, 391, 413, 428, 445, 467}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

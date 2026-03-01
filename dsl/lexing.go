@@ -5,10 +5,6 @@ import (
 	"lexarch"
 )
 
-// ----------------------------------------------------------- BUILDING (types live in constructs.go)
-
-// ===========================================================
-
 /*
 BuildLexerSpec creates the LexerSpec and LexingRuleset from the language spec.
 Iterates spec.Tokens and adds a rule for each token with Pattern != nil.

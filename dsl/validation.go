@@ -18,6 +18,10 @@ const (
 	VALIDATION_UNKNOWN_PRAGMA_KEY   ValidationCode = "V_P001"
 	VALIDATION_UNKNOWN_PRAGMA_VALUE ValidationCode = "V_P002"
 	VALIDATION_UNKNOWN_META_KEY     ValidationCode = "V_P003"
+
+	VALIDATION_DUPLICATE_PATTERN_NAME ValidationCode = "V_PAT001"
+	VALIDATION_UNRESOLVED_PATTERN_REF ValidationCode = "V_PAT002"
+	VALIDATION_EMPTY_PATTERN_EXPRESSION ValidationCode = "V_PAT003"
 )
 
 func (v ValidationCode) String() string {
@@ -97,6 +101,56 @@ func getValidationStages() []*ValidationStage {
 				}
 			},
 		},
+		{
+			Name:        "Pattern Validation",
+			Description: "Validates pattern section: duplicate declarations and unresolved variable references. Variables must be declared before use.",
+			Order:       2,
+			Processor: func(ctx *ValidationCtx) {
+				allDeclared := make(map[string]struct{})
+				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
+					defNameNode := def.FindFirstKind(NodePatternDefName)
+					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
+						continue
+					}
+					allDeclared[string(defNameNode.Tokens()[0].Raw)] = struct{}{}
+				}
+
+				declaredSoFar := make(map[string]struct{})
+				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
+					defNameNode := def.FindFirstKind(NodePatternDefName)
+					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
+						continue
+					}
+					if !patternDefinitionHasExpression(def) {
+						ctx.ReportError(VALIDATION_EMPTY_PATTERN_EXPRESSION.String(), "pattern definition must have an expression", def)
+					}
+					name := string(defNameNode.Tokens()[0].Raw)
+					if _, already := declaredSoFar[name]; already {
+						msg := fmt.Sprintf("pattern name '%s' already declared (duplicate)", name)
+						ctx.ReportError(VALIDATION_DUPLICATE_PATTERN_NAME.String(), msg, defNameNode)
+					} else {
+						declaredSoFar[name] = struct{}{}
+					}
+
+					for _, varRef := range def.FindAllKind(NodePatternVarRef) {
+						tokens := varRef.Tokens()
+						if len(tokens) < 2 {
+							continue
+						}
+						refName := string(tokens[1].Raw)
+						if _, ok := declaredSoFar[refName]; !ok {
+							var msg string
+							if _, declaredLater := allDeclared[refName]; declaredLater {
+								msg = fmt.Sprintf("pattern reference '%s' used before declaration", refName)
+							} else {
+								msg = fmt.Sprintf("unresolved pattern reference '%s'", refName)
+							}
+							ctx.ReportError(VALIDATION_UNRESOLVED_PATTERN_REF.String(), msg, varRef)
+						}
+					}
+				}
+			},
+		},
 	}
 
 	return stages
@@ -109,4 +163,22 @@ func getStringValue(node *Node) string {
 	}
 
 	return value
+}
+
+var patternExpressionKinds = []LangSpecParserNodeKind{
+	NodePatternConcat,
+	NodePatternAlternation,
+	NodePatternVarRef,
+	NodePatternRange,
+	NodePatternCharLiteral,
+	NodePatternStar,
+}
+
+func patternDefinitionHasExpression(def *Node) bool {
+	for _, c := range def.Children() {
+		if slices.Contains(patternExpressionKinds, c.Kind()) {
+			return true
+		}
+	}
+	return false
 }
