@@ -654,7 +654,7 @@ func extractContextIncludes[TToken, TTokenRole comparable](
 	contextRoot *syntaxa.Grammar[TToken],
 	isRoot bool,
 ) (map[TToken]struct{}, []StateID, []StateID) {
-	baseTokens := make(map[TToken]struct{})
+	standardTokens := make(map[TToken]struct{})
 	var overrideIDs []StateID
 	var triggerIDs []StateID
 
@@ -669,23 +669,7 @@ func extractContextIncludes[TToken, TTokenRole comparable](
 		}
 		visited[node] = true
 
-		switch node.Kind {
-		case syntaxa.GToken:
-			baseTokens[node.Token] = struct{}{}
-			if _, hasOverride := config.nodeScopeOverrides[node.GrammarID]; hasOverride {
-				label := fmt.Sprintf("node_override_%s", sanitizeContextName(string(node.GrammarID)))
-				id := StateID(produceStateID(label))
-				if !seenOverrides[id] {
-					seenOverrides[id] = true
-					overrideIDs = append(overrideIDs, id)
-				}
-			}
-		case syntaxa.GNest:
-			if isRoot || node != contextRoot {
-				baseTokens[*node.OpenToken] = struct{}{}
-				return // Do not walk inside the nest boundary.
-			}
-		case syntaxa.GConcat:
+		if node.Kind == syntaxa.GConcat {
 			for i := 0; i < len(node.Children)-1; i++ {
 				curr, next := node.Children[i], node.Children[i+1]
 				if curr.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
@@ -694,7 +678,27 @@ func extractContextIncludes[TToken, TTokenRole comparable](
 						seenTriggers[id] = true
 						triggerIDs = append(triggerIDs, id)
 					}
+					visited[curr] = true
 				}
+			}
+		}
+
+		switch node.Kind {
+		case syntaxa.GToken:
+			if _, hasOverride := config.nodeScopeOverrides[node.GrammarID]; hasOverride {
+				label := fmt.Sprintf("node_override_%s", sanitizeContextName(string(node.GrammarID)))
+				id := StateID(produceStateID(label))
+				if !seenOverrides[id] {
+					seenOverrides[id] = true
+					overrideIDs = append(overrideIDs, id)
+				}
+			} else {
+				standardTokens[node.Token] = struct{}{}
+			}
+		case syntaxa.GNest:
+			if isRoot || node != contextRoot {
+				standardTokens[*node.OpenToken] = struct{}{}
+				return
 			}
 		}
 
@@ -704,7 +708,7 @@ func extractContextIncludes[TToken, TTokenRole comparable](
 	}
 
 	walk(contextRoot)
-	return baseTokens, overrideIDs, triggerIDs
+	return standardTokens, overrideIDs, triggerIDs
 }
 
 func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []State {
