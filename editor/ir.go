@@ -32,26 +32,10 @@ func MustGetRegEx[TToken, TTokenRole comparable](
 	return regex
 }
 
-/*
-Pattern is the observation pattern type used for token recognition in the editor IR.
-It is an alias for the Regula AST from autarch/pattern.
-*/
 type Pattern = pattern.RegulaAST[rune]
-
-/*
-StateID is a unique identifier for a state.
-*/
 type StateID uint64
-
-/*
-StateRuleID is a unique identifier for a state rule.
-*/
 type StateRuleID uint64
 
-/*
-RuleAction represents an action to do for a rule.
-Only one of PUSH, POP, SET, EMBED may be used per rule (per ST4 syntax).
-*/
 //go:generate stringer -type RuleAction
 type RuleAction uint8
 
@@ -61,7 +45,7 @@ const (
 	ACTION_SET
 	ACTION_MATCH
 	ACTION_NONE
-	ACTION_EMBED // Embed another syntax; use Embed, EmbedScope, Escape, EscapeCaptures. Mutually exclusive with PUSH/SET/POP.
+	ACTION_EMBED
 )
 
 type State struct {
@@ -75,29 +59,25 @@ type State struct {
 }
 
 type StateRule struct {
-	ID              StateRuleID
-	Label           string
-	RegEx           string
-	Scope           string
-	Action          RuleAction
-	ActionTarget    StateID
-	Captures        map[int]string
-	PopCount        int
-	// Embed fields: only used when Action == ACTION_EMBED (ST4 embed/escape).
-	Embed           string            // Target context to embed, e.g. scope:source.regexp
-	EmbedScope      string            // Scope applied to the embedded region
-	Escape         string            // Regex that ends the embedded region (required when using embed)
-	EscapeCaptures  map[int]string    // Scopes for capture groups of the escape pattern; 0 = entire escape match
+	ID             StateRuleID
+	Label          string
+	RegEx          string
+	Scope          string
+	Action         RuleAction
+	ActionTarget   StateID
+	Captures       map[int]string
+	PopCount       int
+	Embed          string
+	EmbedScope     string
+	Escape         string
+	EscapeCaptures map[int]string
 }
 
-type ScopeProvider[T any] func(item T) string
-
+type ScopeProvider[TToken any] func(item TToken) string
 type TokenFormatter[TToken any] func(token TToken) string
 
-/*
-TokenOverrideContext provides the necessary utilities and state to a TokenOverrideFunc,
-allowing clients to generate rules and states without breaking package boundaries.
-*/
+// ------------------------------------------------------------------ OVERRIDE CONTEXTS
+
 type TokenOverrideContext struct {
 	BaseID          StateID
 	Label           string
@@ -106,89 +86,52 @@ type TokenOverrideContext struct {
 	ScopeExtension  string
 }
 
-/*
-DeriveStateID generates a deterministic ID for auxiliary states using the editor package's internal hasher.
-*/
 func (ctx *TokenOverrideContext) DeriveStateID(suffix string) StateID {
 	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.Label, suffix)))
 }
 
-/*
-ApplyScope appends the configured scope extension to a base scope string.
-*/
 func (ctx *TokenOverrideContext) ApplyScope(scope string) string {
 	return getScopeString(scope, ctx.ScopeExtension)
 }
 
-/*
-TokenOverrideFunc generates a custom rule and optional auxiliary states for a token.
-*/
 type TokenOverrideFunc func(ctx *TokenOverrideContext) (mainRule StateRule, extraStates []State)
 
-/*
-NestOverrideContext provides utilities and state to a NestOverrideFunc. GetRegEx resolves
-a token to its regex pattern using the grammar's token map; the client need not close over
-a ruleset.
-*/
 type NestOverrideContext[TToken comparable] struct {
 	NestLabel      string
 	ScopeExtension string
-	getRegEx      func(TToken) string
+	getRegEx       func(TToken) string
 }
 
-/*
-GetRegEx returns the regex string for the given token. Used when building custom nest
-states so the client does not need access to the lexing ruleset.
-*/
 func (ctx *NestOverrideContext[TToken]) GetRegEx(token TToken) string {
 	return ctx.getRegEx(token)
 }
 
-/*
-DeriveStateID generates a deterministic ID for auxiliary states using the editor package's internal hasher.
-*/
 func (ctx *NestOverrideContext[TToken]) DeriveStateID(suffix string) StateID {
 	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.NestLabel, suffix)))
 }
 
-/*
-ApplyScope appends the configured scope extension to a base scope string.
-*/
 func (ctx *NestOverrideContext[TToken]) ApplyScope(scope string) string {
 	return getScopeString(scope, ctx.ScopeExtension)
 }
 
-/*
-NestOverrideFunc generates a custom entry state ID and states for a grammar nest.
-*/
 type NestOverrideFunc[TToken comparable] func(ctx *NestOverrideContext[TToken]) (entryStateID StateID, states []State)
-
-/*
-NestOverridePredicate returns true if the given nest should use the associated override.
-The client can match by nest.OwnerRule, nest.Open/nest.Close, or any custom logic.
-*/
 type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken]) bool
 
 // ------------------------------------------------------------------ CONFIGURATION
 
-/*
-PushDownAutomatonIRConfiguration holds scope provider, token formatter, scope extension,
-token overrides, nest overrides, and prototype token roles. Create with
-PushDownAutomatonIRConfigurationCreate, then add overrides and prototype roles before
-calling PushDownAutomatonIRCreate.
-*/
 type nestOverrideHandler[TToken comparable] struct {
 	pred NestOverridePredicate[TToken]
 	fn   NestOverrideFunc[TToken]
 }
 
 type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
-	scopeProvider         ScopeProvider[TToken]
-	formatter             TokenFormatter[TToken]
-	scopeExtension        string
-	overrides             map[TToken]TokenOverrideFunc
-	prototypeTokenRoles   []TTokenRole
-	nestOverrideHandlers  []nestOverrideHandler[TToken]
+	scopeProvider        ScopeProvider[TToken]
+	formatter            TokenFormatter[TToken]
+	scopeExtension       string
+	overrides            map[TToken]TokenOverrideFunc
+	prototypeTokenRoles  []TTokenRole
+	nestOverrideHandlers []nestOverrideHandler[TToken]
+	nestExtraIncludes    map[syntaxa.GrammarID][]TToken
 }
 
 func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
@@ -202,56 +145,35 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 		scopeExtension:       scopeExtension,
 		overrides:            make(map[TToken]TokenOverrideFunc),
 		prototypeTokenRoles:  make([]TTokenRole, 0),
-		nestOverrideHandlers: nil,
+		nestOverrideHandlers: make([]nestOverrideHandler[TToken], 0),
+		nestExtraIncludes:    make(map[syntaxa.GrammarID][]TToken),
 	}
 }
 
-/*
-AddOverride registers a custom rule and optional extra states for a token. When building
-the IR, this function is invoked with a TokenOverrideContext; use the structural helpers
-TokenOverrideDelimitedRegion or TokenOverrideMatchWithCapture, or build StateRule/State by hand.
-*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token TToken, fn TokenOverrideFunc) {
 	c.overrides[token] = fn
 }
 
-/*
-AddNestOverride registers a custom state sequence for a nest whose OwnerRule equals
-ruleID. It is a convenience over AddNestOverrideByPredicate that registers a predicate
-nest.OwnerRule == ruleID.
-*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarID, fn NestOverrideFunc[TToken]) {
 	c.AddNestOverrideByPredicate(func(nest *syntaxa.NestSpec[TToken]) bool {
 		return nest.OwnerRule == ruleID
 	}, fn)
 }
 
-/*
-AddNestOverrideByPredicate registers a custom state sequence for any nest that matches
-pred. The first registered predicate that returns true for a nest wins. The callback
-receives a NestOverrideContext with GetRegEx for token lookup; use BuildNestStateSequence
-with declarative NestStep slices to build states without manual construction.
-*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverrideByPredicate(pred NestOverridePredicate[TToken], fn NestOverrideFunc[TToken]) {
 	c.nestOverrideHandlers = append(c.nestOverrideHandlers, nestOverrideHandler[TToken]{pred: pred, fn: fn})
 }
 
-/*
-AddPrototypeTokenRoles registers a token (e.g. whitespace, comments) to be injected
-into ST4's global prototype context.
-*/
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddExtraNestIncludes(ruleID syntaxa.GrammarID, tokens ...TToken) {
+	c.nestExtraIncludes[ruleID] = append(c.nestExtraIncludes[ruleID], tokens...)
+}
+
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
 	c.prototypeTokenRoles = append(c.prototypeTokenRoles, tokenRoles...)
 }
 
 // ------------------------------------------------------------------ IR ORCHESTRATOR
 
-/*
-PushDownAutomatonIR is the IR used by editors that are stack-based. It contains
-language name/version, a slice of States (contexts with rules), and a scope extension
-appended to all scopes. Downstream consumers (e.g. sublime package) serialize it
-to editor-specific formats.
-*/
 type PushDownAutomatonIR struct {
 	LanguageName    string
 	LanguageVersion string
@@ -259,12 +181,6 @@ type PushDownAutomatonIR struct {
 	ScopeExtension  string
 }
 
-/*
-PushDownAutomatonIRCreate builds a PushDownAutomatonIR from the given configuration,
-lexing ruleset, and grammar package. It extracts tokens from the ruleset, builds base
-states (using token overrides when registered), injects nest states (using nest
-overrides when registered), and adds the prototype state for prototype token roles.
-*/
 func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
@@ -272,12 +188,13 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 ) *PushDownAutomatonIR {
 	entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
 	rootTokens := extractRootWhitelistFromGrammar(entryGrammar)
-
 	tokensInUse, tokenPatternMap, prototypeTokens := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
 
 	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens, rootTokens)
 
-	allStates = injectNestStates(config, allStates, grammarPackage, tokenPatternMap)
+	allStates, nestRegistry := injectNestStates(config, allStates, grammarPackage, tokenPatternMap)
+	automateStructuralTransitions(allStates, entryGrammar, config, nestRegistry)
+
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
 	allStates = injectMainState(allStates, config.scopeExtension)
 
@@ -321,133 +238,293 @@ func buildBaseStates[TToken, TTokenRole comparable](
 	var prototypeIncludes []StateID
 
 	for _, token := range tokensInUse {
-		label := sanitizeContextName(config.formatter(token))
-		id := StateID(produceStateID(label))
-		baseScope := config.scopeProvider(token)
+		state, extraStates, isProto := buildSingleBaseState(config, token, tokenPatternMap, prototypeTokens, rootTokens)
 
-		var mainRule StateRule
-		var extraStates []State
-
-		if overrideFn, exists := config.overrides[token]; exists {
-			ctx := &TokenOverrideContext{
-				BaseID:          id,
-				Label:           label,
-				OriginalPattern: tokenPatternMap[token],
-				BaseScope:       baseScope,
-				ScopeExtension:  config.scopeExtension,
-			}
-			mainRule, extraStates = overrideFn(ctx)
-		} else {
-			defaultRegex, _ := tokenPatternMap[token].ToRegEx()
-			mainRule = StateRule{
-				ID:     StateRuleID(id),
-				Label:  label,
-				Action: ACTION_MATCH,
-				Scope:  getScopeString(baseScope, config.scopeExtension),
-				RegEx:  defaultRegex,
-			}
-		}
-
-		isProto := prototypeTokens[token]
-
-		_, isStructurallyRoot := rootTokens[token]
-		isRoot := isStructurallyRoot && !isProto
-
-		baseState := State{
-			ID:            id,
-			Label:         label,
-			Rules:         []StateRule{mainRule},
-			IsRootContext: isRoot,
-		}
+		allStates = append(allStates, state)
+		allStates = append(allStates, extraStates...)
 
 		if isProto {
-			prototypeIncludes = append(prototypeIncludes, id)
+			prototypeIncludes = append(prototypeIncludes, state.ID)
 		}
-
-		allStates = append(allStates, baseState)
-		allStates = append(allStates, extraStates...)
 	}
 
 	return allStates, prototypeIncludes
 }
+
+func buildSingleBaseState[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	token TToken,
+	tokenPatternMap map[TToken]Pattern,
+	prototypeTokens map[TToken]bool,
+	rootTokens map[TToken]struct{},
+) (State, []State, bool) {
+	label := sanitizeContextName(config.formatter(token))
+	id := StateID(produceStateID(label))
+	baseScope := config.scopeProvider(token)
+
+	var mainRule StateRule
+	var extraStates []State
+
+	if overrideFn, exists := config.overrides[token]; exists {
+		ctx := &TokenOverrideContext{
+			BaseID:          id,
+			Label:           label,
+			OriginalPattern: tokenPatternMap[token],
+			BaseScope:       baseScope,
+			ScopeExtension:  config.scopeExtension,
+		}
+		mainRule, extraStates = overrideFn(ctx)
+	} else {
+		defaultRegex, _ := tokenPatternMap[token].ToRegEx()
+		mainRule = StateRule{
+			ID:     StateRuleID(id),
+			Label:  label,
+			Action: ACTION_MATCH,
+			Scope:  getScopeString(baseScope, config.scopeExtension),
+			RegEx:  defaultRegex,
+		}
+	}
+
+	isProto := prototypeTokens[token]
+	_, isStructurallyRoot := rootTokens[token]
+
+	baseState := State{
+		ID:            id,
+		Label:         label,
+		Rules:         []StateRule{mainRule},
+		IsRootContext: isStructurallyRoot && !isProto,
+	}
+
+	return baseState, extraStates, isProto
+}
+
+// ------------------------------------------------------------------ NEST COMPILER
 
 func injectNestStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	allStates []State,
 	grammarPackage syntaxa.GrammarPackage[TToken],
 	tokenPatternMap map[TToken]Pattern,
-) []State {
-	getBaseStateID := func(tok TToken) StateID {
-		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
-	}
+) ([]State, map[syntaxa.GrammarID]StateID) {
+
+	openTokenCounts := countOpenTokens(grammarPackage.Nests)
+	nestRegistry := make(map[syntaxa.GrammarID]StateID)
 
 	for _, nest := range grammarPackage.Nests {
-		nestLabel := sanitizeContextName(string(nest.OwnerRule))
-		openStateID := getBaseStateID(nest.Open)
+		allStates = processSingleNest(config, allStates, nest, tokenPatternMap, openTokenCounts, nestRegistry)
+	}
 
-		var overrideFn NestOverrideFunc[TToken]
-		for _, h := range config.nestOverrideHandlers {
-			if h.pred(&nest) {
-				overrideFn = h.fn
-				break
-			}
+	return allStates, nestRegistry
+}
+
+func countOpenTokens[TToken comparable](nests []syntaxa.NestSpec[TToken]) map[TToken]int {
+	counts := make(map[TToken]int)
+	for _, nest := range nests {
+		counts[nest.Open]++
+	}
+	return counts
+}
+
+func processSingleNest[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	allStates []State,
+	nest syntaxa.NestSpec[TToken],
+	tokenPatternMap map[TToken]Pattern,
+	openTokenCounts map[TToken]int,
+	nestRegistry map[syntaxa.GrammarID]StateID,
+) []State {
+	nestLabel := sanitizeContextName(string(nest.OwnerRule))
+
+	isUniqueToken := openTokenCounts[nest.Open] == 1
+	openStateID := StateID(produceStateID(sanitizeContextName(config.formatter(nest.Open))))
+
+	if customStates, entryID, handled := tryApplyNestOverride(config, nest, nestLabel, tokenPatternMap); handled {
+		nestRegistry[nest.OwnerRule] = entryID
+
+		if isUniqueToken {
+			mutateStateAction(allStates, openStateID, ACTION_PUSH, entryID)
 		}
-		if overrideFn != nil {
-			getRegEx := func(tok TToken) string {
-				p := tokenPatternMap[tok]
-				r, _ := p.ToRegEx()
-				return r
-			}
+
+		return append(allStates, customStates...)
+	}
+
+	bodyStateID := StateID(produceStateID(nestLabel + "_body"))
+	bodyState := buildBodyState(config, nest, nestLabel, tokenPatternMap, bodyStateID)
+	allStates = append(allStates, bodyState)
+
+	if isUniqueToken {
+		mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
+		return allStates
+	}
+
+	expectStateID := StateID(produceStateID(nestLabel + "_expect"))
+	expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID)
+
+	nestRegistry[nest.OwnerRule] = expectStateID
+	return append(allStates, expectState)
+}
+
+func tryApplyNestOverride[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nest syntaxa.NestSpec[TToken],
+	nestLabel string,
+	tokenPatternMap map[TToken]Pattern,
+) ([]State, StateID, bool) {
+	for _, h := range config.nestOverrideHandlers {
+		if h.pred(&nest) {
 			ctx := &NestOverrideContext[TToken]{
 				NestLabel:      nestLabel,
 				ScopeExtension: config.scopeExtension,
-				getRegEx:      getRegEx,
-			}
-
-			entryStateID, customStates := overrideFn(ctx)
-			linkOpenTokenToPushAction(allStates, openStateID, entryStateID)
-			allStates = append(allStates, customStates...)
-			continue
-		}
-
-		bodyStateID := StateID(produceStateID(nestLabel + "_body"))
-
-		linkOpenTokenToPushAction(allStates, getBaseStateID(nest.Open), bodyStateID)
-
-		validTokens := extractWhitelistFromNest(nest.Node)
-		includes := buildIncludesWhitelist(validTokens, nest.Open, nest.Close, getBaseStateID)
-
-		closeRegex, _ := tokenPatternMap[nest.Close].ToRegEx()
-		metaScopeBase := fmt.Sprintf("meta.block.%s", strings.ToLower(nestLabel))
-
-		nestState := State{
-			ID:            bodyStateID,
-			Label:         nestLabel + "_body",
-			IsRootContext: false,
-			MetaScope:     getScopeString(metaScopeBase, config.scopeExtension),
-			Includes:      includes,
-			Rules: []StateRule{
-				{
-					ID:     StateRuleID(produceStateID(nestLabel + "_close")),
-					Label:  nestLabel + "_close",
-					RegEx:  closeRegex,
-					Scope:  getScopeString(config.scopeProvider(nest.Close), config.scopeExtension),
-					Action: ACTION_POP,
+				getRegEx: func(tok TToken) string {
+					r, _ := tokenPatternMap[tok].ToRegEx()
+					return r
 				},
-				InvalidFallbackRule(StateRuleID(produceStateID(nestLabel+"_invalid")), config.scopeExtension),
-			},
+			}
+			entryStateID, customStates := h.fn(ctx)
+			return customStates, entryStateID, true
 		}
-
-		allStates = append(allStates, nestState)
 	}
-
-	return allStates
+	return nil, 0, false
 }
 
-/*
-injectPrototypeState generates the magic 'prototype' state required by ST4.
-ST4 automatically injects this state at the top of every context on the stack.
-*/
+func buildExpectState[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nest syntaxa.NestSpec[TToken],
+	nestLabel string,
+	tokenPatternMap map[TToken]Pattern,
+	expectStateID StateID,
+	bodyStateID StateID,
+) State {
+	openRegex, _ := tokenPatternMap[nest.Open].ToRegEx()
+
+	return State{
+		ID:            expectStateID,
+		Label:         nestLabel + "_expect",
+		IsRootContext: false,
+		Rules: []StateRule{
+			{
+				ID:           StateRuleID(produceStateID(nestLabel + "_open")),
+				RegEx:        openRegex,
+				Scope:        getScopeString(config.scopeProvider(nest.Open), config.scopeExtension),
+				Action:       ACTION_SET,
+				ActionTarget: bodyStateID,
+			},
+			InvalidFallbackRule(StateRuleID(produceStateID(nestLabel+"_expect_invalid")), config.scopeExtension),
+		},
+	}
+}
+
+func buildBodyState[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nest syntaxa.NestSpec[TToken],
+	nestLabel string,
+	tokenPatternMap map[TToken]Pattern,
+	bodyStateID StateID,
+) State {
+	validTokens := extractWhitelistFromNest(nest.Node)
+
+	for _, extraTok := range config.nestExtraIncludes[nest.OwnerRule] {
+		validTokens[extraTok] = struct{}{}
+	}
+
+	includes := buildIncludesWhitelist(validTokens, nest.Open, nest.Close, func(tok TToken) StateID {
+		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
+	})
+
+	closeRegex, _ := tokenPatternMap[nest.Close].ToRegEx()
+	metaScopeBase := fmt.Sprintf("meta.block.%s", strings.ToLower(nestLabel))
+
+	return State{
+		ID:            bodyStateID,
+		Label:         nestLabel + "_body",
+		IsRootContext: false,
+		MetaScope:     getScopeString(metaScopeBase, config.scopeExtension),
+		Includes:      includes,
+		Rules: []StateRule{
+			{
+				ID:     StateRuleID(produceStateID(nestLabel + "_close")),
+				Label:  nestLabel + "_close",
+				RegEx:  closeRegex,
+				Scope:  getScopeString(config.scopeProvider(nest.Close), config.scopeExtension),
+				Action: ACTION_POP,
+			},
+			InvalidFallbackRule(StateRuleID(produceStateID(nestLabel+"_invalid")), config.scopeExtension),
+		},
+	}
+}
+
+// ------------------------------------------------------------------ STRUCTURAL WIRING
+
+func automateStructuralTransitions[TToken, TTokenRole comparable](
+	allStates []State,
+	grammarNode *syntaxa.Grammar[TToken],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nestRegistry map[syntaxa.GrammarID]StateID,
+) {
+	if grammarNode == nil {
+		return
+	}
+
+	if grammarNode.Kind == syntaxa.GConcat {
+		wireSequence(allStates, grammarNode, config, nestRegistry)
+	}
+
+	for _, child := range grammarNode.Children {
+		automateStructuralTransitions(allStates, child, config, nestRegistry)
+	}
+}
+
+func wireSequence[TToken, TTokenRole comparable](
+	allStates []State,
+	concatNode *syntaxa.Grammar[TToken],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nestRegistry map[syntaxa.GrammarID]StateID,
+) {
+	children := concatNode.Children
+	if len(children) < 2 {
+		return
+	}
+
+	for i := 0; i < len(children)-1; i++ {
+		current := children[i]
+		next := children[i+1]
+
+		if current.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
+			linkTokenToNest(allStates, current.Token, next, config, nestRegistry)
+		}
+	}
+}
+
+func linkTokenToNest[TToken, TTokenRole comparable](
+	allStates []State,
+	triggerToken TToken,
+	nestNode *syntaxa.Grammar[TToken],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nestRegistry map[syntaxa.GrammarID]StateID,
+) {
+	entryStateID, ok := nestRegistry[nestNode.GrammarID]
+	if !ok {
+		return
+	}
+
+	triggerLabel := sanitizeContextName(config.formatter(triggerToken))
+	triggerStateID := StateID(produceStateID(triggerLabel))
+
+	mutateStateAction(allStates, triggerStateID, ACTION_PUSH, entryStateID)
+}
+
+func mutateStateAction(allStates []State, targetStateID StateID, action RuleAction, actionTarget StateID) {
+	for i := range allStates {
+		if allStates[i].ID == targetStateID && len(allStates[i].Rules) > 0 {
+			allStates[i].Rules[0].Action = action
+			allStates[i].Rules[0].ActionTarget = actionTarget
+			return
+		}
+	}
+}
+
+// ------------------------------------------------------------------ INJECTIONS & UTILS
+
 func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []State {
 	if len(prototypeIncludes) == 0 {
 		return allStates
@@ -455,7 +532,7 @@ func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []Stat
 
 	protoState := State{
 		ID:            StateID(produceStateID("prototype")),
-		Label:         "prototype", // MUST be named exactly "prototype"
+		Label:         "prototype",
 		IsRootContext: false,
 		Includes:      prototypeIncludes,
 	}
@@ -463,11 +540,6 @@ func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []Stat
 	return append(allStates, protoState)
 }
 
-/*
-injectMainState adds a "main" state that includes all root contexts and an invalid
-fallback rule after those includes. So at the root level, invalid constructs are
-highlighted; the Sublime generator emits this state as contexts["main"] when present.
-*/
 func injectMainState(allStates []State, scopeExtension string) []State {
 	var rootIncludes []StateID
 	for _, st := range allStates {
@@ -485,18 +557,6 @@ func injectMainState(allStates []State, scopeExtension string) []State {
 		},
 	}
 	return append(allStates, mainState)
-}
-
-// ------------------------------------------------------------------ UTILITY EXTRACTORS
-
-func linkOpenTokenToPushAction(states []State, openStateID, targetBodyID StateID) {
-	for i := range states {
-		if states[i].ID == openStateID && len(states[i].Rules) > 0 {
-			states[i].Rules[0].Action = ACTION_PUSH
-			states[i].Rules[0].ActionTarget = targetBodyID
-			return
-		}
-	}
 }
 
 func extractWhitelistFromNest[TToken comparable](nestNode *syntaxa.Grammar[TToken]) map[TToken]struct{} {
@@ -523,18 +583,9 @@ func buildIncludesWhitelist[TToken comparable](
 	return includes
 }
 
-// ------------------------------------------------------------------ INVALID FALLBACK HELPER
-
 const invalidFallbackLabel = "invalid_fallback"
-
 const invalidFallbackBaseScope = "invalid.illegal.unexpected-token"
 
-/*
-InvalidFallbackRule returns a StateRule that matches any non-whitespace run and applies
-the invalid.illegal scope. Use it so the highlighter marks unexpected tokens in a state.
-The Sublime generator places rules with this label last (after includes). Pass a stable
-rule ID and the scope extension (e.g. config.scopeExtension or ctx.ScopeExtension).
-*/
 func InvalidFallbackRule(id StateRuleID, scopeExtension string) StateRule {
 	return StateRule{
 		ID:     id,
@@ -544,8 +595,6 @@ func InvalidFallbackRule(id StateRuleID, scopeExtension string) StateRule {
 		Action: ACTION_MATCH,
 	}
 }
-
-// ------------------------------------------------------------------ PRIVATE HELPERS
 
 func getScopeString(baseScope, scopeExtension string) string {
 	return fmt.Sprintf("%s%s", baseScope, scopeExtension)
@@ -569,21 +618,16 @@ func collectTokensForSubtree[TToken comparable](
 	switch g.Kind {
 	case syntaxa.GToken:
 		out[g.Token] = struct{}{}
-
 	case syntaxa.GNest:
 		out[*g.OpenToken] = struct{}{}
 		out[*g.CloseToken] = struct{}{}
 		for _, child := range g.Children {
 			collectTokensForSubtree(child, visited, out)
 		}
-
 	case syntaxa.GConcat, syntaxa.GChoice, syntaxa.GRepeat, syntaxa.GOptional:
 		for _, child := range g.Children {
 			collectTokensForSubtree(child, visited, out)
 		}
-
-	case syntaxa.GEpsilon:
-		// No tokens consumed
 	}
 }
 
@@ -601,10 +645,8 @@ func extractRootWhitelistFromGrammar[TToken comparable](g *syntaxa.Grammar[TToke
 		switch node.Kind {
 		case syntaxa.GToken:
 			validTokens[node.Token] = struct{}{}
-
 		case syntaxa.GNest:
 			validTokens[*node.OpenToken] = struct{}{}
-
 		case syntaxa.GConcat, syntaxa.GChoice, syntaxa.GRepeat, syntaxa.GOptional:
 			for _, child := range node.Children {
 				walk(child)
