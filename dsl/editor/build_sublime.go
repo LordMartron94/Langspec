@@ -64,6 +64,11 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodeDSLName), "entity.name.language")
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternAlternation), "keyword.operator.alternation")
 
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternDefName), "entity.name.variable")
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefToken), "punctuation.definition.variable")
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefTarget), "variable.other")
+	editorIRConfig.AddNodeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRef), langspeceditor.OverrideConfig{MetaScope: "meta.variable.reference"})
+
 	lexingRuleSet := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	programRule := dsl.LangSpecCompilerProgramRule(compiler)
 

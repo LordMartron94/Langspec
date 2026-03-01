@@ -110,6 +110,8 @@ const (
 	NodePatternDefinition
 	NodePatternDefName
 	NodePatternVarRef
+	NodePatternVarRefToken
+	NodePatternVarRefTarget
 	NodePatternRange
 	NodePatternCharLiteral
 	NodePatternStar
@@ -441,7 +443,7 @@ func buildPatternSegmentRule(g *GrammarDefiner) Rule {
 }
 
 func buildPatternVarRefRule(g *GrammarDefiner) Rule {
-	return g.expectPair(NodePatternVarRef, TokVarRef, TokIdentifier)
+	return g.expectPairWithChildNodes(NodePatternVarRef, NodePatternVarRefToken, NodePatternVarRefTarget, TokVarRef, TokIdentifier)
 }
 
 func buildPatternRangeRule(g *GrammarDefiner) Rule {

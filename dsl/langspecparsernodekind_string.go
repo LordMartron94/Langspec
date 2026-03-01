@@ -33,16 +33,18 @@ func _() {
 	_ = x[NodePatternDefinition-23]
 	_ = x[NodePatternDefName-24]
 	_ = x[NodePatternVarRef-25]
-	_ = x[NodePatternRange-26]
-	_ = x[NodePatternCharLiteral-27]
-	_ = x[NodePatternStar-28]
-	_ = x[NodePatternConcat-29]
-	_ = x[NodePatternAlternation-30]
+	_ = x[NodePatternVarRefToken-26]
+	_ = x[NodePatternVarRefTarget-27]
+	_ = x[NodePatternRange-28]
+	_ = x[NodePatternCharLiteral-29]
+	_ = x[NodePatternStar-30]
+	_ = x[NodePatternConcat-31]
+	_ = x[NodePatternAlternation-32]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternDefNameNodePatternVarRefNodePatternRangeNodePatternCharLiteralNodePatternStarNodePatternConcatNodePatternAlternation"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaStatementNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleScopeNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternDefNameNodePatternVarRefNodePatternVarRefTokenNodePatternVarRefTargetNodePatternRangeNodePatternCharLiteralNodePatternStarNodePatternConcatNodePatternAlternation"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 210, 230, 246, 264, 283, 301, 319, 340, 358, 375, 391, 413, 428, 445, 467}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 63, 76, 91, 106, 126, 137, 150, 161, 172, 185, 199, 210, 230, 246, 264, 283, 301, 319, 340, 358, 375, 397, 420, 436, 458, 473, 490, 512}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

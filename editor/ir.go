@@ -121,6 +121,17 @@ type NestOverrideFunc[TToken comparable] func(ctx *NestOverrideContext[TToken]) 
 
 type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken]) bool
 
+// ------------------------------------------------------------------ OVERRIDE CONFIG
+
+type OverrideConfig struct {
+	Scope     string
+	MetaScope string
+}
+
+func (c OverrideConfig) HasScope() bool     { return c.Scope != "" }
+func (c OverrideConfig) HasMetaScope() bool { return c.MetaScope != "" }
+func (c OverrideConfig) HasAny() bool       { return c.HasScope() || c.HasMetaScope() }
+
 // ------------------------------------------------------------------ CONFIGURATION
 
 type nestOverrideHandler[TToken comparable] struct {
@@ -135,7 +146,7 @@ type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
 	overrides            map[TToken]TokenOverrideFunc
 	prototypeTokenRoles  []TTokenRole
 	nestOverrideHandlers []nestOverrideHandler[TToken]
-	nodeScopeOverrides   map[syntaxa.GrammarID]string
+	nodeOverrides        map[syntaxa.GrammarID]OverrideConfig
 }
 
 func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
@@ -150,7 +161,7 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 		overrides:            make(map[TToken]TokenOverrideFunc),
 		prototypeTokenRoles:  make([]TTokenRole, 0),
 		nestOverrideHandlers: make([]nestOverrideHandler[TToken], 0),
-		nodeScopeOverrides:   make(map[syntaxa.GrammarID]string),
+		nodeOverrides:        make(map[syntaxa.GrammarID]OverrideConfig),
 	}
 }
 
@@ -168,8 +179,12 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverrideBy
 	c.nestOverrideHandlers = append(c.nestOverrideHandlers, nestOverrideHandler[TToken]{pred: pred, fn: fn})
 }
 
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(nodeID syntaxa.GrammarID, config OverrideConfig) {
+	c.nodeOverrides[nodeID] = config
+}
+
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeScopeOverride(nodeID syntaxa.GrammarID, scope string) {
-	c.nodeScopeOverrides[nodeID] = scope
+	c.AddNodeOverride(nodeID, OverrideConfig{Scope: scope})
 }
 
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
@@ -528,6 +543,121 @@ func mutateStateAction(allStates []State, targetStateID StateID, action RuleActi
 
 // ------------------------------------------------------------------ NODE OVERRIDES
 
+type tokenStep[TToken comparable] struct {
+	Token     TToken
+	Scope     string
+	GrammarID syntaxa.GrammarID
+}
+
+func nodeOverrideStateID(grammarID syntaxa.GrammarID) StateID {
+	label := fmt.Sprintf("node_override_%s", sanitizeContextName(string(grammarID)))
+	return StateID(produceStateID(label))
+}
+
+func nodeConstructEntryStateID(concatID syntaxa.GrammarID) StateID {
+	label := fmt.Sprintf("node_construct_%s", sanitizeContextName(string(concatID)))
+	return StateID(produceStateID(label))
+}
+
+func collectConstructSteps[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	node *syntaxa.Grammar[TToken],
+) []tokenStep[TToken] {
+	if node == nil || node.Kind != syntaxa.GConcat {
+		return nil
+	}
+	var steps []tokenStep[TToken]
+	for _, child := range node.Children {
+		switch child.Kind {
+		case syntaxa.GToken:
+			scope := config.scopeProvider(child.Token)
+			if c, ok := config.nodeOverrides[child.GrammarID]; ok && c.HasScope() {
+				scope = c.Scope
+			}
+			steps = append(steps, tokenStep[TToken]{
+				Token:     child.Token,
+				Scope:     scope,
+				GrammarID: child.GrammarID,
+			})
+		case syntaxa.GConcat:
+			if c, ok := config.nodeOverrides[child.GrammarID]; ok && c.HasMetaScope() {
+				steps = append(steps, collectConstructSteps(config, child)...)
+			}
+		}
+	}
+	return steps
+}
+
+func buildConstructStateChain[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	concatID syntaxa.GrammarID,
+	metaScope string,
+	steps []tokenStep[TToken],
+	tokenPatternMap map[TToken]Pattern,
+) []State {
+	if len(steps) == 0 {
+		return nil
+	}
+	baseLabel := fmt.Sprintf("node_construct_%s", sanitizeContextName(string(concatID)))
+	states := make([]State, 0, len(steps))
+
+	for i := range steps {
+		step := &steps[i]
+		stateLabel := baseLabel
+		if len(steps) > 1 {
+			stateLabel = fmt.Sprintf("%s_step_%d", baseLabel, i)
+		}
+		id := StateID(produceStateID(stateLabel))
+		if i == 0 {
+			id = nodeConstructEntryStateID(concatID)
+		}
+
+		regex, _ := tokenPatternMap[step.Token].ToRegEx()
+		var nextID StateID
+		var action RuleAction
+
+		if len(steps) == 1 {
+			action = ACTION_MATCH
+		} else if i == 0 {
+			nextLabel := fmt.Sprintf("%s_step_%d", baseLabel, i+1)
+			nextID = StateID(produceStateID(nextLabel))
+			action = ACTION_PUSH
+		} else if i < len(steps)-1 {
+			nextLabel := fmt.Sprintf("%s_step_%d", baseLabel, i+1)
+			nextID = StateID(produceStateID(nextLabel))
+			action = ACTION_SET
+		} else {
+			action = ACTION_POP
+		}
+
+		rule := StateRule{
+			ID:           StateRuleID(produceStateID(stateLabel + "_match")),
+			Label:        stateLabel + "_match",
+			RegEx:        regex,
+			Scope:        getScopeString(step.Scope, config.scopeExtension),
+			Action:       action,
+			ActionTarget: nextID,
+		}
+
+		st := State{
+			ID:            id,
+			Label:         stateLabel,
+			Rules:         []StateRule{rule},
+			IsRootContext: false,
+		}
+
+		if i > 0 && metaScope != "" {
+			st.MetaScope = getScopeString(metaScope, config.scopeExtension)
+		}
+		if i > 0 {
+			st.Rules = append(st.Rules, InvalidFallbackRule(StateRuleID(produceStateID(stateLabel+"_invalid")), config.scopeExtension))
+		}
+
+		states = append(states, st)
+	}
+	return states
+}
+
 func injectNodeOverrideStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	allStates []State,
@@ -535,7 +665,8 @@ func injectNodeOverrideStates[TToken, TTokenRole comparable](
 	tokenPatternMap map[TToken]Pattern,
 ) []State {
 	visited := make(map[*syntaxa.Grammar[TToken]]bool)
-	seen := make(map[syntaxa.GrammarID]bool)
+	seenTokenOverride := make(map[syntaxa.GrammarID]bool)
+	seenConstruct := make(map[syntaxa.GrammarID]bool)
 
 	var walk func(node *syntaxa.Grammar[TToken])
 	walk = func(node *syntaxa.Grammar[TToken]) {
@@ -544,22 +675,36 @@ func injectNodeOverrideStates[TToken, TTokenRole comparable](
 		}
 		visited[node] = true
 
-		if customScope, exists := config.nodeScopeOverrides[node.GrammarID]; exists && node.Kind == syntaxa.GToken {
-			if !seen[node.GrammarID] {
-				seen[node.GrammarID] = true
+		oc, hasOverride := config.nodeOverrides[node.GrammarID]
 
-				label := fmt.Sprintf("node_override_%s", sanitizeContextName(string(node.GrammarID)))
-				stateID := StateID(produceStateID(label))
+		// Construct Overrides (MetaScope Sequences)
+		if hasOverride && node.Kind == syntaxa.GConcat && oc.HasMetaScope() {
+			if !seenConstruct[node.GrammarID] {
+				seenConstruct[node.GrammarID] = true
+				steps := collectConstructSteps(config, node)
+				if len(steps) > 0 {
+					chain := buildConstructStateChain(config, node.GrammarID, oc.MetaScope, steps, tokenPatternMap)
+					allStates = append(allStates, chain...)
+				}
+			}
+			// HALT DESCENT: The construct sequence now wholly owns its interior tokens.
+			return
+		}
+
+		// Standalone Token Overrides
+		if hasOverride && node.Kind == syntaxa.GToken && oc.HasScope() {
+			if !seenTokenOverride[node.GrammarID] {
+				seenTokenOverride[node.GrammarID] = true
+				stateID := nodeOverrideStateID(node.GrammarID)
 				regex, _ := tokenPatternMap[node.Token].ToRegEx()
-
 				allStates = append(allStates, State{
 					ID:    stateID,
-					Label: label,
+					Label: fmt.Sprintf("node_override_%s", sanitizeContextName(string(node.GrammarID))),
 					Rules: []StateRule{{
 						ID:     StateRuleID(stateID),
-						Label:  label + "_match",
-						Action: ACTION_MATCH, // Context-local override, must match and stay in body
-						Scope:  getScopeString(customScope, config.scopeExtension),
+						Label:  fmt.Sprintf("node_override_%s_match", sanitizeContextName(string(node.GrammarID))),
+						Action: ACTION_MATCH,
+						Scope:  getScopeString(oc.Scope, config.scopeExtension),
 						RegEx:  regex,
 					}},
 					IsRootContext: false,
@@ -670,6 +815,16 @@ func extractContextIncludes[TToken, TTokenRole comparable](
 		visited[node] = true
 
 		if node.Kind == syntaxa.GConcat {
+			if oc, hasOverride := config.nodeOverrides[node.GrammarID]; hasOverride && oc.HasMetaScope() {
+				id := nodeConstructEntryStateID(node.GrammarID)
+				if !seenOverrides[id] {
+					seenOverrides[id] = true
+					overrideIDs = append(overrideIDs, id)
+				}
+				// HALT DESCENT: Prevent extraction of dead tokens and inner triggers
+				return
+			}
+
 			for i := 0; i < len(node.Children)-1; i++ {
 				curr, next := node.Children[i], node.Children[i+1]
 				if curr.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
@@ -685,9 +840,8 @@ func extractContextIncludes[TToken, TTokenRole comparable](
 
 		switch node.Kind {
 		case syntaxa.GToken:
-			if _, hasOverride := config.nodeScopeOverrides[node.GrammarID]; hasOverride {
-				label := fmt.Sprintf("node_override_%s", sanitizeContextName(string(node.GrammarID)))
-				id := StateID(produceStateID(label))
+			if oc, hasOverride := config.nodeOverrides[node.GrammarID]; hasOverride && oc.HasScope() {
+				id := nodeOverrideStateID(node.GrammarID)
 				if !seenOverrides[id] {
 					seenOverrides[id] = true
 					overrideIDs = append(overrideIDs, id)
@@ -809,8 +963,10 @@ func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIR
 	if node == nil {
 		return false
 	}
-	if _, exists := config.nodeScopeOverrides[node.GrammarID]; exists && node.Kind == syntaxa.GToken {
-		return true
+	if oc, exists := config.nodeOverrides[node.GrammarID]; exists && oc.HasAny() {
+		if (node.Kind == syntaxa.GToken && oc.HasScope()) || (node.Kind == syntaxa.GConcat && oc.HasMetaScope()) {
+			return true
+		}
 	}
 	for _, c := range node.Children {
 		if hasNodeOverrides(config, c) {
@@ -945,8 +1101,8 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 		case syntaxa.GToken:
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
 			scope := config.scopeProvider(n.Token)
-			if custom, ok := config.nodeScopeOverrides[n.GrammarID]; ok {
-				scope = custom
+			if oc, ok := config.nodeOverrides[n.GrammarID]; ok && oc.HasScope() {
+				scope = oc.Scope
 			}
 			rules = append(rules, StateRule{
 				ID:           StateRuleID(produceStateID(fmt.Sprintf("%s_match_%s_%v", stateLabel, n.GrammarID, n.Token))),
