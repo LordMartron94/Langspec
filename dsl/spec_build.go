@@ -145,6 +145,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		DefineToken(TokBlockComment).
 			Role(LANG_SPEC_COMMENT_ROLE).
 			Scope("comment.block").
+			Delimited(buildBlockCommentOpenPattern(f), buildBlockCommentClosePattern(f)).
 			Pattern(buildBlockCommentPattern(f)).
 			Build(),
 
@@ -538,6 +539,14 @@ func buildBlockCommentPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaA
 		stars,
 		f.Literal('/'),
 	)
+}
+
+func buildBlockCommentOpenPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	return f.Sequence(f.Literal('/'), f.Literal('*'))
+}
+
+func buildBlockCommentClosePattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	return f.Sequence(f.Literal('*'), f.Literal('/'))
 }
 
 func buildCharLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {

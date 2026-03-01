@@ -7,6 +7,7 @@ import (
 /*
 TokenDefinition is the SSoT entry for one token: identity, role, scope, and how it matches.
 Pattern is nil for virtual tokens (e.g. TokEOF). The lexer engine adds a rule only when Pattern != nil.
+Open and Close are optional; when both are set, the token is a delimited region for editor IR.
 */
 type TokenDefinition struct {
 	Type     LangSpecLexerTokenType
@@ -14,6 +15,8 @@ type TokenDefinition struct {
 	Scope    string
 	Priority int
 	Pattern  *pattern.RegulaAST[rune]
+	Open     *pattern.RegulaAST[rune]
+	Close    *pattern.RegulaAST[rune]
 }
 
 // ----------------------------------------------------------- TOKEN BUILDER
@@ -64,6 +67,21 @@ func (b *TokenBuilder) Pattern(p pattern.RegulaAST[rune]) *TokenBuilder {
 	q := new(pattern.RegulaAST[rune])
 	*q = p
 	b.def.Pattern = q
+	return b
+}
+
+/*
+Delimited sets the open and close patterns for a delimited region (e.g. block comment).
+When both are set, the ruleset is annotated and the editor IR can map this token to
+push/body/pop regions automatically.
+*/
+func (b *TokenBuilder) Delimited(open, close pattern.RegulaAST[rune]) *TokenBuilder {
+	o := new(pattern.RegulaAST[rune])
+	*o = open
+	c := new(pattern.RegulaAST[rune])
+	*c = close
+	b.def.Open  = o
+	b.def.Close = c
 	return b
 }
 

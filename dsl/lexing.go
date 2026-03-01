@@ -38,6 +38,9 @@ func BuildLexerSpec(spec LanguageSpec) (
 	for _, tok := range spec.Tokens {
 		if tok.Pattern != nil {
 			rs.WithRulePriority(*tok.Pattern, tok.Type, tok.Role, tok.Priority)
+			if tok.Open != nil && tok.Close != nil {
+				rs.WithDelimitedRule(*tok.Open, *tok.Close, tok.Type)
+			}
 		}
 	}
 

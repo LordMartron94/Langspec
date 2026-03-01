@@ -7,12 +7,15 @@
 // token roles, and overrides; then PushDownAutomatonIRCreate to build the IR from a
 // syntaxa GrammarPackage and lexarch LexingRuleset.
 //
+// Delimited tokens: tokens that have a DelimitedRule in the LexingRuleset (open/close
+// patterns) are mapped automatically to ST4-style regions (open rule PUSHes to a body
+// state, body state has a close rule that POPs). No override is required for such tokens.
+//
 // Override mechanism: token overrides replace the default single-rule state for a token
-// with a custom StateRule and optional extra States (e.g. delimited regions). Nest
-// overrides replace the default single-body state for a grammar nest with a custom
-// state sequence. Use the structural (semantic-agnostic) helpers in this package—
-// TokenOverrideDelimitedRegion, TokenOverrideMatchWithCapture, BuildNestStateSequence—
-// to build overrides from regex and scope strings without constructing State/StateRule
-// by hand. The editor package does not prescribe language semantics; clients supply
-// regex and scope strings and choose which helper fits each token or nest.
+// with a custom StateRule and optional extra States (e.g. line comment with capture).
+// Nest overrides replace the default single-body state for a grammar nest with a custom
+// state sequence. Use the structural helpers—TokenOverrideDelimitedRegion,
+// TokenOverrideMatchWithCapture, BuildNestStateSequence—to build overrides from regex
+// and scope strings. The editor package does not prescribe language semantics; clients
+// supply regex and scope strings.
 package editor
