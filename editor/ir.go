@@ -560,7 +560,7 @@ func buildConstructStep[TToken, TTokenRole comparable](
 	if isToken {
 		rules, includes = handleTokenConstructStep(config, analysis, concatNode, child, index, stepCount, lbl, includes, tokenPatternMap)
 	} else {
-		rules, includes = handleSegmentConstructStep(config, concatNode, index, stepCount, lbl, includes, tokenPatternMap)
+		rules, includes = handleSegmentConstructStep(config, analysis, concatNode, index, stepCount, lbl, includes, tokenPatternMap)
 	}
 
 	if index > 0 {
@@ -599,23 +599,18 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 }
 
 func handleSegmentConstructStep[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	_ *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	concatNode *syntaxa.Grammar[TToken],
 	index, stepCount int,
 	lbl string,
 	includes []StateID,
 	tokenPatternMap map[TToken]Pattern,
 ) ([]StateRule, []StateID) {
-	if index+1 < stepCount {
-		if tok, ok := syntaxa.GrammarOptionalTokenChild(concatNode.Children[index+1]); ok {
-			includes = append(includes, StateID(produceStateID(sanitizeContextName(config.formatter(tok)))))
-		}
+	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount)
+	rules := buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID)
 
-		nextChild := concatNode.Children[index+1]
-		laAction, laNextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+2, stepCount)
-		return buildExitRulesToNextTokenChild(config, nextChild, laAction, laNextID, lbl, tokenPatternMap), includes
-	}
-	return nil, includes
+	return rules, includes
 }
 
 func buildLookaheadRules[TToken comparable](
@@ -694,19 +689,19 @@ func buildIncludesForNode[TToken, TTokenRole comparable](
 	return includes
 }
 
-func buildExitRulesToNextTokenChild[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	nextChild *syntaxa.Grammar[TToken],
-	action RuleAction,
-	nextID StateID,
-	stateLbl string,
-	tokenPatternMap map[TToken]Pattern,
-) []StateRule {
-	if nextChild == nil || nextChild.Kind != syntaxa.GToken {
-		return nil
-	}
-	return generateRulesForNode(config, nextChild, tokenPatternMap, nextID, stateLbl, action)
-}
+// func buildExitRulesToNextTokenChild[TToken, TTokenRole comparable](
+// 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+// 	nextChild *syntaxa.Grammar[TToken],
+// 	action RuleAction,
+// 	nextID StateID,
+// 	stateLbl string,
+// 	tokenPatternMap map[TToken]Pattern,
+// ) []StateRule {
+// 	if nextChild == nil || nextChild.Kind != syntaxa.GToken {
+// 		return nil
+// 	}
+// 	return generateRulesForNode(config, nextChild, tokenPatternMap, nextID, stateLbl, action)
+// }
 
 func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
