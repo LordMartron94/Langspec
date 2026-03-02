@@ -23,6 +23,6 @@
 // state sequence. Use the structural helpers—TokenOverrideDelimitedRegion,
 // TokenOverrideMatchWithCapture, BuildNestStateSequence—to build overrides from regex
 // and scope strings. Node overrides (AddNodeOverride / AddNodeScopeOverride) attach
-// scope or meta-scope to specific grammar nodes by GrammarID. The editor package does
+// scope or meta-scope to specific grammar nodes by GrammarLabel. The editor package does
 // not prescribe language semantics; clients supply regex and scope strings.
 package editor

@@ -76,10 +76,17 @@ func buildLangSpecDSLParserSpec(programRule Rule) (
 		}
 	}
 
+	grammarPkg := new(syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState])
+	*grammarPkg = syntaxa.ProducePackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState](
+		programRule.GetGrammar(),
+		"LangSpec DSL",
+		"0.0.0",
+		&programRule,
+	)
 	parserSpec := langspec.ParserSpecCreate(
+		grammarPkg,
 		NodeProgram,
 		NodeError,
-		programRule,
 		true, // freeze LST after parse
 	)
 	parserSpec.WithSkipRoles(

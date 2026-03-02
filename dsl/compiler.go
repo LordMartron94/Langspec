@@ -165,14 +165,14 @@ func LangSpecCompilerCompile(
 				}
 				return fmt.Sprintf("[%d..%d]", min, *max)
 			},
-			FormatGrammarID: func(id syntaxa.GrammarID) string {
-				return "(" + string(id) + ")"
+			FormatGrammarLabel: func(label syntaxa.GrammarLabel) string {
+				return "(" + string(label) + ")"
 			},
 		},
 	)
 
-	grammarPackage := compiler.programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0")
-	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[LangSpecLexerTokenType]{
+	grammarPackage := compiler.parser.GetGrammarPackage()
+	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState]{
 		FormatToken: LangSpecLexerTokenType.String,
 	})
 
@@ -180,15 +180,15 @@ func LangSpecCompilerCompile(
 
 	session := getSession(compiler, sourceFile)
 
-	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
-	if err != nil {
-		return nil, fmt.Errorf("lexing error: %w", err)
-	}
+	// lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("lexing error: %w", err)
+	// }
 
-	renderLexemes(w, lexemes,
-		func(t LangSpecLexerTokenType) string { return t.String() },
-		func(r LangSpecLexerTokenRole) string { return r.String() },
-	)
+	// renderLexemes(w, lexemes,
+	// 	func(t LangSpecLexerTokenType) string { return t.String() },
+	// 	func(r LangSpecLexerTokenRole) string { return r.String() },
+	// )
 
 	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
 		compiler.parser,
@@ -308,10 +308,18 @@ func LangSpecCompilerLexingRuleSet(compiler *LangSpecCompiler) *lexarch.LexingRu
 
 /*
 LangSpecCompilerProgramRule returns the program rule used by the DSL compiler.
-Used by editor integrations to produce the grammar package for syntax highlighting.
+Used by editor integrations that need the rule or its grammar.
 */
 func LangSpecCompilerProgramRule(compiler *LangSpecCompiler) Rule {
 	return compiler.programRule
+}
+
+/*
+LangSpecCompilerGrammarPackage returns the grammar package used by the DSL parser.
+Use for editor IR (e.g. syntax highlighting) or debug dumps.
+*/
+func LangSpecCompilerGrammarPackage(compiler *LangSpecCompiler) *syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState] {
+	return compiler.parser.GetGrammarPackage()
 }
 
 var runeFormatter = lexarch.RuneFormatterDefault()

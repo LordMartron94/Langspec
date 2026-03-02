@@ -309,7 +309,7 @@ func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 		NodeProgram,
 		false,
 		g.rb.Rule.Required(headerRule, "must have header"),
-		g.rb.Rule.TransparentZeroOrMore(LangSpecGrammarIDFromNodeWithSuffix(NodePragmaStatement, ""), pragmaRule),
+		g.rb.Rule.TransparentZeroOrMore(LangSpecGrammarIDFromNodeWithSuffix(NodePragmaStatement, "LIST"), pragmaRule),
 		g.rb.Rule.OptionalPrefix(buildPatternSectionRule(g), TokKWPattern),
 		g.rb.Rule.Required(lexSectionRule, "must have lex ruleset"),
 		g.expectVirtual(VirtualEOF, TokEOF),
@@ -337,7 +337,7 @@ func buildHeaderRule(g *GrammarDefiner) Rule {
 }
 
 func buildPragmaRule(g *GrammarDefiner) Rule {
-	pragmaBody := g.sequence(NodePragmaStatement, "").
+	pragmaBody := g.sequence(NodePragmaStatement, "BODY").
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectToken(NodePragmaValue, TokStringLiteral).
 		build()
@@ -429,8 +429,8 @@ func buildPatternExprRule(g *GrammarDefiner) Rule {
 		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
 	}
 	cfg.InfixOps = []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-		{Token: TokConcat, LeftBP: 20, RightBP: 19, NodeKind: NodePatternConcat, TokenGrammarID: LangSpecGrammarIDFromNodeWithSuffix(NodePatternConcat, "")},
-		{Token: TokPipe, LeftBP: 10, RightBP: 9, NodeKind: NodePatternAlternation, TokenGrammarID: LangSpecGrammarIDFromNodeWithSuffix(NodePatternAlternation, "")},
+		{Token: TokConcat, LeftBP: 20, RightBP: 19, NodeKind: NodePatternConcat, TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(NodePatternConcat, "")},
+		{Token: TokPipe, LeftBP: 10, RightBP: 9, NodeKind: NodePatternAlternation, TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(NodePatternAlternation, "")},
 	}
 	return g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
 }

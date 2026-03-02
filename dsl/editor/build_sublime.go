@@ -76,12 +76,12 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodeMetaValue), "meta.annotation.value", "string.quoted.double")
 
 	lexingRuleSet := dsl.LangSpecCompilerLexingRuleSet(compiler)
-	programRule := dsl.LangSpecCompilerProgramRule(compiler)
+	grammarPackage := dsl.LangSpecCompilerGrammarPackage(compiler)
 
 	editorIR := langspeceditor.PushDownAutomatonIRCreate(
 		editorIRConfig,
 		lexingRuleSet,
-		programRule.GetGrammar().ProducePackage("LangSpec DSL", "0.0.0"),
+		*grammarPackage,
 	)
 
 	return sublime.SublimeTextGenerateSyntaxFile(

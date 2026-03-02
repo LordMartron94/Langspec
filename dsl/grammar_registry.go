@@ -10,7 +10,7 @@ import (
 
 /*
 pascalCaseToSpaceUppercase converts a PascalCase identifier to space-separated uppercase
-(e.g. "DSLName" -> "DSL NAME"). Used to derive a stable GrammarID from a node kind name.
+(e.g. "DSLName" -> "DSL NAME"). Used to derive a stable GrammarLabel from a node kind name.
 */
 func pascalCaseToSpaceUppercase(s string) string {
 	if s == "" {
@@ -32,12 +32,12 @@ func pascalCaseToSpaceUppercase(s string) string {
 }
 
 /*
-LangSpecGrammarIDFromNodeWithSuffix returns a stable syntaxa.GrammarID for the given node kind.
+LangSpecGrammarIDFromNodeWithSuffix returns a stable syntaxa.GrammarLabel for the given node kind.
 If suffix is non-empty, the result is derivedBase + " " + suffix (e.g. NodeHeader + "CONTENT" -> "HEADER CONTENT").
 NodeLSPECName is special-cased to "LANGSPEC NAME" for display consistency.
 NodeMetaKeyValuePair + suffix "SEQUENCE" is special-cased to "META KEY VALUE SEQUENCE".
 */
-func LangSpecGrammarIDFromNodeWithSuffix(node LangSpecParserNodeKind, suffix string) syntaxa.GrammarID {
+func LangSpecGrammarIDFromNodeWithSuffix(node LangSpecParserNodeKind, suffix string) syntaxa.GrammarLabel {
 	if node == NodeMetaKeyValuePair && suffix == "SEQUENCE" {
 		return "META KEY VALUE SEQUENCE"
 	}
@@ -55,12 +55,12 @@ func LangSpecGrammarIDFromNodeWithSuffix(node LangSpecParserNodeKind, suffix str
 		name = pascalCaseToSpaceUppercase(name)
 	}
 	if suffix != "" {
-		return syntaxa.GrammarID(name + " " + suffix)
+		return syntaxa.GrammarLabel(name + " " + suffix)
 	}
-	return syntaxa.GrammarID(name)
+	return syntaxa.GrammarLabel(name)
 }
 
-func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind) syntaxa.GrammarID {
+func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind) syntaxa.GrammarLabel {
 	return LangSpecGrammarIDFromNodeWithSuffix(node, "")
 }
 
@@ -79,10 +79,10 @@ const (
 )
 
 /*
-VirtualGrammarIDToGrammarID returns the canonical syntaxa.GrammarID string for the virtual ID.
+VirtualGrammarIDToGrammarID returns the canonical syntaxa.GrammarLabel string for the virtual ID.
 Stable and used by GrammarDefiner when building virtual expectations.
 */
-func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarID {
+func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarLabel {
 	switch v {
 	case VirtualEOF:
 		return "EOF"
@@ -95,6 +95,6 @@ func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarID {
 	case VirtualPatternExpression:
 		return "PATTERN EXPRESSION"
 	default:
-		return syntaxa.GrammarID("VIRTUAL_UNKNOWN")
+		return syntaxa.GrammarLabel("VIRTUAL_UNKNOWN")
 	}
 }

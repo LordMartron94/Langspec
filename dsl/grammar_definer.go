@@ -36,13 +36,13 @@ expectTokenWithGrammarID returns a rule that expects the token and creates an LS
 using the given grammarID. Use for header expectations when the node maps to multiple
 grammar IDs (e.g. NodeVersion for DSL vs Langspec version) via GrammarIDOverride.
 */
-func (g *GrammarDefiner) expectTokenWithGrammarID(grammarID syntaxa.GrammarID, node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
+func (g *GrammarDefiner) expectTokenWithGrammarID(grammarID syntaxa.GrammarLabel, node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
 	return g.rb.Token.Expect(grammarID, node, tok)
 }
 
 /*
 expectVirtual returns a rule that consumes the token without creating an LST node.
-Uses VirtualGrammarIDToGrammarID to resolve the virtual ID to syntaxa.GrammarID.
+Uses VirtualGrammarIDToGrammarID to resolve the virtual ID to syntaxa.GrammarLabel.
 */
 func (g *GrammarDefiner) expectVirtual(v VirtualGrammarID, tok LangSpecLexerTokenType) Rule {
 	return g.rb.Token.ExpectVirtual(VirtualGrammarIDToGrammarID(v), tok)
@@ -70,7 +70,7 @@ func (g *GrammarDefiner) expectOneOf(node LangSpecParserNodeKind, tokens ...Lang
 expectOneOfWithGrammarID returns a rule that expects one of the tokens and creates an
 LST node, using the given grammarID. Use when the node maps to multiple grammar IDs.
 */
-func (g *GrammarDefiner) expectOneOfWithGrammarID(grammarID syntaxa.GrammarID, node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
+func (g *GrammarDefiner) expectOneOfWithGrammarID(grammarID syntaxa.GrammarLabel, node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
 	return g.rb.Token.ExpectOneOf(grammarID, node, tokens...)
 }
 
@@ -131,7 +131,7 @@ func (g *GrammarDefiner) block(
 		node,
 		g.expectToken(kwNode, kwTok),
 		g.rb.Rule.TransparentNest(
-			grammarID,
+			LangSpecGrammarIDFromNodeWithSuffix(node, "BODY"),
 			TokBraceOpen,
 			TokBraceClose,
 			bodyRule,
@@ -148,7 +148,7 @@ Returned by GrammarDefiner.sequence; chain methods append one rule and return th
 */
 type SequenceBuilder struct {
 	g         *GrammarDefiner
-	grammarID syntaxa.GrammarID
+	grammarID syntaxa.GrammarLabel
 	nodeKind  LangSpecParserNodeKind
 	rules     []Rule
 }

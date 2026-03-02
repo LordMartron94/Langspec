@@ -102,7 +102,7 @@ type ParserSpec[
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
 
-	programRule       syntaxa.ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
+	grammarPackage    *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 	nodePostProcessor syntaxa.NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
 
 	errorHook ParserSyntaxErrorHook[TObservation]
@@ -112,7 +112,10 @@ type ParserSpec[
 	freezeAfterParse bool
 }
 
-/* ParserSpecCreate constructs a parser specification. */
+/* ParserSpecCreate constructs a parser specification from a grammar package.
+
+The package must have been produced with an entry rule (ProducePackage(..., &programRule)).
+*/
 func ParserSpecCreate[
 	TObservation cmp.Ordered,
 	TToken,
@@ -120,12 +123,12 @@ func ParserSpecCreate[
 	TLexerState,
 	TNodeKind comparable,
 ](
+	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	rootNodeKind, errorNodeKind TNodeKind,
-	programRule syntaxa.ParserRule[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	freezeAfterParse bool,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		programRule:       programRule,
+		grammarPackage:    grammarPackage,
 		rootNodeKind:      rootNodeKind,
 		errorNodeKind:     errorNodeKind,
 		freezeAfterParse:  freezeAfterParse,
@@ -572,7 +575,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 	)
 
 	parser := syntaxa.SyntaxaParserCreate(
-		config.spec.Parser.programRule,
+		config.spec.Parser.grammarPackage,
 		config.spec.Lexer.tokenFormatter,
 		config.spec.Lexer.observationFormatter,
 		config.spec.Parser.nodePostProcessor,
@@ -589,6 +592,11 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		lexer:  lexer,
 		parser: parser,
 	}
+}
+
+/* GetGrammarPackage returns the grammar package used by the parser (for debug dumps, editor IR, etc.). */
+func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) GetGrammarPackage() *syntaxa.GrammarPackage[TObs, TToken, TTokenRole, TNodeKind, TLexerState] {
+	return p.config.spec.Parser.grammarPackage
 }
 
 func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) DebugDumpLexerDFA(
