@@ -117,6 +117,7 @@ const (
 	NodePatternStar
 	NodePatternConcat
 	NodePatternAlternation
+	NodePatternStringLiteral
 )
 
 // ----------------------------------------------------------- SINGLE SOURCE OF TRUTH
@@ -309,7 +310,7 @@ func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 		false,
 		g.rb.Rule.Required(headerRule, "must have header"),
 		g.rb.Rule.TransparentZeroOrMore(LangSpecGrammarIDFromNodeWithSuffix(NodePragmaStatement, ""), pragmaRule),
-		g.rb.Rule.Optional(buildPatternSectionRule(g)),
+		g.rb.Rule.OptionalPrefix(buildPatternSectionRule(g), TokKWPattern),
 		g.rb.Rule.Required(lexSectionRule, "must have lex ruleset"),
 		g.expectVirtual(VirtualEOF, TokEOF),
 	)
@@ -366,13 +367,19 @@ func buildLexRuleList(g *GrammarDefiner) Rule {
 }
 
 func buildLexRule(g *GrammarDefiner) Rule {
+	variableRefRule := buildPatternVarRefRule(g)
+
 	return g.sequence(NodeLexRule, "").
 		optionalToken(NodeLexRulePriority, TokInteger).
 		expectToken(NodeLexRuleTokenName, TokStringLiteral).
 		expectVirtualInRule(TokChainSeparator).
 		expectToken(NodeLexRuleRole, TokStringLiteral).
 		expectVirtualInRule(TokAssignment).
-		expectToken(NodeLexRulePattern, TokRegexLiteral).
+		rule(g.rb.Rule.Choice(
+			LangSpecGrammarIDFromNode(NodeLexRulePattern),
+			variableRefRule,
+			g.expectToken(NodeLexRulePattern, TokRegexLiteral),
+		)).
 		optionalRule(buildMetaSectionRule(g)).
 		expectVirtualInRule(TokSemicolon).
 		build()
@@ -381,17 +388,18 @@ func buildLexRule(g *GrammarDefiner) Rule {
 // ----------------------------------------------------------- PATTERN SECTION
 
 func buildPatternSectionRule(g *GrammarDefiner) Rule {
-	return g.block(
+	blockRule := g.block(
 		NodePatternSection,
 		NodePatternKeyword,
 		TokKWPattern,
 		buildPatternDefinitionList(g),
 	)
+	return g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
 }
 
 func buildPatternDefinitionList(g *GrammarDefiner) Rule {
 	defRule := buildPatternDefinition(g)
-	defWithRecovery := g.rb.Rule.RecoverSync(defRule, TokSemicolon, TokBraceClose)
+	defWithRecovery := g.rb.Rule.RecoverSync(defRule, TokSemicolon)
 	return g.rb.Rule.TransparentZeroOrMore(
 		LangSpecGrammarIDFromNodeWithSuffix(NodePatternDefinition, "LIST"),
 		defWithRecovery,
@@ -439,6 +447,7 @@ func buildPatternSegmentRule(g *GrammarDefiner) Rule {
 		buildPatternVarRefRule(g),
 		rangeRule,
 		buildPatternCharLiteralRule(g),
+		g.expectToken(NodePatternStringLiteral, TokStringLiteral),
 	)
 }
 

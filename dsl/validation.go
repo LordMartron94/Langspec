@@ -19,8 +19,8 @@ const (
 	VALIDATION_UNKNOWN_PRAGMA_VALUE ValidationCode = "V_P002"
 	VALIDATION_UNKNOWN_META_KEY     ValidationCode = "V_P003"
 
-	VALIDATION_DUPLICATE_PATTERN_NAME ValidationCode = "V_PAT001"
-	VALIDATION_UNRESOLVED_PATTERN_REF ValidationCode = "V_PAT002"
+	VALIDATION_DUPLICATE_PATTERN_NAME   ValidationCode = "V_PAT001"
+	VALIDATION_UNRESOLVED_PATTERN_REF   ValidationCode = "V_PAT002"
 	VALIDATION_EMPTY_PATTERN_EXPRESSION ValidationCode = "V_PAT003"
 )
 
@@ -121,9 +121,7 @@ func getValidationStages() []*ValidationStage {
 					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
 						continue
 					}
-					if !patternDefinitionHasExpression(def) {
-						ctx.ReportError(VALIDATION_EMPTY_PATTERN_EXPRESSION.String(), "pattern definition must have an expression", def)
-					}
+
 					name := string(defNameNode.Tokens()[0].Raw)
 					if _, already := declaredSoFar[name]; already {
 						msg := fmt.Sprintf("pattern name '%s' already declared (duplicate)", name)
@@ -163,22 +161,4 @@ func getStringValue(node *Node) string {
 	}
 
 	return value
-}
-
-var patternExpressionKinds = []LangSpecParserNodeKind{
-	NodePatternConcat,
-	NodePatternAlternation,
-	NodePatternVarRef,
-	NodePatternRange,
-	NodePatternCharLiteral,
-	NodePatternStar,
-}
-
-func patternDefinitionHasExpression(def *Node) bool {
-	for _, c := range def.Children() {
-		if slices.Contains(patternExpressionKinds, c.Kind()) {
-			return true
-		}
-	}
-	return false
 }
