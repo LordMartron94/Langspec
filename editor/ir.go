@@ -184,7 +184,7 @@ type OverrideConfig struct {
 	MetaScope string
 }
 
-func (c OverrideConfig) HasScope() bool     { return c.Scopes != nil && len(c.Scopes) > 0 }
+func (c OverrideConfig) HasScope() bool     { return len(c.Scopes) > 0 }
 func (c OverrideConfig) HasMetaScope() bool { return c.MetaScope != "" }
 func (c OverrideConfig) HasAny() bool       { return c.HasScope() || c.HasMetaScope() }
 
@@ -307,10 +307,12 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
 	allStates = injectMainStatePlanned(allStates, config.scopeExtension, config, plan, entryGrammar)
 
+	optimizedStates := optimizeAutomaton(allStates)
+
 	return &PushDownAutomatonIR{
 		LanguageName:    grammarPackage.Name,
 		LanguageVersion: grammarPackage.Version,
-		States:          allStates,
+		States:          optimizedStates,
 		ScopeExtension:  config.scopeExtension,
 	}
 }
@@ -577,7 +579,8 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	if _, hasTokOverride := config.overrides[child.Token]; hasTokOverride {
 		return buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID), includes
 	}
-	return generateRulesForNode(config, child, tokenPatternMap, nextID, lbl, action), includes
+
+	return generateRulesForNode(config, child, tokenPatternMap, nextID, lbl, action), nil
 }
 
 func handleSegmentConstructStep[TToken, TTokenRole comparable](
@@ -1218,4 +1221,78 @@ func buildLookaheadForTokens[TToken comparable](toks map[TToken]struct{}, tokenP
 		return "", false
 	}
 	return fmt.Sprintf(`(?=\s*(?:%s))`, strings.Join(parts, "|")), true
+}
+
+func optimizeAutomaton(allStates []State) []State {
+	stateMap := mapStatesByID(allStates)
+	roots := getRootStateIDs(allStates)
+	reachable := markReachableStates(stateMap, roots)
+
+	return sweepUnreachable(allStates, reachable)
+}
+
+func mapStatesByID(states []State) map[StateID]State {
+	m := make(map[StateID]State, len(states))
+	for _, s := range states {
+		m[s.ID] = s
+	}
+	return m
+}
+
+func getRootStateIDs(states []State) []StateID {
+	var roots []StateID
+	for _, s := range states {
+		if s.Label == "main" || s.Label == "prototype" {
+			roots = append(roots, s.ID)
+		}
+	}
+	return roots
+}
+
+func markReachableStates(stateMap map[StateID]State, initialRoots []StateID) map[StateID]bool {
+	reachable := make(map[StateID]bool)
+	queue := append([]StateID(nil), initialRoots...)
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if reachable[current] {
+			continue
+		}
+
+		reachable[current] = true
+
+		state, exists := stateMap[current]
+		if !exists {
+			continue
+		}
+
+		queue = append(queue, getOutboundEdges(state)...)
+	}
+
+	return reachable
+}
+
+func getOutboundEdges(state State) []StateID {
+	edges := make([]StateID, 0, len(state.Includes)+len(state.Rules))
+	edges = append(edges, state.Includes...)
+
+	for _, r := range state.Rules {
+		if r.Action == ACTION_PUSH || r.Action == ACTION_SET {
+			edges = append(edges, r.ActionTarget)
+		}
+	}
+
+	return edges
+}
+
+func sweepUnreachable(states []State, reachable map[StateID]bool) []State {
+	var pruned []State
+	for _, s := range states {
+		if reachable[s.ID] {
+			pruned = append(pruned, s)
+		}
+	}
+	return pruned
 }
