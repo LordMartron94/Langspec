@@ -212,7 +212,7 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	rootTokens, _, _ := extractIncludes(config, plan, entryGrammar, true)
 	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens, rootTokens, delimitedMap)
 
-	allStates = injectPlannedNodeStates(config, plan, allStates, entryGrammar, tokenPatternMap)
+	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, allStates, entryGrammar, tokenPatternMap)
 	allStates, nestRegistry := injectNestStatesPlanned(config, plan, allStates, grammarPackage, tokenPatternMap)
 	allStates = injectPlannedSequenceTriggers(config, plan, allStates, nestRegistry, tokenPatternMap)
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
@@ -430,6 +430,7 @@ func nodeConstructEntryStateID(concatID syntaxa.GrammarID) StateID {
 
 func buildConstructStateChain[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	concatNode *syntaxa.Grammar[TToken],
 	metaScope string,
 	tokenPatternMap map[TToken]Pattern,
@@ -439,13 +440,14 @@ func buildConstructStateChain[TToken, TTokenRole comparable](
 	var states []State
 
 	for i := 0; i < stepCount; i++ {
-		states = append(states, buildConstructStep(config, concatNode, i, stepCount, baseLabel, metaScope, tokenPatternMap))
+		states = append(states, buildConstructStep(config, analysis, concatNode, i, stepCount, baseLabel, metaScope, tokenPatternMap))
 	}
 	return states
 }
 
 func buildConstructStep[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	concatNode *syntaxa.Grammar[TToken],
 	index, stepCount int,
 	baseLabel, metaScope string,
@@ -460,7 +462,7 @@ func buildConstructStep[TToken, TTokenRole comparable](
 	includes := buildIncludesForNode(config, child)
 
 	if isToken {
-		rules, includes = handleTokenConstructStep(config, concatNode, child, index, stepCount, lbl, includes, tokenPatternMap)
+		rules, includes = handleTokenConstructStep(config, analysis, concatNode, child, index, stepCount, lbl, includes, tokenPatternMap)
 	} else {
 		rules, includes = handleSegmentConstructStep(config, concatNode, index, stepCount, lbl, includes, tokenPatternMap)
 	}
@@ -479,6 +481,7 @@ func buildConstructStep[TToken, TTokenRole comparable](
 
 func handleTokenConstructStep[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	concatNode, child *syntaxa.Grammar[TToken],
 	index, stepCount int,
 	lbl string,
@@ -488,7 +491,7 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount)
 
 	if _, hasTokOverride := config.overrides[child.Token]; hasTokOverride {
-		return buildLookaheadRules(lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID), includes
+		return buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID), includes
 	}
 	return generateRulesForNode(config, child, tokenPatternMap, nextID, lbl, action), includes
 }
@@ -514,6 +517,7 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 }
 
 func buildLookaheadRules[TToken comparable](
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	lbl string, index, stepCount int,
 	concatNode *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
@@ -522,7 +526,7 @@ func buildLookaheadRules[TToken comparable](
 	if index+1 >= stepCount {
 		return nil
 	}
-	suffixFirst := firstTokensOfSuffix(concatNode, index+1)
+	suffixFirst := syntaxa.GrammarAnalysisFirstOfSuffix(analysis, concatNode, index+1)
 	if la, ok := buildLookaheadForTokens(suffixFirst, tokenPatternMap); ok {
 		return []StateRule{{
 			ID:           StateRuleID(produceStateID(lbl + "_advance_la")),
@@ -605,6 +609,7 @@ func buildExitRulesToNextTokenChild[TToken, TTokenRole comparable](
 func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	allStates []State,
 	grammarNode *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
@@ -632,13 +637,14 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 		})
 	}
 
-	allStates = append(allStates, extractConstructStates(config, plan, grammarNode, tokenPatternMap)...)
+	allStates = append(allStates, extractConstructStates(config, plan, analysis, grammarNode, tokenPatternMap)...)
 	return allStates
 }
 
 func extractConstructStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	root *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
 ) []State {
@@ -654,7 +660,7 @@ func extractConstructStates[TToken, TTokenRole comparable](
 				if oc, ok2 := config.nodeOverrides[n.GrammarID]; ok2 && oc.HasMetaScope() {
 					metaScope = oc.MetaScope
 				}
-				states = append(states, buildConstructStateChain(config, n, metaScope, tokenPatternMap)...)
+				states = append(states, buildConstructStateChain(config, analysis, n, metaScope, tokenPatternMap)...)
 			}
 		}
 		return false, false
@@ -1127,59 +1133,6 @@ func isNullableTokenLike[TToken comparable](n *syntaxa.Grammar[TToken]) (tok TTo
 	return tok, false
 }
 
-func firstTokens[TToken comparable](n *syntaxa.Grammar[TToken]) map[TToken]struct{} {
-	out := make(map[TToken]struct{})
-	var rec func(x *syntaxa.Grammar[TToken])
-	rec = func(x *syntaxa.Grammar[TToken]) {
-		if x == nil {
-			return
-		}
-		switch x.Kind {
-		case syntaxa.GToken:
-			out[x.Token] = struct{}{}
-		case syntaxa.GNest:
-			if x.OpenToken != nil {
-				out[*x.OpenToken] = struct{}{}
-			}
-		case syntaxa.GChoice:
-			for _, c := range x.Children {
-				rec(c)
-			}
-		case syntaxa.GOptional, syntaxa.GRepeat:
-			if len(x.Children) > 0 {
-				rec(x.Children[0])
-			}
-		case syntaxa.GConcat:
-			for _, c := range x.Children {
-				rec(c)
-				if !isNodeNullable(c) {
-					break
-				}
-			}
-		case syntaxa.GEpsilon:
-		default:
-			for _, c := range x.Children {
-				rec(c)
-			}
-		}
-	}
-	rec(n)
-	return out
-}
-
-func firstTokensOfSuffix[TToken comparable](concatNode *syntaxa.Grammar[TToken], start int) map[TToken]struct{} {
-	out := make(map[TToken]struct{})
-	for j := start; j < len(concatNode.Children); j++ {
-		for t := range firstTokens(concatNode.Children[j]) {
-			out[t] = struct{}{}
-		}
-		if !isNodeNullable(concatNode.Children[j]) {
-			break
-		}
-	}
-	return out
-}
-
 func buildLookaheadForTokens[TToken comparable](toks map[TToken]struct{}, tokenPatternMap map[TToken]Pattern) (string, bool) {
 	if len(toks) == 0 {
 		return "", false
@@ -1195,32 +1148,4 @@ func buildLookaheadForTokens[TToken comparable](toks map[TToken]struct{}, tokenP
 		return "", false
 	}
 	return fmt.Sprintf(`(?=\s*(?:%s))`, strings.Join(parts, "|")), true
-}
-
-func isNodeNullable[TToken comparable](node *syntaxa.Grammar[TToken]) bool {
-	if node == nil {
-		return false
-	}
-	switch node.Kind {
-	case syntaxa.GEpsilon, syntaxa.GOptional, syntaxa.GNest:
-		return true
-	case syntaxa.GRepeat:
-		return node.Min == 0
-	case syntaxa.GChoice:
-		for _, c := range node.Children {
-			if isNodeNullable(c) {
-				return true
-			}
-		}
-		return false
-	case syntaxa.GConcat:
-		for _, c := range node.Children {
-			if !isNodeNullable(c) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
 }
