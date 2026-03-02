@@ -368,6 +368,7 @@ func buildLexRuleList(g *GrammarDefiner) Rule {
 
 func buildLexRule(g *GrammarDefiner) Rule {
 	variableRefRule := buildPatternVarRefRule(g)
+	refToVarRef := g.rb.Rule.Reference(variableRefRule.GetGrammarLabel(), variableRefRule)
 
 	return g.sequence(NodeLexRule, "").
 		optionalToken(NodeLexRulePriority, TokInteger).
@@ -377,7 +378,7 @@ func buildLexRule(g *GrammarDefiner) Rule {
 		expectVirtualInRule(TokAssignment).
 		rule(g.rb.Rule.Choice(
 			LangSpecGrammarIDFromNode(NodeLexRulePattern),
-			variableRefRule,
+			refToVarRef,
 			g.expectToken(NodeLexRulePattern, TokRegexLiteral),
 		)).
 		optionalRule(buildMetaSectionRule(g)).

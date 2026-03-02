@@ -1216,7 +1216,11 @@ func buildBodyStatePlanned[TToken, TTokenRole comparable](
 	tokenPatternMap map[TToken]Pattern,
 	bodyStateID StateID,
 ) State {
-	validTokens, overrideIDs, triggerIDs := extractIncludes(config, plan, nest.Node.Children[0], false)
+	bodyGrammar := nest.Node
+	if eff := syntaxa.GrammarEffectiveChildren(bodyGrammar); len(eff) > 0 {
+		bodyGrammar = eff[0]
+	}
+	validTokens, overrideIDs, triggerIDs := extractIncludes(config, plan, bodyGrammar, false)
 
 	var includes []StateID
 	includes = append(includes, triggerIDs...)

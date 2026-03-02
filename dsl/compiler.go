@@ -209,7 +209,7 @@ func LangSpecCompilerCompile(
 		)
 	}
 
-	renderParseTrace(w, trace, func(t LangSpecLexerTokenType) string { return t.String() })
+	// renderParseTrace(w, trace, func(t LangSpecLexerTokenType) string { return t.String() })
 
 	// Validation entries
 	if !syntaxErrors.HasErrors() {

@@ -82,6 +82,7 @@ func buildLangSpecDSLParserSpec(programRule Rule) (
 		"LangSpec DSL",
 		"0.0.0",
 		&programRule,
+		nil,
 	)
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,
