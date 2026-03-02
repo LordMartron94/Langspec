@@ -642,16 +642,12 @@ func extractConstructStates[TToken, TTokenRole comparable](
 	root *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
 ) []State {
+	if root == nil {
+		return nil
+	}
+
 	var states []State
-	visited := make(map[*syntaxa.Grammar[TToken]]bool)
-
-	var walk func(n *syntaxa.Grammar[TToken])
-	walk = func(n *syntaxa.Grammar[TToken]) {
-		if n == nil || visited[n] {
-			return
-		}
-		visited[n] = true
-
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
 		if n.Kind == syntaxa.GConcat {
 			if _, ok := plan.ConstructConacts[n.GrammarID]; ok {
 				var metaScope string
@@ -661,31 +657,24 @@ func extractConstructStates[TToken, TTokenRole comparable](
 				states = append(states, buildConstructStateChain(config, n, metaScope, tokenPatternMap)...)
 			}
 		}
-
-		for _, c := range n.Children {
-			walk(c)
-		}
-	}
-	walk(root)
+		return false, false
+	})
 	return states
 }
 
 func findTokenGrammarNode[TToken comparable](root *syntaxa.Grammar[TToken], targetID syntaxa.GrammarID) *syntaxa.Grammar[TToken] {
+	if root == nil {
+		return nil
+	}
+
 	var found *syntaxa.Grammar[TToken]
-	var walk func(n *syntaxa.Grammar[TToken])
-	walk = func(n *syntaxa.Grammar[TToken]) {
-		if n == nil || found != nil {
-			return
-		}
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
 		if n.GrammarID == targetID && n.Kind == syntaxa.GToken {
 			found = n
-			return
+			return false, true
 		}
-		for _, c := range n.Children {
-			walk(c)
-		}
-	}
-	walk(root)
+		return false, false
+	})
 	return found
 }
 
@@ -761,22 +750,19 @@ func traverseIncludes[TToken, TTokenRole comparable](
 		ValidTokens: make(map[TToken]struct{}),
 	}
 
-	visited := make(map[*syntaxa.Grammar[TToken]]bool)
-	seenTriggers := make(map[StateID]bool)
-	seenOverrides := make(map[StateID]bool)
-	seenConstructs := make(map[StateID]bool)
-
 	if root != nil && root.Kind == syntaxa.GNest && root.OpenToken != nil {
 		out.ValidTokens[*root.OpenToken] = struct{}{}
 	}
 
-	var walk func(n *syntaxa.Grammar[TToken])
-	walk = func(n *syntaxa.Grammar[TToken]) {
-		if n == nil || visited[n] {
-			return
-		}
-		visited[n] = true
+	if root == nil {
+		return out
+	}
 
+	seenTriggers := make(map[StateID]bool)
+	seenOverrides := make(map[StateID]bool)
+	seenConstructs := make(map[StateID]bool)
+
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
 		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
 			if plan == nil || plan.containsConstruct(n.GrammarID) {
 				cid := nodeConstructEntryStateID(n.GrammarID)
@@ -784,17 +770,14 @@ func traverseIncludes[TToken, TTokenRole comparable](
 					seenConstructs[cid] = true
 					out.ConstructIDs = append(out.ConstructIDs, cid)
 				}
-				if plan == nil {
-					return // stop descending if no plan is provided
-				}
-				return
+				return true, false
 			}
 		}
 
 		if n.Kind == syntaxa.GConcat {
 			for i := 0; i < len(n.Children)-1; i++ {
 				curr, next := n.Children[i], n.Children[i+1]
-				if curr.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
+				if curr != nil && next != nil && curr.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
 					id := deriveTriggerID(config.formatter(curr.Token), next.GrammarID)
 					if !seenTriggers[id] {
 						seenTriggers[id] = true
@@ -821,16 +804,12 @@ func traverseIncludes[TToken, TTokenRole comparable](
 				if n.OpenToken != nil {
 					out.ValidTokens[*n.OpenToken] = struct{}{}
 				}
-				return
+				return true, false
 			}
 		}
 
-		for _, c := range n.Children {
-			walk(c)
-		}
-	}
-
-	walk(root)
+		return false, false
+	})
 	return out
 }
 
@@ -900,22 +879,20 @@ func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIR
 		return false
 	}
 
-	if oc, exists := config.nodeOverrides[node.GrammarID]; exists && oc.HasAny() {
-		if (node.Kind == syntaxa.GToken && oc.HasScope()) || (node.Kind == syntaxa.GConcat && oc.HasMetaScope()) {
-			return true
+	var found bool
+	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+		if n.Kind == syntaxa.GNest {
+			return true, false
 		}
-	}
-
-	if node.Kind == syntaxa.GNest {
-		return false
-	}
-
-	for _, c := range node.Children {
-		if hasNodeOverrides(config, c) {
-			return true
+		if oc, exists := config.nodeOverrides[n.GrammarID]; exists && oc.HasAny() {
+			if (n.Kind == syntaxa.GToken && oc.HasScope()) || (n.Kind == syntaxa.GConcat && oc.HasMetaScope()) {
+				found = true
+				return true, true
+			}
 		}
-	}
-	return false
+		return false, false
+	})
+	return found
 }
 
 func generateRulesForNode[TToken, TTokenRole comparable](
@@ -926,17 +903,16 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 	stateLabel string,
 	action RuleAction,
 ) []StateRule {
-	var rules []StateRule
+	if node == nil {
+		return nil
+	}
 
-	var walk func(n *syntaxa.Grammar[TToken])
-	walk = func(n *syntaxa.Grammar[TToken]) {
-		if n == nil {
-			return
-		}
+	var rules []StateRule
+	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
 		switch n.Kind {
 		case syntaxa.GToken:
 			if _, hasTokOverride := config.overrides[n.Token]; hasTokOverride {
-				return
+				return true, false
 			}
 			scope := config.scopeProvider(n.Token)
 			if oc, ok := config.nodeOverrides[n.GrammarID]; ok && oc.HasScope() {
@@ -951,13 +927,13 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 				Action:       action,
 				ActionTarget: nextID,
 			})
+			return true, false
 		case syntaxa.GChoice, syntaxa.GOptional, syntaxa.GConcat, syntaxa.GRepeat:
-			for _, c := range n.Children {
-				walk(c)
-			}
+			return false, false
+		default:
+			return true, false
 		}
-	}
-	walk(node)
+	})
 	return rules
 }
 
@@ -989,15 +965,11 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 		SeqTriggers:      make(map[StateID]seqTriggerSpec[TToken]),
 	}
 
-	visited := make(map[*syntaxa.Grammar[TToken]]bool)
+	if root == nil {
+		return plan
+	}
 
-	var walk func(n *syntaxa.Grammar[TToken])
-	walk = func(n *syntaxa.Grammar[TToken]) {
-		if n == nil || visited[n] {
-			return
-		}
-		visited[n] = true
-
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
 		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
 			plan.ConstructConacts[n.GrammarID] = struct{}{}
 		}
@@ -1024,12 +996,8 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 				}
 			}
 		}
-
-		for _, c := range n.Children {
-			walk(c)
-		}
-	}
-	walk(root)
+		return false, false
+	})
 	return plan
 }
 
