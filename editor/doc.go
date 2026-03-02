@@ -7,6 +7,12 @@
 // token roles, and overrides; then PushDownAutomatonIRCreate to build the IR from a
 // syntaxa GrammarPackage and lexarch LexingRuleset.
 //
+// Types:
+//   - State: one context in the push-down automaton (ID, label, rules, includes, root flag).
+//   - StateRule: one match rule (regex, scope, action, optional capture/embed/escape).
+//   - StateID / StateRuleID: opaque identifiers for states and rules.
+//   - RuleAction: ACTION_PUSH, ACTION_POP, ACTION_SET, ACTION_MATCH, ACTION_NONE, ACTION_EMBED.
+//
 // Delimited tokens: tokens that have a DelimitedRule in the LexingRuleset (open/close
 // patterns) are mapped automatically to ST4-style regions (open rule PUSHes to a body
 // state, body state has a close rule that POPs). No override is required for such tokens.
@@ -16,6 +22,7 @@
 // Nest overrides replace the default single-body state for a grammar nest with a custom
 // state sequence. Use the structural helpers—TokenOverrideDelimitedRegion,
 // TokenOverrideMatchWithCapture, BuildNestStateSequence—to build overrides from regex
-// and scope strings. The editor package does not prescribe language semantics; clients
-// supply regex and scope strings.
+// and scope strings. Node overrides (AddNodeOverride / AddNodeScopeOverride) attach
+// scope or meta-scope to specific grammar nodes by GrammarID. The editor package does
+// not prescribe language semantics; clients supply regex and scope strings.
 package editor

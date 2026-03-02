@@ -15,20 +15,34 @@ var xxh3Hasher = hash.XXH3HasherCreateWithSeed(42)
 
 // ------------------------------------------------------------------ TYPES & CONSTANTS
 
+/*
+Pattern is the editor's pattern type: a Regula AST over runes used for regex emission.
+*/
 type Pattern = pattern.RegulaAST[rune]
+
+/*
+StateID uniquely identifies a state in the push-down automaton. Opaque; used for includes and action targets.
+*/
 type StateID uint64
+
+/*
+StateRuleID uniquely identifies a rule within the IR. Opaque; used for fallback and capture rules.
+*/
 type StateRuleID uint64
 
 //go:generate stringer -type RuleAction
+/*
+RuleAction is the action performed when a rule matches: push (enter context), pop (exit), set (replace top), match (consume), embed, or none.
+*/
 type RuleAction uint8
 
 const (
-	ACTION_PUSH RuleAction = iota
-	ACTION_POP
-	ACTION_SET
-	ACTION_MATCH
-	ACTION_NONE
-	ACTION_EMBED
+	ACTION_PUSH  RuleAction = iota // Enter a new context; ActionTarget is the state to push.
+	ACTION_POP                     // Exit one or more contexts.
+	ACTION_SET                     // Replace top of stack; ActionTarget is the new state.
+	ACTION_MATCH                   // Consume input and stay in current state.
+	ACTION_NONE                    // No action.
+	ACTION_EMBED                   // Embed another syntax until escape; uses Embed, EmbedScope, Escape, EscapeCaptures.
 )
 
 const (
@@ -36,6 +50,11 @@ const (
 	invalidFallbackBaseScope = "invalid.illegal.unexpected-token"
 )
 
+/*
+State is one context in the push-down automaton. It has a unique ID, label (used in includes and YAML output),
+optional meta scope, rules (match patterns and actions), and includes (whitelist of other state IDs that may be entered).
+IsRootContext marks states that are included from the root "main" context. OmitPrototype excludes the state from prototype includes.
+*/
 type State struct {
 	ID            StateID
 	Label         string
@@ -46,6 +65,11 @@ type State struct {
 	OmitPrototype bool
 }
 
+/*
+StateRule is one match rule within a state. RegEx is the pattern to match; Scope is applied on match.
+Action and ActionTarget define the transition (push/pop/set/match). Captures, Embed, EmbedScope, Escape, EscapeCaptures
+support capture groups and embedded syntax. PopCount is used when Action is ACTION_POP to pop multiple levels.
+*/
 type StateRule struct {
 	ID             StateRuleID
 	Label          string
@@ -61,9 +85,20 @@ type StateRule struct {
 	EscapeCaptures map[int]string
 }
 
+/*
+ScopeProvider returns the scope string for a token. Used when building default rules and overrides.
+*/
 type ScopeProvider[TToken any] func(item TToken) string
+
+/*
+TokenFormatter returns a display string for a token. Used for state labels and trigger IDs.
+*/
 type TokenFormatter[TToken any] func(token TToken) string
 
+/*
+MustGetRegEx returns the regex string for the token from the lexing ruleset. Panics if the token is not found or ToRegEx fails.
+Use when building overrides or rules that require a pattern for a known token.
+*/
 func MustGetRegEx[TToken, TTokenRole comparable](
 	token TToken,
 	ruleset *lexarch.LexingRuleset[rune, TToken, TTokenRole],
@@ -82,6 +117,10 @@ func MustGetRegEx[TToken, TTokenRole comparable](
 
 // ------------------------------------------------------------------ OVERRIDE CONTEXTS
 
+/*
+TokenOverrideContext is passed to TokenOverrideFunc. It provides BaseID, Label, OriginalPattern, BaseScope, and ScopeExtension.
+Use DeriveStateID(suffix) and ApplyScope(scope) when building override rules and extra states.
+*/
 type TokenOverrideContext struct {
 	BaseID          StateID
 	Label           string
@@ -98,8 +137,14 @@ func (ctx *TokenOverrideContext) ApplyScope(scope string) string {
 	return getScopeString(scope, ctx.ScopeExtension)
 }
 
+/*
+TokenOverrideFunc builds the main StateRule and optional extra States for a token override. Called by the IR when the token has an override registered.
+*/
 type TokenOverrideFunc func(ctx *TokenOverrideContext) (mainRule StateRule, extraStates []State)
 
+/*
+NestOverrideContext is passed to NestOverrideFunc. It provides NestLabel, ScopeExtension, and GetRegEx(token). Use DeriveStateID and ApplyScope when building nest states.
+*/
 type NestOverrideContext[TToken comparable] struct {
 	NestLabel      string
 	ScopeExtension string
@@ -118,11 +163,21 @@ func (ctx *NestOverrideContext[TToken]) ApplyScope(scope string) string {
 	return getScopeString(scope, ctx.ScopeExtension)
 }
 
+/*
+NestOverrideFunc returns the entry state ID and the slice of states for a custom nest. Called when a nest matches the registered NestOverridePredicate.
+*/
 type NestOverrideFunc[TToken comparable] func(ctx *NestOverrideContext[TToken]) (entryStateID StateID, states []State)
+
+/*
+NestOverridePredicate returns true if the nest should use the associated NestOverrideFunc. Used with AddNestOverrideByPredicate.
+*/
 type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken]) bool
 
 // ------------------------------------------------------------------ CONFIGURATION
 
+/*
+OverrideConfig holds optional scope and meta-scope for a grammar node override. HasScope / HasMetaScope / HasAny report which fields are set.
+*/
 type OverrideConfig struct {
 	Scope     string
 	MetaScope string
@@ -137,6 +192,10 @@ type nestOverrideHandler[TToken comparable] struct {
 	fn   NestOverrideFunc[TToken]
 }
 
+/*
+PushDownAutomatonIRConfiguration holds scope provider, token formatter, scope extension, token overrides, nest override handlers, prototype token roles, and node overrides.
+Create with PushDownAutomatonIRConfigurationCreate; then use AddOverride, AddNestOverride, AddNodeOverride, AddPrototypeTokenRoles as needed.
+*/
 type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
 	scopeProvider        ScopeProvider[TToken]
 	formatter            TokenFormatter[TToken]
@@ -147,6 +206,9 @@ type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
 	nodeOverrides        map[syntaxa.GrammarID]OverrideConfig
 }
 
+/*
+PushDownAutomatonIRConfigurationCreate allocates a new configuration with the given scope provider, formatter, and scope extension. Add overrides and prototype roles before calling PushDownAutomatonIRCreate.
+*/
 func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 	provider ScopeProvider[TToken],
 	formatter TokenFormatter[TToken],
@@ -163,34 +225,56 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 	}
 }
 
+/*
+AddOverride registers a token override. When the IR encounters this token, it calls fn to obtain the main rule and optional extra states instead of the default single-rule state.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token TToken, fn TokenOverrideFunc) {
 	c.overrides[token] = fn
 }
 
+/*
+AddNestOverride registers a nest override for the given rule ID. The nest is identified by nest.OwnerRule == ruleID.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarID, fn NestOverrideFunc[TToken]) {
 	c.AddNestOverrideByPredicate(func(nest *syntaxa.NestSpec[TToken]) bool {
 		return nest.OwnerRule == ruleID
 	}, fn)
 }
 
+/*
+AddNestOverrideByPredicate registers a nest override for nests matching pred. Use when identification is not by OwnerRule alone.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverrideByPredicate(pred NestOverridePredicate[TToken], fn NestOverrideFunc[TToken]) {
 	c.nestOverrideHandlers = append(c.nestOverrideHandlers, nestOverrideHandler[TToken]{pred: pred, fn: fn})
 }
 
+/*
+AddNodeOverride attaches scope and/or meta-scope to a grammar node by GrammarID. Node must be a GToken (scope) or GConcat (meta-scope) for the override to apply.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(nodeID syntaxa.GrammarID, config OverrideConfig) {
 	c.nodeOverrides[nodeID] = config
 }
 
+/*
+AddNodeScopeOverride is a convenience for AddNodeOverride with only Scope set. Use for token nodes that need a custom scope.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeScopeOverride(nodeID syntaxa.GrammarID, scope string) {
 	c.AddNodeOverride(nodeID, OverrideConfig{Scope: scope})
 }
 
+/*
+AddPrototypeTokenRoles marks tokens with the given roles as prototype contexts: they are included in the root prototype state so they can be entered from the main context.
+*/
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
 	c.prototypeTokenRoles = append(c.prototypeTokenRoles, tokenRoles...)
 }
 
 // ------------------------------------------------------------------ IR ORCHESTRATOR
 
+/*
+PushDownAutomatonIR is the result of IR construction. It holds the language name and version (from the grammar package),
+the slice of States (contexts and rules), and the scope extension applied to all scopes. Pass to a generator (e.g. Sublime) to emit syntax files.
+*/
 type PushDownAutomatonIR struct {
 	LanguageName    string
 	LanguageVersion string
@@ -198,6 +282,10 @@ type PushDownAutomatonIR struct {
 	ScopeExtension  string
 }
 
+/*
+PushDownAutomatonIRCreate builds the push-down automaton IR from the given configuration, lexing ruleset, and grammar package.
+It builds base states from tokens and delimited rules, injects node overrides and construct states from the grammar, injects nest states and sequence triggers, adds the prototype and main states, and returns the complete IR. grammarPackage.Analysis and grammarPackage.TokenNodeByID must be populated (use Grammar.ProducePackage).
+*/
 func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
@@ -247,6 +335,9 @@ func extractLexerTokens[TToken, TTokenRole comparable](
 	return tokensInUse, tokenPatternMap, prototypeTokens
 }
 
+/*
+DelimitedRuleRegex holds the open and close regex strings for a token that has a delimited rule in the lexing ruleset.
+*/
 type DelimitedRuleRegex[TToken comparable] struct {
 	OpenRegex  string
 	CloseRegex string
@@ -820,6 +911,9 @@ func buildIncludesWhitelist[TToken comparable](
 	return includes
 }
 
+/*
+InvalidFallbackRule returns a StateRule that matches non-whitespace (\S+) with the invalid.illegal scope. Used as the last rule in a state to catch unexpected tokens. id and scopeExtension are used for the rule ID and scope.
+*/
 func InvalidFallbackRule(id StateRuleID, scopeExtension string) StateRule {
 	return StateRule{
 		ID:     id,
@@ -917,6 +1011,9 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 	return rules
 }
 
+/*
+IRPlan is the result of a single pass over the grammar: it records which GConcat nodes are "construct" contexts (have node overrides), which GToken nodes have scope overrides, and the sequence triggers (GToken then GNest pairs). Used by the IR builder to inject override states, construct state chains, and trigger IDs.
+*/
 type IRPlan[TToken comparable] struct {
 	ConstructConacts map[syntaxa.GrammarID]struct{}
 	OverrideTokens   map[syntaxa.GrammarID]struct{}
@@ -935,6 +1032,9 @@ type seqTriggerSpec[TToken comparable] struct {
 	TargetNest syntaxa.GrammarID
 }
 
+/*
+BuildIRPlan walks the grammar tree and builds an IRPlan: ConstructConacts (GConcat nodes with node overrides), OverrideTokens (GToken nodes with scope override), and SeqTriggers (token–nest pairs from GConcat children). config.nodeOverrides and config.overrides drive which nodes are considered. root must be the entry grammar (e.g. grammarPackage.Rules[grammarPackage.EntryRule]).
+*/
 func BuildIRPlan[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	root *syntaxa.Grammar[TToken],
