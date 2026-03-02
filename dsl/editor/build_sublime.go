@@ -64,9 +64,9 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodeDSLName), "entity.name.language")
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternAlternation), "keyword.operator.alternation")
 
-	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternDefName), "entity.name.variable")
-	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefToken), "punctuation.definition.variable")
-	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefTarget), "variable.other")
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternDefName), "entity.name.variable.constant")
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefToken), "punctuation.reference.variable")
+	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRefTarget), "variable.constant.reference.target")
 	editorIRConfig.AddNodeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodePatternVarRef), langspeceditor.OverrideConfig{MetaScope: "meta.variable.reference"})
 
 	editorIRConfig.AddNodeScopeOverride(dsl.LangSpecGrammarIDFromNode(dsl.NodeLexRuleTokenName), "entity.name.token")
