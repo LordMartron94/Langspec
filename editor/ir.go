@@ -553,12 +553,17 @@ func buildConstructStep[TToken, TTokenRole comparable](
 		rules, includes = handleSegmentConstructStep(config, concatNode, index, stepCount, lbl, includes, tokenPatternMap)
 	}
 
+	if index > 0 {
+		rules = appendStrictFallbackRule(rules, lbl, config.scopeExtension)
+	}
+
 	st := State{
 		ID:       id,
 		Label:    lbl,
 		Rules:    rules,
 		Includes: includes,
 	}
+
 	if index > 0 && metaScope != "" {
 		st.MetaScope = getScopeString([]string{metaScope}, config.scopeExtension)
 	}
@@ -1295,4 +1300,9 @@ func sweepUnreachable(states []State, reachable map[StateID]bool) []State {
 		}
 	}
 	return pruned
+}
+
+func appendStrictFallbackRule(rules []StateRule, stateLabel string, scopeExtension string) []StateRule {
+	fallbackID := StateRuleID(produceStateID(stateLabel + "_invalid_sequence"))
+	return append(rules, InvalidFallbackRule(fallbackID, scopeExtension))
 }
