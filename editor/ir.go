@@ -212,7 +212,7 @@ func PushDownAutomatonIRCreate[TToken, TTokenRole comparable](
 	rootTokens, _, _ := extractIncludes(config, plan, entryGrammar, true)
 	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens, rootTokens, delimitedMap)
 
-	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, allStates, entryGrammar, tokenPatternMap)
+	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, grammarPackage.TokenNodeByID, allStates, entryGrammar, tokenPatternMap)
 	allStates, nestRegistry := injectNestStatesPlanned(config, plan, allStates, grammarPackage, tokenPatternMap)
 	allStates = injectPlannedSequenceTriggers(config, plan, allStates, nestRegistry, tokenPatternMap)
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
@@ -350,14 +350,6 @@ func buildTokenOverrideContext(id StateID, label string, originalPattern Pattern
 
 // ------------------------------------------------------------------ NEST COMPILER
 
-func countOpenTokens[TToken comparable](nests []syntaxa.NestSpec[TToken]) map[TToken]int {
-	counts := make(map[TToken]int)
-	for _, nest := range nests {
-		counts[nest.Open]++
-	}
-	return counts
-}
-
 func tryApplyNestOverride[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	nest syntaxa.NestSpec[TToken],
@@ -456,7 +448,7 @@ func buildConstructStep[TToken, TTokenRole comparable](
 	child := concatNode.Children[index]
 	lbl := stepLabel(baseLabel, index, stepCount)
 	id := stepID(baseLabel, concatNode.GrammarID, index, stepCount)
-	isToken := isTokenChild(child)
+	isToken := syntaxa.GrammarIsTokenNode(child)
 
 	var rules []StateRule
 	includes := buildIncludesForNode(config, child)
@@ -505,7 +497,7 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	tokenPatternMap map[TToken]Pattern,
 ) ([]StateRule, []StateID) {
 	if index+1 < stepCount {
-		if tok, ok := isNullableTokenLike(concatNode.Children[index+1]); ok {
+		if tok, ok := syntaxa.GrammarOptionalTokenChild(concatNode.Children[index+1]); ok {
 			includes = append(includes, StateID(produceStateID(sanitizeContextName(config.formatter(tok)))))
 		}
 
@@ -610,12 +602,13 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
+	tokenNodeByID map[syntaxa.GrammarID]*syntaxa.Grammar[TToken],
 	allStates []State,
 	grammarNode *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
 ) []State {
 	for gid := range plan.OverrideTokens {
-		tok := findTokenGrammarNode(grammarNode, gid)
+		tok := tokenNodeByID[gid]
 		if tok == nil {
 			continue
 		}
@@ -666,22 +659,6 @@ func extractConstructStates[TToken, TTokenRole comparable](
 		return false, false
 	})
 	return states
-}
-
-func findTokenGrammarNode[TToken comparable](root *syntaxa.Grammar[TToken], targetID syntaxa.GrammarID) *syntaxa.Grammar[TToken] {
-	if root == nil {
-		return nil
-	}
-
-	var found *syntaxa.Grammar[TToken]
-	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		if n.GrammarID == targetID && n.Kind == syntaxa.GToken {
-			found = n
-			return false, true
-		}
-		return false, false
-	})
-	return found
 }
 
 // ------------------------------------------------------------------ SEQUENCE TRIGGER GENERATION
@@ -781,14 +758,11 @@ func traverseIncludes[TToken, TTokenRole comparable](
 		}
 
 		if n.Kind == syntaxa.GConcat {
-			for i := 0; i < len(n.Children)-1; i++ {
-				curr, next := n.Children[i], n.Children[i+1]
-				if curr != nil && next != nil && curr.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
-					id := deriveTriggerID(config.formatter(curr.Token), next.GrammarID)
-					if !seenTriggers[id] {
-						seenTriggers[id] = true
-						out.TriggerIDs = append(out.TriggerIDs, id)
-					}
+			for _, p := range syntaxa.GrammarConcatTokenNestPairs(n) {
+				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
+				if !seenTriggers[id] {
+					seenTriggers[id] = true
+					out.TriggerIDs = append(out.TriggerIDs, id)
 				}
 			}
 		}
@@ -987,17 +961,14 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 		}
 
 		if n.Kind == syntaxa.GConcat {
-			for i := 0; i < len(n.Children)-1; i++ {
-				curr, next := n.Children[i], n.Children[i+1]
-				if curr != nil && next != nil && curr.Kind == syntaxa.GToken && next.Kind == syntaxa.GNest {
-					id := deriveTriggerID(config.formatter(curr.Token), next.GrammarID)
-					if _, exists := plan.SeqTriggers[id]; !exists {
-						plan.SeqTriggers[id] = seqTriggerSpec[TToken]{
-							ID:         id,
-							Label:      fmt.Sprintf("seq_trigger_%s", sanitizeContextName(string(next.GrammarID))),
-							Token:      curr.Token,
-							TargetNest: next.GrammarID,
-						}
+			for _, p := range syntaxa.GrammarConcatTokenNestPairs(n) {
+				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
+				if _, exists := plan.SeqTriggers[id]; !exists {
+					plan.SeqTriggers[id] = seqTriggerSpec[TToken]{
+						ID:         id,
+						Label:      fmt.Sprintf("seq_trigger_%s", sanitizeContextName(string(p.NestID))),
+						Token:      p.Token,
+						TargetNest: p.NestID,
 					}
 				}
 			}
@@ -1054,7 +1025,7 @@ func injectNestStatesPlanned[TToken, TTokenRole comparable](
 	grammarPackage syntaxa.GrammarPackage[TToken],
 	tokenPatternMap map[TToken]Pattern,
 ) ([]State, map[syntaxa.GrammarID]StateID) {
-	openTokenCounts := countOpenTokens(grammarPackage.Nests)
+	openTokenCounts := syntaxa.NestSpecsOpenTokenCounts(grammarPackage.Nests)
 	nestRegistry := make(map[syntaxa.GrammarID]StateID)
 
 	for _, nest := range grammarPackage.Nests {
@@ -1121,17 +1092,6 @@ func injectMainStatePlanned[TToken, TTokenRole comparable](
 }
 
 // ------------------------------------------------------------------ GRAMMAR UTILITIES
-
-func isTokenChild[TToken comparable](n *syntaxa.Grammar[TToken]) bool {
-	return n != nil && n.Kind == syntaxa.GToken
-}
-
-func isNullableTokenLike[TToken comparable](n *syntaxa.Grammar[TToken]) (tok TToken, ok bool) {
-	if n != nil && n.Kind == syntaxa.GOptional && len(n.Children) == 1 && n.Children[0] != nil && n.Children[0].Kind == syntaxa.GToken {
-		return n.Children[0].Token, true
-	}
-	return tok, false
-}
 
 func buildLookaheadForTokens[TToken comparable](toks map[TToken]struct{}, tokenPatternMap map[TToken]Pattern) (string, bool) {
 	if len(toks) == 0 {
