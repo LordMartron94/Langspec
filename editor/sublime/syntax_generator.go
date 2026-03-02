@@ -72,18 +72,18 @@ func writeLanguageMetadata(sb *strings.Builder, editorIR *editor.PushDownAutomat
 }
 
 type contextEntry struct {
-	MetaScope       *string        `yaml:"meta_scope,omitempty"`
-	Match           *string        `yaml:"match,omitempty"`
-	Scope           string         `yaml:"scope,omitempty"`
-	Push            *string        `yaml:"push,omitempty"`
-	Set             *string        `yaml:"set,omitempty"`
-	Pop             any            `yaml:"pop,omitempty"`
-	Include         *string        `yaml:"include,omitempty"`
-	Captures        map[int]string `yaml:"captures,omitempty"`
-	Embed           *string        `yaml:"embed,omitempty"`
-	EmbedScope      *string        `yaml:"embed_scope,omitempty"`
-	Escape          *string        `yaml:"escape,omitempty"`
-	EscapeCaptures  map[int]string `yaml:"escape_captures,omitempty"`
+	MetaScope      *string        `yaml:"meta_scope,omitempty"`
+	Match          *string        `yaml:"match,omitempty"`
+	Scope          string         `yaml:"scope,omitempty"`
+	Push           *string        `yaml:"push,omitempty"`
+	Set            *string        `yaml:"set,omitempty"`
+	Pop            any            `yaml:"pop,omitempty"`
+	Include        *string        `yaml:"include,omitempty"`
+	Captures       map[int]string `yaml:"captures,omitempty"`
+	Embed          *string        `yaml:"embed,omitempty"`
+	EmbedScope     *string        `yaml:"embed_scope,omitempty"`
+	Escape         *string        `yaml:"escape,omitempty"`
+	EscapeCaptures map[int]string `yaml:"escape_captures,omitempty"`
 }
 
 type contextsSection struct {

@@ -29,9 +29,9 @@ type NestStepRule[TToken comparable] struct {
 NestStep describes one state in a linear nest sequence: optional meta scope and a list of rules.
 */
 type NestStep[TToken comparable] struct {
-	LabelSuffix string              // Used for state ID derivation and label (e.g. "expect_name")
-	MetaScope   string              // Optional; applied to the state
-	Rules      []NestStepRule[TToken]
+	LabelSuffix string // Used for state ID derivation and label (e.g. "expect_name")
+	MetaScope   string // Optional; applied to the state
+	Rules       []NestStepRule[TToken]
 }
 
 /*
@@ -59,10 +59,10 @@ func BuildNestStateSequence[TToken comparable](
 		var rules []StateRule
 		for ri, r := range step.Rules {
 			sr := StateRule{
-				ID:     StateRuleID(ctx.DeriveStateID(fmt.Sprintf("%s_rule_%d", step.LabelSuffix, ri))),
-				Label:  step.LabelSuffix + "_rule_" + fmt.Sprintf("%d", ri),
-				RegEx:  ctx.GetRegEx(r.Token),
-				Scope:  ctx.ApplyScope(r.Scope),
+				ID:    StateRuleID(ctx.DeriveStateID(fmt.Sprintf("%s_rule_%d", step.LabelSuffix, ri))),
+				Label: step.LabelSuffix + "_rule_" + fmt.Sprintf("%d", ri),
+				RegEx: ctx.GetRegEx(r.Token),
+				Scope: ctx.ApplyScope(r.Scope),
 			}
 			switch r.Action {
 			case NestRuleActionMatch:

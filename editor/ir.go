@@ -4,6 +4,7 @@ import (
 	"autarch/pattern"
 	"fmt"
 	"foundation/bytes"
+	"foundation/formatting"
 	"foundation/hash"
 	"lexarch"
 	"slices"
@@ -133,8 +134,8 @@ func (ctx *TokenOverrideContext) DeriveStateID(suffix string) StateID {
 	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.Label, suffix)))
 }
 
-func (ctx *TokenOverrideContext) ApplyScope(scope string) string {
-	return getScopeString(scope, ctx.ScopeExtension)
+func (ctx *TokenOverrideContext) ApplyScope(scopes ...string) string {
+	return getScopeString(scopes, ctx.ScopeExtension)
 }
 
 /*
@@ -159,8 +160,8 @@ func (ctx *NestOverrideContext[TToken]) DeriveStateID(suffix string) StateID {
 	return StateID(produceStateID(fmt.Sprintf("%s_%s", ctx.NestLabel, suffix)))
 }
 
-func (ctx *NestOverrideContext[TToken]) ApplyScope(scope string) string {
-	return getScopeString(scope, ctx.ScopeExtension)
+func (ctx *NestOverrideContext[TToken]) ApplyScope(scopes ...string) string {
+	return getScopeString(scopes, ctx.ScopeExtension)
 }
 
 /*
@@ -179,11 +180,11 @@ type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken
 OverrideConfig holds optional scope and meta-scope for a grammar node override. HasScope / HasMetaScope / HasAny report which fields are set.
 */
 type OverrideConfig struct {
-	Scope     string
+	Scopes    []string
 	MetaScope string
 }
 
-func (c OverrideConfig) HasScope() bool     { return c.Scope != "" }
+func (c OverrideConfig) HasScope() bool     { return c.Scopes != nil && len(c.Scopes) > 0 }
 func (c OverrideConfig) HasMetaScope() bool { return c.MetaScope != "" }
 func (c OverrideConfig) HasAny() bool       { return c.HasScope() || c.HasMetaScope() }
 
@@ -258,8 +259,8 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(n
 /*
 AddNodeScopeOverride is a convenience for AddNodeOverride with only Scope set. Use for token nodes that need a custom scope.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeScopeOverride(nodeID syntaxa.GrammarID, scope string) {
-	c.AddNodeOverride(nodeID, OverrideConfig{Scope: scope})
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeScopeOverride(nodeID syntaxa.GrammarID, scopes ...string) {
+	c.AddNodeOverride(nodeID, OverrideConfig{Scopes: scopes})
 }
 
 /*
@@ -411,7 +412,7 @@ func buildSingleBaseState[TToken, TTokenRole comparable](
 			ID:     StateRuleID(id),
 			Label:  label,
 			Action: ACTION_MATCH,
-			Scope:  getScopeString(baseScope, config.scopeExtension),
+			Scope:  getScopeString([]string{baseScope}, config.scopeExtension),
 			RegEx:  defaultRegex,
 		}
 	}
@@ -482,7 +483,7 @@ func buildExpectState[TToken, TTokenRole comparable](
 			{
 				ID:           StateRuleID(produceStateID(nestLabel + "_open")),
 				RegEx:        openRegex,
-				Scope:        getScopeString(config.scopeProvider(nest.Open), config.scopeExtension),
+				Scope:        getScopeString([]string{config.scopeProvider(nest.Open)}, config.scopeExtension),
 				Action:       ACTION_SET,
 				ActionTarget: bodyStateID,
 			},
@@ -557,7 +558,7 @@ func buildConstructStep[TToken, TTokenRole comparable](
 		Includes: includes,
 	}
 	if index > 0 && metaScope != "" {
-		st.MetaScope = getScopeString(metaScope, config.scopeExtension)
+		st.MetaScope = getScopeString([]string{metaScope}, config.scopeExtension)
 	}
 	return st
 }
@@ -715,7 +716,7 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 				ID:     StateRuleID(stateID),
 				Label:  fmt.Sprintf("node_override_%s_match", sanitizeContextName(string(gid))),
 				Action: ACTION_MATCH,
-				Scope:  getScopeString(oc.Scope, config.scopeExtension),
+				Scope:  getScopeString(oc.Scopes, config.scopeExtension),
 				RegEx:  regex,
 			}},
 		})
@@ -776,7 +777,7 @@ func injectPlannedSequenceTriggers[TToken, TTokenRole comparable](
 				Label:        spec.Label + "_match",
 				Action:       ACTION_PUSH,
 				ActionTarget: targetStateID,
-				Scope:        getScopeString(config.scopeProvider(spec.Token), config.scopeExtension),
+				Scope:        getScopeString([]string{config.scopeProvider(spec.Token)}, config.scopeExtension),
 				RegEx:        triggerRegex,
 			}},
 		})
@@ -919,12 +920,21 @@ func InvalidFallbackRule(id StateRuleID, scopeExtension string) StateRule {
 		ID:     id,
 		Label:  invalidFallbackLabel,
 		RegEx:  `\S+`,
-		Scope:  getScopeString(invalidFallbackBaseScope, scopeExtension),
+		Scope:  getScopeString([]string{invalidFallbackBaseScope}, scopeExtension),
 		Action: ACTION_MATCH,
 	}
 }
 
-func getScopeString(baseScope, scopeExtension string) string {
+func getScopeString(baseScopes []string, scopeExtension string) string {
+	return formatting.FormatStringSlice(baseScopes, formatting.FormatSliceOptions[string]{
+		Separator: " ",
+		FormatItem: func(_ int, value string) string {
+			return formatIndividualScopeString(value, scopeExtension)
+		},
+	})
+}
+
+func formatIndividualScopeString(baseScope string, scopeExtension string) string {
 	return fmt.Sprintf("%s%s", baseScope, scopeExtension)
 }
 
@@ -988,9 +998,9 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 			if _, hasTokOverride := config.overrides[n.Token]; hasTokOverride {
 				return true, false
 			}
-			scope := config.scopeProvider(n.Token)
+			scope := []string{config.scopeProvider(n.Token)}
 			if oc, ok := config.nodeOverrides[n.GrammarID]; ok && oc.HasScope() {
-				scope = oc.Scope
+				scope = oc.Scopes
 			}
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
 			rules = append(rules, StateRule{
@@ -1103,14 +1113,14 @@ func buildBodyStatePlanned[TToken, TTokenRole comparable](
 	return State{
 		ID:        bodyStateID,
 		Label:     nestLabel + "_body",
-		MetaScope: getScopeString(metaScopeBase, config.scopeExtension),
+		MetaScope: getScopeString([]string{metaScopeBase}, config.scopeExtension),
 		Includes:  includes,
 		Rules: []StateRule{
 			{
 				ID:     StateRuleID(produceStateID(nestLabel + "_close")),
 				Label:  nestLabel + "_close",
 				RegEx:  closeRegex,
-				Scope:  getScopeString(config.scopeProvider(nest.Close), config.scopeExtension),
+				Scope:  getScopeString([]string{config.scopeProvider(nest.Close)}, config.scopeExtension),
 				Action: ACTION_POP,
 			},
 			InvalidFallbackRule(StateRuleID(produceStateID(nestLabel+"_invalid")), config.scopeExtension),
