@@ -530,15 +530,60 @@ func buildConstructStateChain[TToken, TTokenRole comparable](
 	concatNode *syntaxa.Grammar[TToken],
 	metaScope string,
 	tokenPatternMap map[TToken]Pattern,
+	inheritedSyncTokens []TToken,
+	isRepeating bool,
 ) []State {
 	baseLabel := fmt.Sprintf("node_construct_%s", sanitizeContextName(string(concatNode.GrammarID)))
 	stepCount := len(concatNode.Children)
-	var states []State
 
+	currentSyncTokens := append([]TToken(nil), inheritedSyncTokens...)
+	currentSyncTokens = append(currentSyncTokens, concatNode.RecoveryTokens...)
+
+	// Generate the ID once for the entire sequence
+	recoveryStateID := StateID(produceStateID(baseLabel + "_recovery"))
+
+	var states []State
 	for i := 0; i < stepCount; i++ {
-		states = append(states, buildConstructStep(config, analysis, concatNode, i, stepCount, baseLabel, metaScope, tokenPatternMap))
+		states = append(states, buildConstructStep(config, analysis, concatNode, i, stepCount, baseLabel, metaScope, tokenPatternMap, recoveryStateID, isRepeating))
 	}
+
+	states = append(states, buildRecoveryState(recoveryStateID, baseLabel+"_recovery", currentSyncTokens, tokenPatternMap, config.scopeExtension))
+
 	return states
+}
+
+func buildRecoveryState[TToken comparable](
+	id StateID,
+	label string,
+	syncTokens []TToken,
+	tokenPatternMap map[TToken]Pattern,
+	scopeExtension string,
+) State {
+	var rules []StateRule
+
+	// 1. Peek for synchronization tokens to escape the panic state
+	for _, tok := range syncTokens {
+		regex, err := tokenPatternMap[tok].ToRegEx()
+		if err == nil && regex != "" {
+			rules = append(rules, StateRule{
+				ID:       StateRuleID(produceStateID(fmt.Sprintf("%s_sync_%v", label, tok))),
+				Label:    fmt.Sprintf("sync_%v", tok),
+				RegEx:    fmt.Sprintf(`(?=\s*(?:%s))`, regex),
+				Action:   ACTION_POP,
+				Priority: PriorityDefault,
+			})
+		}
+	}
+
+	// 2. Consume garbage if no sync token is in sight
+	rules = append(rules, InvalidFallbackRule(StateRuleID(produceStateID(label+"_invalid")), scopeExtension))
+
+	return State{
+		ID:            id,
+		Label:         label,
+		Rules:         rules,
+		IsRootContext: false,
+	}
 }
 
 func buildConstructStep[TToken, TTokenRole comparable](
@@ -548,6 +593,8 @@ func buildConstructStep[TToken, TTokenRole comparable](
 	index, stepCount int,
 	baseLabel, metaScope string,
 	tokenPatternMap map[TToken]Pattern,
+	recoveryStateID StateID,
+	isRepeating bool,
 ) State {
 	child := concatNode.Children[index]
 	lbl := stepLabel(baseLabel, index, stepCount)
@@ -558,13 +605,13 @@ func buildConstructStep[TToken, TTokenRole comparable](
 	includes := buildIncludesForNode(config, child)
 
 	if isToken {
-		rules, includes = handleTokenConstructStep(config, analysis, concatNode, child, index, stepCount, lbl, includes, tokenPatternMap)
+		rules, includes = handleTokenConstructStep(config, analysis, concatNode, child, index, stepCount, lbl, includes, tokenPatternMap, isRepeating, recoveryStateID)
 	} else {
-		rules, includes = handleSegmentConstructStep(config, analysis, concatNode, index, stepCount, lbl, includes, tokenPatternMap)
+		rules, includes = handleSegmentConstructStep(config, analysis, concatNode, index, stepCount, lbl, includes, tokenPatternMap, isRepeating, recoveryStateID)
 	}
 
 	if index > 0 {
-		rules = appendStrictSequenceBailout(rules, lbl)
+		rules = appendStrictSequenceBailout(rules, lbl, recoveryStateID)
 	}
 
 	st := State{
@@ -588,8 +635,10 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	lbl string,
 	includes []StateID,
 	tokenPatternMap map[TToken]Pattern,
+	isRepeating bool,
+	recoveryStateID StateID,
 ) ([]StateRule, []StateID) {
-	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount)
+	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount, isRepeating, recoveryStateID)
 
 	if _, hasTokOverride := config.overrides[child.Token]; hasTokOverride {
 		return buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID), includes
@@ -606,8 +655,10 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	lbl string,
 	includes []StateID,
 	tokenPatternMap map[TToken]Pattern,
+	isRepeating bool,
+	recoveryStateID StateID,
 ) ([]StateRule, []StateID) {
-	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount)
+	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount, isRepeating, recoveryStateID)
 	rules := buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID)
 
 	return rules, includes
@@ -636,20 +687,23 @@ func buildLookaheadRules[TToken comparable](
 	return nil
 }
 
-func getTransition(baseLabel string, currentIndex, targetIndex, stepCount int) (RuleAction, StateID) {
-	if stepCount <= 1 {
-		return ACTION_MATCH, 0
-	}
-	if currentIndex == 0 {
-		if targetIndex >= stepCount {
+func getTransition(baseLabel string, currentIndex, targetIndex, stepCount int, isRepeating bool, recoveryStateID StateID) (RuleAction, StateID) {
+	if targetIndex >= stepCount {
+		if !isRepeating {
+			return ACTION_SET, recoveryStateID
+		}
+
+		if currentIndex == 0 {
 			return ACTION_MATCH, 0
 		}
-		return ACTION_PUSH, StateID(produceStateID(fmt.Sprintf("%s_step_%d", baseLabel, targetIndex)))
-	}
-	if targetIndex >= stepCount {
 		return ACTION_POP, 0
 	}
-	return ACTION_SET, StateID(produceStateID(fmt.Sprintf("%s_step_%d", baseLabel, targetIndex)))
+
+	targetID := StateID(produceStateID(fmt.Sprintf("%s_step_%d", baseLabel, targetIndex)))
+	if currentIndex == 0 {
+		return ACTION_PUSH, targetID
+	}
+	return ACTION_SET, targetID
 }
 
 func stepLabel(baseLabel string, index, stepCount int) string {
@@ -688,20 +742,6 @@ func buildIncludesForNode[TToken, TTokenRole comparable](
 	})...)
 	return includes
 }
-
-// func buildExitRulesToNextTokenChild[TToken, TTokenRole comparable](
-// 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-// 	nextChild *syntaxa.Grammar[TToken],
-// 	action RuleAction,
-// 	nextID StateID,
-// 	stateLbl string,
-// 	tokenPatternMap map[TToken]Pattern,
-// ) []StateRule {
-// 	if nextChild == nil || nextChild.Kind != syntaxa.GToken {
-// 		return nil
-// 	}
-// 	return generateRulesForNode(config, nextChild, tokenPatternMap, nextID, stateLbl, action)
-// }
 
 func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
@@ -751,18 +791,48 @@ func extractConstructStates[TToken, TTokenRole comparable](
 	}
 
 	var states []State
-	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		if n.Kind == syntaxa.GConcat {
-			if _, ok := plan.ConstructConacts[n.GrammarID]; ok {
-				var metaScope string
-				if oc, ok2 := config.nodeOverrides[n.GrammarID]; ok2 && oc.HasMetaScope() {
-					metaScope = oc.MetaScope
-				}
-				states = append(states, buildConstructStateChain(config, analysis, n, metaScope, tokenPatternMap)...)
+
+	// Add 'inRepeat' to track if the sequence is looping
+	var traverse func(node *syntaxa.Grammar[TToken], inheritedSync []TToken, inRepeat bool)
+	traverse = func(node *syntaxa.Grammar[TToken], inheritedSync []TToken, inRepeat bool) {
+		if node == nil {
+			return
+		}
+
+		currentInRepeat := inRepeat
+		switch node.Kind {
+		case syntaxa.GRepeat:
+			currentInRepeat = true
+		case syntaxa.GNest:
+			currentInRepeat = false
+		}
+
+		tokenSet := make(map[TToken]struct{})
+		var currentSync []TToken
+
+		for _, tok := range append(inheritedSync, node.RecoveryTokens...) {
+			if _, exists := tokenSet[tok]; !exists {
+				tokenSet[tok] = struct{}{}
+				currentSync = append(currentSync, tok)
 			}
 		}
-		return false, false
-	})
+
+		if node.Kind == syntaxa.GConcat {
+			if _, ok := plan.ConstructConacts[node.GrammarID]; ok {
+				var metaScope string
+				if oc, ok2 := config.nodeOverrides[node.GrammarID]; ok2 && oc.HasMetaScope() {
+					metaScope = oc.MetaScope
+				}
+				states = append(states, buildConstructStateChain(config, analysis, node, metaScope, tokenPatternMap, currentSync, currentInRepeat)...)
+			}
+		}
+
+		for _, child := range node.Children {
+			traverse(child, currentSync, currentInRepeat)
+		}
+	}
+
+	traverse(root, nil, false)
 	return states
 }
 
@@ -1308,15 +1378,16 @@ func sweepUnreachable(states []State, reachable map[StateID]bool) []State {
 	return pruned
 }
 
-func appendStrictSequenceBailout(rules []StateRule, stateLabel string) []StateRule {
+func appendStrictSequenceBailout(rules []StateRule, stateLabel string, recoveryStateID StateID) []StateRule {
 	bailoutID := StateRuleID(produceStateID(stateLabel + "_sequence_bailout"))
 
 	bailoutRule := StateRule{
-		ID:       bailoutID,
-		Label:    "sequence_bailout",
-		RegEx:    `(?=\S)`,
-		Action:   ACTION_POP,
-		Priority: PriorityFallback,
+		ID:           bailoutID,
+		Label:        "sequence_bailout",
+		RegEx:        `(?=\S)`,
+		Action:       ACTION_SET,
+		ActionTarget: recoveryStateID,
+		Priority:     PriorityFallback,
 	}
 
 	return append(rules, bailoutRule)

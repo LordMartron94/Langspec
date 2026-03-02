@@ -321,7 +321,7 @@ func buildHeaderRule(g *GrammarDefiner) Rule {
 		g.expectToken(NodeDSLName, TokStringLiteral),
 		g.expectTokenWithGrammarID(LangSpecGrammarIDFromNodeWithSuffix(NodeVersion, "DSL"), NodeVersion, TokVersion),
 		g.expectVirtual(VirtualHeaderSeparator, TokPipe),
-		g.expectOneOfWithGrammarID(LangSpecGrammarIDFromNode(NodeLSPECName), NodeLSPECName, TokStringLiteral, TokKWLSpec),
+		g.expectToken(NodeLSPECName, TokKWLSpec),
 		g.expectTokenWithGrammarID(LangSpecGrammarIDFromNodeWithSuffix(NodeVersion, "LANGSPEC"), NodeVersion, TokVersion),
 	}
 	headerContent := g.rb.Rule.Sequence(
