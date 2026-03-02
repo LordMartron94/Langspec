@@ -51,6 +51,14 @@ const (
 	invalidFallbackBaseScope = "invalid.illegal.unexpected-token"
 )
 
+// Rule priority for ordering: lower value = earlier in output (higher precedence).
+// Generators (e.g. Sublime) emit rules with Priority < PriorityAfterIncludes first, then includes, then rules with Priority >= PriorityAfterIncludes.
+const (
+	PriorityDefault       = 0    // Normal rules (emit before includes)
+	PriorityAfterIncludes = 500  // Threshold: rules with priority >= this are emitted after the includes block
+	PriorityFallback      = 1000 // Fallback / invalid-token rules (emit last, after includes)
+)
+
 /*
 State is one context in the push-down automaton. It has a unique ID, label (used in includes and YAML output),
 optional meta scope, rules (match patterns and actions), and includes (whitelist of other state IDs that may be entered).
@@ -70,6 +78,7 @@ type State struct {
 StateRule is one match rule within a state. RegEx is the pattern to match; Scope is applied on match.
 Action and ActionTarget define the transition (push/pop/set/match). Captures, Embed, EmbedScope, Escape, EscapeCaptures
 support capture groups and embedded syntax. PopCount is used when Action is ACTION_POP to pop multiple levels.
+Priority orders the rule relative to others in the same state: lower value = earlier (higher precedence). Use PriorityDefault and PriorityFallback.
 */
 type StateRule struct {
 	ID             StateRuleID
@@ -84,6 +93,7 @@ type StateRule struct {
 	EmbedScope     string
 	Escape         string
 	EscapeCaptures map[int]string
+	Priority       int
 }
 
 /*
@@ -554,7 +564,7 @@ func buildConstructStep[TToken, TTokenRole comparable](
 	}
 
 	if index > 0 {
-		rules = appendStrictFallbackRule(rules, lbl, config.scopeExtension)
+		rules = appendStrictSequenceBailout(rules, lbl)
 	}
 
 	st := State{
@@ -925,11 +935,12 @@ InvalidFallbackRule returns a StateRule that matches non-whitespace (\S+) with t
 */
 func InvalidFallbackRule(id StateRuleID, scopeExtension string) StateRule {
 	return StateRule{
-		ID:     id,
-		Label:  invalidFallbackLabel,
-		RegEx:  `\S+`,
-		Scope:  getScopeString([]string{invalidFallbackBaseScope}, scopeExtension),
-		Action: ACTION_MATCH,
+		ID:       id,
+		Label:    invalidFallbackLabel,
+		RegEx:    `\S+`,
+		Scope:    getScopeString([]string{invalidFallbackBaseScope}, scopeExtension),
+		Action:   ACTION_MATCH,
+		Priority: PriorityFallback,
 	}
 }
 
@@ -1302,7 +1313,16 @@ func sweepUnreachable(states []State, reachable map[StateID]bool) []State {
 	return pruned
 }
 
-func appendStrictFallbackRule(rules []StateRule, stateLabel string, scopeExtension string) []StateRule {
-	fallbackID := StateRuleID(produceStateID(stateLabel + "_invalid_sequence"))
-	return append(rules, InvalidFallbackRule(fallbackID, scopeExtension))
+func appendStrictSequenceBailout(rules []StateRule, stateLabel string) []StateRule {
+	bailoutID := StateRuleID(produceStateID(stateLabel + "_sequence_bailout"))
+
+	bailoutRule := StateRule{
+		ID:       bailoutID,
+		Label:    "sequence_bailout",
+		RegEx:    `(?=\S)`,
+		Action:   ACTION_POP,
+		Priority: PriorityFallback,
+	}
+
+	return append(rules, bailoutRule)
 }

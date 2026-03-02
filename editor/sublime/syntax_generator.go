@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"foundation/system"
 	"langspec/editor"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,18 +110,16 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 			entries = append(entries, contextEntry{MetaScope: &state.MetaScope})
 		}
 
-		// 2. High-Priority Rules (Exit/Pop rules and explicit overrides)
-		// We filter out the fallback to ensure it goes last
-		var fallbackRule *editor.StateRule
-		for _, rule := range state.Rules {
-			if rule.Label == "invalid_fallback" {
-				fallbackRule = &rule
-				continue
+		// 2. Rules with priority < PriorityAfterIncludes (ordered by Priority)
+		// 3. Includes
+		// 4. Rules with priority >= PriorityAfterIncludes (e.g. fallback)
+		rules := slices.Clone(state.Rules)
+		slices.SortFunc(rules, func(a, b editor.StateRule) int { return a.Priority - b.Priority })
+		for _, rule := range rules {
+			if rule.Priority < editor.PriorityAfterIncludes {
+				entries = append(entries, convertRuleToEntry(rule, idToLabel))
 			}
-			entries = append(entries, convertRuleToEntry(rule, idToLabel))
 		}
-
-		// 3. Includes (The Whitelist)
 		for _, incID := range state.Includes {
 			targetLabel, ok := idToLabel[incID]
 			if !ok {
@@ -129,10 +128,10 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 			labelCopy := targetLabel
 			entries = append(entries, contextEntry{Include: &labelCopy})
 		}
-
-		// 4. Low-Priority Fallback (The Trap)
-		if fallbackRule != nil {
-			entries = append(entries, convertRuleToEntry(*fallbackRule, idToLabel))
+		for _, rule := range rules {
+			if rule.Priority >= editor.PriorityAfterIncludes {
+				entries = append(entries, convertRuleToEntry(rule, idToLabel))
+			}
 		}
 
 		contexts[state.Label] = entries
