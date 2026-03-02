@@ -71,6 +71,18 @@ func (b *TokenBuilder) Pattern(p pattern.RegulaAST[rune]) *TokenBuilder {
 }
 
 /*
+PatternFromRegex parses the given regex string (restricted syntax, see pattern.RegexToRegula) into a RegulaAST
+and sets it as the token pattern. Panics on parse error. Use for concise token definitions (e.g. `v[0-9]+\\.[0-9]+\\.[0-9]+`).
+*/
+func (b *TokenBuilder) PatternFromRegex(regex string, f *pattern.RegulaASTFactory[rune]) *TokenBuilder {
+	ast, err := pattern.RegexToRegula(regex, f)
+	if err != nil {
+		panic("PatternFromRegex: " + err.Error())
+	}
+	return b.Pattern(ast)
+}
+
+/*
 Delimited sets the open and close patterns for a delimited region (e.g. block comment).
 When both are set, the ruleset is annotated and the editor IR can map this token to
 push/body/pop regions automatically.

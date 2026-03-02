@@ -142,7 +142,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		DefineToken(TokLineComment).
 			Role(LANG_SPEC_COMMENT_ROLE).
 			Scope("comment.line.double-slash").
-			Pattern(buildLineCommentPattern(f)).
+			PatternFromRegex(`//[^\n\r]*`, f).
 			Build(),
 
 		DefineToken(TokBlockComment).
@@ -159,7 +159,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 
 		DefineToken(TokInteger).
 			Scope("constant.numeric").
-			Pattern(t.Digit()).
+			PatternFromRegex("[0-9]+", f).
 			Build(),
 
 		DefineToken(TokMetaSection).
@@ -227,7 +227,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		DefineToken(TokVersion).
 			Scope("constant.numeric.version").
 			HighPriority().
-			Pattern(buildVersionSemverV3Pattern(f, t)).
+			PatternFromRegex(`v[0-9]+\.[0-9]+\.[0-9]+`, f).
 			Build(),
 
 		DefineToken(TokKWLSpec).
@@ -277,7 +277,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		DefineToken(TokIdentifier).
 			Scope("variable.other").
 			HighPriority().
-			Pattern(buildIdentifierPattern(f)).
+			PatternFromRegex(`[a-zA-Z_][a-zA-Z0-9_\-]*`, f).
 			Build(),
 	}
 
@@ -304,12 +304,9 @@ func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 
 	lexSectionRule := buildLexSectionRule(g)
 
-	return g.rb.Rule.Root(
-		LangSpecGrammarIDFromNodeWithSuffix(NodeProgram, ""),
-		NodeProgram,
-		false,
+	return g.RootByNode(NodeProgram, false,
 		g.rb.Rule.Required(headerRule, "must have header"),
-		g.rb.Rule.TransparentZeroOrMore(LangSpecGrammarIDFromNodeWithSuffix(NodePragmaStatement, "LIST"), pragmaRule),
+		g.TransparentZeroOrMoreByNode(NodePragmaStatement, "LIST", pragmaRule),
 		g.rb.Rule.OptionalPrefix(buildPatternSectionRule(g), TokKWPattern),
 		g.rb.Rule.Required(lexSectionRule, "must have lex ruleset"),
 		g.expectVirtual(VirtualEOF, TokEOF),
@@ -317,23 +314,14 @@ func buildProgramRule(g *GrammarDefiner, spec LanguageSpec) Rule {
 }
 
 func buildHeaderRule(g *GrammarDefiner) Rule {
-	sequenceRules := []Rule{
-		g.expectToken(NodeDSLName, TokStringLiteral),
-		g.expectTokenWithGrammarID(LangSpecGrammarIDFromNodeWithSuffix(NodeVersion, "DSL"), NodeVersion, TokVersion),
-		g.expectVirtual(VirtualHeaderSeparator, TokPipe),
-		g.expectToken(NodeLSPECName, TokKWLSpec),
-		g.expectTokenWithGrammarID(LangSpecGrammarIDFromNodeWithSuffix(NodeVersion, "LANGSPEC"), NodeVersion, TokVersion),
-	}
-	headerContent := g.rb.Rule.Sequence(
-		LangSpecGrammarIDFromNodeWithSuffix(NodeHeader, "CONTENT"),
-		NodeHeader,
-		sequenceRules...,
-	)
-	return g.rb.Rule.TransparentNest(
-		LangSpecGrammarIDFromNodeWithSuffix(NodeHeader, ""),
-		TokDashes, TokDashes,
-		headerContent,
-	)
+	headerContent := g.sequence(NodeHeader, "CONTENT").
+		expect(NodeDSLName, "", TokStringLiteral).
+		expect(NodeVersion, "DSL", TokVersion).
+		expectVirtual(VirtualHeaderSeparator, TokPipe).
+		expect(NodeLSPECName, "", TokKWLSpec).
+		expect(NodeVersion, "LANGSPEC", TokVersion).
+		build()
+	return g.TransparentNestByNode(NodeHeader, "", TokDashes, TokDashes, headerContent)
 }
 
 func buildPragmaRule(g *GrammarDefiner) Rule {
@@ -341,11 +329,7 @@ func buildPragmaRule(g *GrammarDefiner) Rule {
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectToken(NodePragmaValue, TokStringLiteral).
 		build()
-	return g.rb.Rule.TransparentNest(
-		LangSpecGrammarIDFromNodeWithSuffix(NodePragmaStatement, ""),
-		TokPragmaStart, TokSemicolon,
-		pragmaBody,
-	)
+	return g.TransparentNestByNode(NodePragmaStatement, "", TokPragmaStart, TokSemicolon, pragmaBody)
 }
 
 func buildLexSectionRule(g *GrammarDefiner) Rule {
@@ -360,10 +344,7 @@ func buildLexSectionRule(g *GrammarDefiner) Rule {
 func buildLexRuleList(g *GrammarDefiner) Rule {
 	lexRule := buildLexRule(g)
 	lexRuleWithRecovery := g.rb.Rule.RecoverSync(lexRule, TokSemicolon)
-	return g.rb.Rule.TransparentZeroOrMore(
-		LangSpecGrammarIDFromNodeWithSuffix(NodeLexRule, "LIST"),
-		lexRuleWithRecovery,
-	)
+	return g.TransparentZeroOrMoreByNode(NodeLexRule, "LIST", lexRuleWithRecovery)
 }
 
 func buildLexRule(g *GrammarDefiner) Rule {
@@ -376,8 +357,7 @@ func buildLexRule(g *GrammarDefiner) Rule {
 		expectVirtualInRule(TokChainSeparator).
 		expectToken(NodeLexRuleRole, TokStringLiteral).
 		expectVirtualInRule(TokAssignment).
-		rule(g.rb.Rule.Choice(
-			LangSpecGrammarIDFromNode(NodeLexRulePattern),
+		rule(g.ChoiceByNode(NodeLexRulePattern,
 			refToVarRef,
 			g.expectToken(NodeLexRulePattern, TokRegexLiteral),
 		)).
@@ -401,10 +381,7 @@ func buildPatternSectionRule(g *GrammarDefiner) Rule {
 func buildPatternDefinitionList(g *GrammarDefiner) Rule {
 	defRule := buildPatternDefinition(g)
 	defWithRecovery := g.rb.Rule.RecoverSync(defRule, TokSemicolon)
-	return g.rb.Rule.TransparentZeroOrMore(
-		LangSpecGrammarIDFromNodeWithSuffix(NodePatternDefinition, "LIST"),
-		defWithRecovery,
-	)
+	return g.TransparentZeroOrMoreByNode(NodePatternDefinition, "LIST", defWithRecovery)
 }
 
 func buildPatternDefinition(g *GrammarDefiner) Rule {
@@ -417,21 +394,15 @@ func buildPatternDefinition(g *GrammarDefiner) Rule {
 }
 
 func buildPatternExprRule(g *GrammarDefiner) Rule {
-	segmentPrimary := g.rb.Rule.OptionalSuffix(
-		LangSpecGrammarIDFromNodeWithSuffix(NodePatternStar, ""),
-		NodePatternStar,
-		buildPatternSegmentRule(g),
-		TokStar,
-	)
+	segmentPrimary := g.OptionalSuffixByNode(NodePatternStar, buildPatternSegmentRule(g), TokStar)
 	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-		Primary:        segmentPrimary,
-		PrefixOps:      nil,
-		InfixOps:       nil,
+		Primary:   segmentPrimary,
+		PrefixOps: nil,
+		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+			g.InfixOp(TokConcat, 20, 19, NodePatternConcat),
+			g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
+		},
 		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
-	}
-	cfg.InfixOps = []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-		{Token: TokConcat, LeftBP: 20, RightBP: 19, NodeKind: NodePatternConcat, TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(NodePatternConcat, "")},
-		{Token: TokPipe, LeftBP: 10, RightBP: 9, NodeKind: NodePatternAlternation, TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(NodePatternAlternation, "")},
 	}
 	return g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
 }
@@ -443,8 +414,7 @@ func buildPatternSegmentRule(g *GrammarDefiner) Rule {
 			return ctx.Peek(1).Token == TokRange
 		},
 	)
-	return g.rb.Rule.Choice(
-		LangSpecGrammarIDFromNodeWithSuffix(NodePatternVarRef, ""),
+	return g.ChoiceByNode(NodePatternVarRef,
 		buildPatternVarRefRule(g),
 		rangeRule,
 		buildPatternCharLiteralRule(g),
@@ -469,39 +439,19 @@ func buildPatternCharLiteralRule(g *GrammarDefiner) Rule {
 }
 
 func buildMetaSectionRule(g *GrammarDefiner) Rule {
-	metaBodyRule := buildMetaSectionBodyRule(g)
-	return g.rb.Rule.Nest(
-		LangSpecGrammarIDFromNodeWithSuffix(NodeMetaSection, ""),
-		NodeMetaSection,
-		TokMetaSection, TokMetaSection,
-		metaBodyRule,
-	)
+	return g.NestByNode(NodeMetaSection, TokMetaSection, TokMetaSection, buildMetaSectionBodyRule(g))
 }
 
 func buildMetaSectionBodyRule(g *GrammarDefiner) Rule {
-	return g.rb.Rule.TransparentZeroOrMore(
-		LangSpecGrammarIDFromNodeWithSuffix(NodeMetaKeyValuePair, ""),
+	return g.TransparentZeroOrMoreByNode(NodeMetaKeyValuePair, "",
 		g.sequence(NodeMetaKeyValuePair, "SEQUENCE").
 			expectToken(NodeMetaKey, TokIdentifier).
 			expectVirtual(VirtualMetaAssignment, TokEqualsOperator).
 			expectToken(NodeMetaValue, TokStringLiteral).
-			build(),
-	)
+			build())
 }
 
 // ----------------------------------------------------------- PATTERN HELPERS (used only by BuildLanguageSpec)
-
-func buildLineCommentPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
-	notTerminator := f.NegatedClass(
-		f.Range('\n', '\n'),
-		f.Range('\r', '\r'),
-	)
-	return f.Sequence(
-		f.Literal('/'),
-		f.Literal('/'),
-		notTerminator.Star(),
-	)
-}
 
 func buildBlockCommentPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
 	notStar := f.NegatedClass(f.Range('*', '*'))
@@ -600,43 +550,4 @@ func buildPassThroughEscape(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST
 	anyChar := f.NegatedClass()
 
 	return f.Sequence(escapeTrigger, anyChar)
-}
-
-func buildVersionSemverV3Pattern(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTemplates[rune]) pattern.RegulaAST[rune] {
-	digits := t.Digit().Plus()
-	return f.Sequence(
-		f.Literal('v'),
-		digits,
-		f.Literal('.'),
-		digits,
-		f.Literal('.'),
-		digits,
-	)
-}
-
-func buildIdentifierPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
-	start := buildIdentifierStartChar(f)
-	body := buildIdentifierBodyChars(f)
-
-	return f.Sequence(start, body)
-}
-
-func buildIdentifierStartChar(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
-	return f.Class(
-		f.Range('a', 'z'),
-		f.Range('A', 'Z'),
-		f.Range('_', '_'),
-	)
-}
-
-func buildIdentifierBodyChars(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
-	validChar := f.Class(
-		f.Range('a', 'z'),
-		f.Range('A', 'Z'),
-		f.Range('0', '9'),
-		f.Range('_', '_'),
-		f.Range('-', '-'),
-	)
-
-	return validChar.Star()
 }

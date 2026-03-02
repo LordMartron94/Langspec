@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"syntaxa"
+	"syntaxa/rule"
 )
 
 /*
@@ -23,12 +24,19 @@ func grammarDefinerCreate(rb *RuleBuilder) *GrammarDefiner {
 }
 
 /*
-expectToken returns a rule that expects the token and creates an LST node of that kind.
-GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
+Expect returns a rule that expects the token and creates an LST node of that kind.
+GrammarID is derived from (node, suffix). Use suffix "" for the default slot or a disambiguating suffix (e.g. "DSL", "LANGSPEC").
+*/
+func (g *GrammarDefiner) Expect(node LangSpecParserNodeKind, suffix string, tok LangSpecLexerTokenType) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
+	return g.rb.Token.Expect(grammarID, node, tok)
+}
+
+/*
+expectToken returns a rule that expects the token and creates an LST node. Shorthand for Expect(node, "", tok).
 */
 func (g *GrammarDefiner) expectToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
-	return g.rb.Token.Expect(grammarID, node, tok)
+	return g.Expect(node, "", tok)
 }
 
 /*
@@ -115,6 +123,68 @@ func (g *GrammarDefiner) sequence(nodeKind LangSpecParserNodeKind, suffix string
 }
 
 /*
+TransparentNestByNode creates a transparent nest (open ... close) with grammar ID derived from (node, suffix).
+*/
+func (g *GrammarDefiner) TransparentNestByNode(node LangSpecParserNodeKind, suffix string, open, close LangSpecLexerTokenType, body Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
+	return g.rb.Rule.TransparentNest(grammarID, open, close, body)
+}
+
+/*
+RootByNode builds a root rule with grammar ID derived from node (suffix "").
+*/
+func (g *GrammarDefiner) RootByNode(node LangSpecParserNodeKind, transparent bool, rules ...Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	return g.rb.Rule.Root(grammarID, node, transparent, rules...)
+}
+
+/*
+TransparentZeroOrMoreByNode builds zero-or-more repetition with grammar ID derived from (node, suffix).
+*/
+func (g *GrammarDefiner) TransparentZeroOrMoreByNode(node LangSpecParserNodeKind, suffix string, rule Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
+	return g.rb.Rule.TransparentZeroOrMore(grammarID, rule)
+}
+
+/*
+NestByNode builds a nest (open ... close) with grammar ID derived from node (suffix "").
+*/
+func (g *GrammarDefiner) NestByNode(node LangSpecParserNodeKind, open, close LangSpecLexerTokenType, body Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	return g.rb.Rule.Nest(grammarID, node, open, close, body)
+}
+
+/*
+ChoiceByNode builds a choice over rules with grammar ID derived from node (suffix "").
+*/
+func (g *GrammarDefiner) ChoiceByNode(node LangSpecParserNodeKind, rules ...Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	return g.rb.Rule.Choice(grammarID, rules...)
+}
+
+/*
+OptionalSuffixByNode builds an optional-suffix rule (rule followed by optional tok) with grammar ID and node derived from node (suffix "").
+*/
+func (g *GrammarDefiner) OptionalSuffixByNode(node LangSpecParserNodeKind, rule Rule, tok LangSpecLexerTokenType) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	return g.rb.Rule.OptionalSuffix(grammarID, node, rule, tok)
+}
+
+/*
+InfixOp returns a Pratt infix operator descriptor with TokenGrammarLabel and NodeKind derived from node (suffix "").
+Use when building PrattConfig.InfixOps so call sites pass only (tok, leftBP, rightBP, node).
+*/
+func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int, node LangSpecParserNodeKind) rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
+	return rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		Token:             tok,
+		LeftBP:            leftBP,
+		RightBP:           rightBP,
+		NodeKind:          node,
+		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
+	}
+}
+
+/*
 block creates a standard delimited section:
 Keyword -> { -> Body -> } -> ;
 GrammarID is derived from node. The bodyRule is typically a TransparentNest or a list of sub-rules.
@@ -154,11 +224,19 @@ type SequenceBuilder struct {
 }
 
 /*
-expectToken appends a rule that expects the token and creates an LST node (derived GrammarID).
+expect appends a rule that expects the token and creates an LST node. GrammarID is derived from (node, suffix).
+Use suffix "" for the default slot.
+*/
+func (s *SequenceBuilder) expect(node LangSpecParserNodeKind, suffix string, tok LangSpecLexerTokenType) *SequenceBuilder {
+	s.rules = append(s.rules, s.g.Expect(node, suffix, tok))
+	return s
+}
+
+/*
+expectToken appends a rule that expects the token and creates an LST node. Shorthand for expect(node, "", tok).
 */
 func (s *SequenceBuilder) expectToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) *SequenceBuilder {
-	s.rules = append(s.rules, s.g.expectToken(node, tok))
-	return s
+	return s.expect(node, "", tok)
 }
 
 /*
