@@ -515,6 +515,30 @@ func mutateStateAction(allStates []State, targetStateID StateID, action RuleActi
 }
 
 // ------------------------------------------------------------------ NODE OVERRIDES & CONSTRUCTS
+//
+// Construct state extraction walks the grammar via GrammarWalkPreWithContext, collects
+// GConcat nodes planned as constructs, and builds state chains from constructBuildEnv
+// and constructChainCtx. One env is shared for the run; one chain context per GConcat.
+
+// constructBuildEnv holds shared context for the construct-state pipeline (config, plan, analysis, token patterns).
+type constructBuildEnv[TToken, TTokenRole comparable] struct {
+	Config          *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
+	Plan            *IRPlan[TToken]
+	Analysis        *syntaxa.GrammarAnalysis[TToken]
+	TokenPatternMap map[TToken]Pattern
+}
+
+// constructChainCtx holds context for building one construct state chain (one GConcat). Derived fields are set by buildConstructStateChain.
+type constructChainCtx[TToken, TTokenRole comparable] struct {
+	Env                 *constructBuildEnv[TToken, TTokenRole]
+	ConcatNode          *syntaxa.Grammar[TToken]
+	MetaScope           string
+	InheritedSyncTokens []TToken
+	IsRepeating         bool
+	BaseLabel           string
+	StepCount           int
+	RecoveryStateID     StateID
+}
 
 func nodeOverrideStateID(grammarID syntaxa.GrammarID) StateID {
 	return StateID(produceStateID(fmt.Sprintf("node_override_%s", sanitizeContextName(string(grammarID)))))
@@ -525,31 +549,49 @@ func nodeConstructEntryStateID(concatID syntaxa.GrammarID) StateID {
 }
 
 func buildConstructStateChain[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	analysis *syntaxa.GrammarAnalysis[TToken],
+	env *constructBuildEnv[TToken, TTokenRole],
 	concatNode *syntaxa.Grammar[TToken],
 	metaScope string,
-	tokenPatternMap map[TToken]Pattern,
 	inheritedSyncTokens []TToken,
 	isRepeating bool,
 ) []State {
 	baseLabel := fmt.Sprintf("node_construct_%s", sanitizeContextName(string(concatNode.GrammarID)))
 	stepCount := len(concatNode.Children)
-
-	currentSyncTokens := append([]TToken(nil), inheritedSyncTokens...)
-	currentSyncTokens = append(currentSyncTokens, concatNode.RecoveryTokens...)
-
-	// Generate the ID once for the entire sequence
 	recoveryStateID := StateID(produceStateID(baseLabel + "_recovery"))
+
+	currentSyncTokens := dedupeSyncTokens(append(append([]TToken(nil), inheritedSyncTokens...), concatNode.RecoveryTokens...))
+
+	chainCtx := &constructChainCtx[TToken, TTokenRole]{
+		Env:                 env,
+		ConcatNode:          concatNode,
+		MetaScope:           metaScope,
+		InheritedSyncTokens: inheritedSyncTokens,
+		IsRepeating:         isRepeating,
+		BaseLabel:           baseLabel,
+		StepCount:           stepCount,
+		RecoveryStateID:     recoveryStateID,
+	}
 
 	var states []State
 	for i := 0; i < stepCount; i++ {
-		states = append(states, buildConstructStep(config, analysis, concatNode, i, stepCount, baseLabel, metaScope, tokenPatternMap, recoveryStateID, isRepeating))
+		states = append(states, buildConstructStep(chainCtx, i))
 	}
-
-	states = append(states, buildRecoveryState(recoveryStateID, baseLabel+"_recovery", currentSyncTokens, tokenPatternMap, config.scopeExtension))
-
+	states = append(states, buildRecoveryState(recoveryStateID, baseLabel+"_recovery", currentSyncTokens, env.TokenPatternMap, env.Config.scopeExtension))
 	return states
+}
+
+// dedupeSyncTokens returns a slice with duplicate tokens removed (first occurrence kept).
+func dedupeSyncTokens[TToken comparable](tokens []TToken) []TToken {
+	seen := make(map[TToken]struct{}, len(tokens))
+	out := make([]TToken, 0, len(tokens))
+	for _, t := range tokens {
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 func buildRecoveryState[TToken comparable](
@@ -560,19 +602,26 @@ func buildRecoveryState[TToken comparable](
 	scopeExtension string,
 ) State {
 	var rules []StateRule
+	seenRegex := make(map[string]struct{})
 
-	// 1. Peek for synchronization tokens to escape the panic state
+	// 1. Peek for synchronization tokens to escape the panic state (one rule per unique pattern)
 	for _, tok := range syncTokens {
 		regex, err := tokenPatternMap[tok].ToRegEx()
-		if err == nil && regex != "" {
-			rules = append(rules, StateRule{
-				ID:       StateRuleID(produceStateID(fmt.Sprintf("%s_sync_%v", label, tok))),
-				Label:    fmt.Sprintf("sync_%v", tok),
-				RegEx:    fmt.Sprintf(`(?=\s*(?:%s))`, regex),
-				Action:   ACTION_POP,
-				Priority: PriorityDefault,
-			})
+		if err != nil || regex == "" {
+			continue
 		}
+		pattern := fmt.Sprintf(`(?=\s*(?:%s))`, regex)
+		if _, ok := seenRegex[pattern]; ok {
+			continue
+		}
+		seenRegex[pattern] = struct{}{}
+		rules = append(rules, StateRule{
+			ID:       StateRuleID(produceStateID(fmt.Sprintf("%s_sync_%v", label, tok))),
+			Label:    fmt.Sprintf("sync_%v", tok),
+			RegEx:    pattern,
+			Action:   ACTION_POP,
+			Priority: PriorityDefault,
+		})
 	}
 
 	// 2. Consume garbage if no sync token is in sight
@@ -586,32 +635,26 @@ func buildRecoveryState[TToken comparable](
 	}
 }
 
-func buildConstructStep[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	concatNode *syntaxa.Grammar[TToken],
-	index, stepCount int,
-	baseLabel, metaScope string,
-	tokenPatternMap map[TToken]Pattern,
-	recoveryStateID StateID,
-	isRepeating bool,
-) State {
-	child := concatNode.Children[index]
+func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainCtx[TToken, TTokenRole], index int) State {
+	child := chainCtx.ConcatNode.Children[index]
+	baseLabel := chainCtx.BaseLabel
+	stepCount := chainCtx.StepCount
 	lbl := stepLabel(baseLabel, index, stepCount)
-	id := stepID(baseLabel, concatNode.GrammarID, index, stepCount)
+	id := stepID(baseLabel, chainCtx.ConcatNode.GrammarID, index, stepCount)
 	isToken := syntaxa.GrammarIsTokenNode(child)
 
+	config := chainCtx.Env.Config
 	var rules []StateRule
 	includes := buildIncludesForNode(config, child)
 
 	if isToken {
-		rules, includes = handleTokenConstructStep(config, analysis, concatNode, child, index, stepCount, lbl, includes, tokenPatternMap, isRepeating, recoveryStateID)
+		rules, includes = handleTokenConstructStep(chainCtx, child, index, lbl, includes)
 	} else {
-		rules, includes = handleSegmentConstructStep(config, analysis, concatNode, index, stepCount, lbl, includes, tokenPatternMap, isRepeating, recoveryStateID)
+		rules, includes = handleSegmentConstructStep(chainCtx, index, lbl, includes)
 	}
 
 	if index > 0 {
-		rules = appendStrictSequenceBailout(rules, lbl, recoveryStateID)
+		rules = appendStrictSequenceBailout(rules, lbl, chainCtx.RecoveryStateID)
 	}
 
 	st := State{
@@ -620,62 +663,52 @@ func buildConstructStep[TToken, TTokenRole comparable](
 		Rules:    rules,
 		Includes: includes,
 	}
-
-	if index > 0 && metaScope != "" {
-		st.MetaScope = getScopeString([]string{metaScope}, config.scopeExtension)
+	if index > 0 && chainCtx.MetaScope != "" {
+		st.MetaScope = getScopeString([]string{chainCtx.MetaScope}, config.scopeExtension)
 	}
 	return st
 }
 
 func handleTokenConstructStep[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	concatNode, child *syntaxa.Grammar[TToken],
-	index, stepCount int,
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	child *syntaxa.Grammar[TToken],
+	index int,
 	lbl string,
 	includes []StateID,
-	tokenPatternMap map[TToken]Pattern,
-	isRepeating bool,
-	recoveryStateID StateID,
 ) ([]StateRule, []StateID) {
-	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount, isRepeating, recoveryStateID)
+	env := chainCtx.Env
+	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarID), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
 
-	if _, hasTokOverride := config.overrides[child.Token]; hasTokOverride {
-		return buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID), includes
+	if _, hasTokOverride := env.Config.overrides[child.Token]; hasTokOverride {
+		return buildLookaheadRules(chainCtx, index, action, nextID), includes
 	}
-
-	return generateRulesForNode(config, child, tokenPatternMap, nextID, lbl, action), nil
+	return generateRulesForNode(env.Config, child, env.TokenPatternMap, nextID, lbl, action), nil
 }
 
 func handleSegmentConstructStep[TToken, TTokenRole comparable](
-	_ *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	concatNode *syntaxa.Grammar[TToken],
-	index, stepCount int,
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	index int,
 	lbl string,
 	includes []StateID,
-	tokenPatternMap map[TToken]Pattern,
-	isRepeating bool,
-	recoveryStateID StateID,
 ) ([]StateRule, []StateID) {
-	action, nextID := getTransition(baseLabelForTransition(concatNode.GrammarID), index, index+1, stepCount, isRepeating, recoveryStateID)
-	rules := buildLookaheadRules(analysis, lbl, index, stepCount, concatNode, tokenPatternMap, action, nextID)
-
+	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarID), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
+	rules := buildLookaheadRules(chainCtx, index, action, nextID)
 	return rules, includes
 }
 
-func buildLookaheadRules[TToken comparable](
-	analysis *syntaxa.GrammarAnalysis[TToken],
-	lbl string, index, stepCount int,
-	concatNode *syntaxa.Grammar[TToken],
-	tokenPatternMap map[TToken]Pattern,
-	action RuleAction, nextID StateID,
+func buildLookaheadRules[TToken, TTokenRole comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	index int,
+	action RuleAction,
+	nextID StateID,
 ) []StateRule {
+	stepCount := chainCtx.StepCount
 	if index+1 >= stepCount {
 		return nil
 	}
-	suffixFirst := syntaxa.GrammarAnalysisFirstOfSuffix(analysis, concatNode, index+1)
-	if la, ok := buildLookaheadForTokens(suffixFirst, tokenPatternMap); ok {
+	lbl := stepLabel(chainCtx.BaseLabel, index, stepCount)
+	suffixFirst := syntaxa.GrammarAnalysisFirstOfSuffix(chainCtx.Env.Analysis, chainCtx.ConcatNode, index+1)
+	if la, ok := buildLookaheadForTokens(suffixFirst, chainCtx.Env.TokenPatternMap); ok {
 		return []StateRule{{
 			ID:           StateRuleID(produceStateID(lbl + "_advance_la")),
 			Label:        lbl + "_advance_la",
@@ -775,31 +808,36 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 		})
 	}
 
-	allStates = append(allStates, extractConstructStates(config, plan, analysis, grammarNode, tokenPatternMap)...)
+	env := &constructBuildEnv[TToken, TTokenRole]{
+		Config:          config,
+		Plan:            plan,
+		Analysis:        analysis,
+		TokenPatternMap: tokenPatternMap,
+	}
+	allStates = append(allStates, extractConstructStates(env, grammarNode)...)
 	return allStates
 }
 
+// constructTraverseCtx carries inherited context when walking the grammar to collect construct states (sync tokens and repeat nesting).
+type constructTraverseCtx[TToken comparable] struct {
+	SyncTokens []TToken
+	InRepeat   bool
+}
+
 func extractConstructStates[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	plan *IRPlan[TToken],
-	analysis *syntaxa.GrammarAnalysis[TToken],
+	env *constructBuildEnv[TToken, TTokenRole],
 	root *syntaxa.Grammar[TToken],
-	tokenPatternMap map[TToken]Pattern,
 ) []State {
 	if root == nil {
 		return nil
 	}
 
+	config := env.Config
+	plan := env.Plan
 	var states []State
-
-	// Add 'inRepeat' to track if the sequence is looping
-	var traverse func(node *syntaxa.Grammar[TToken], inheritedSync []TToken, inRepeat bool)
-	traverse = func(node *syntaxa.Grammar[TToken], inheritedSync []TToken, inRepeat bool) {
-		if node == nil {
-			return
-		}
-
-		currentInRepeat := inRepeat
+	initial := constructTraverseCtx[TToken]{SyncTokens: nil, InRepeat: false}
+	_ = syntaxa.GrammarWalkPreWithContext(root, initial, func(node *syntaxa.Grammar[TToken], ctx constructTraverseCtx[TToken]) (constructTraverseCtx[TToken], bool, bool) {
+		currentInRepeat := ctx.InRepeat
 		switch node.Kind {
 		case syntaxa.GRepeat:
 			currentInRepeat = true
@@ -809,13 +847,13 @@ func extractConstructStates[TToken, TTokenRole comparable](
 
 		tokenSet := make(map[TToken]struct{})
 		var currentSync []TToken
-
-		for _, tok := range append(inheritedSync, node.RecoveryTokens...) {
+		for _, tok := range append(ctx.SyncTokens, node.RecoveryTokens...) {
 			if _, exists := tokenSet[tok]; !exists {
 				tokenSet[tok] = struct{}{}
 				currentSync = append(currentSync, tok)
 			}
 		}
+		childCtx := constructTraverseCtx[TToken]{SyncTokens: currentSync, InRepeat: currentInRepeat}
 
 		if node.Kind == syntaxa.GConcat {
 			if _, ok := plan.ConstructConacts[node.GrammarID]; ok {
@@ -823,16 +861,12 @@ func extractConstructStates[TToken, TTokenRole comparable](
 				if oc, ok2 := config.nodeOverrides[node.GrammarID]; ok2 && oc.HasMetaScope() {
 					metaScope = oc.MetaScope
 				}
-				states = append(states, buildConstructStateChain(config, analysis, node, metaScope, tokenPatternMap, currentSync, currentInRepeat)...)
+				states = append(states, buildConstructStateChain(env, node, metaScope, currentSync, currentInRepeat)...)
 			}
 		}
 
-		for _, child := range node.Children {
-			traverse(child, currentSync, currentInRepeat)
-		}
-	}
-
-	traverse(root, nil, false)
+		return childCtx, false, false
+	})
 	return states
 }
 
