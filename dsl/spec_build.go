@@ -59,6 +59,9 @@ const (
 	TokKWPattern
 	TokKWPragma
 	TokKWTool
+
+	TokKWTrue
+	TokKWFalse
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -242,31 +245,31 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 
 		DefineToken(TokKWLSpec).
 			Scope("keyword.declaration.lspec").
-			HighPriority().
+			Priority(2).
 			Pattern(pattern.LiteralString(f, "lspec")).
 			Build(),
 
 		DefineToken(TokKWPragma).
 			Scope("keyword.pragma.lspec").
-			HighPriority().
+			Priority(2).
 			Pattern(pattern.LiteralString(f, "PRAGMA")).
 			Build(),
 
 		DefineToken(TokKWTool).
 			Scope("keyword.tool.lspec").
-			HighPriority().
+			Priority(2).
 			Pattern(pattern.LiteralString(f, "tool")).
 			Build(),
 
 		DefineToken(TokKWLex).
 			Scope("keyword.declaration.lex").
-			HighPriority().
+			Priority(2).
 			Pattern(pattern.LiteralString(f, "LEX")).
 			Build(),
 
 		DefineToken(TokKWPattern).
 			Scope("keyword.declaration.pattern").
-			HighPriority().
+			Priority(2).
 			Pattern(pattern.LiteralString(f, "PATTERN")).
 			Build(),
 
@@ -288,6 +291,18 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		DefineToken(TokStar).
 			Scope("keyword.operator.star").
 			Pattern(f.Literal('*')).
+			Build(),
+
+		DefineToken(TokKWTrue).
+			Scope("constant.language.boolean").
+			Priority(2).
+			Pattern(pattern.LiteralString(f, "true")).
+			Build(),
+
+		DefineToken(TokKWFalse).
+			Scope("constant.language.boolean").
+			Priority(2).
+			Pattern(pattern.LiteralString(f, "false")).
 			Build(),
 
 		DefineToken(TokCharLiteral).
@@ -370,12 +385,12 @@ func buildPragmaBlockRule(g *GrammarDefiner) Rule {
 }
 
 func buildBlockKeyRule(g *GrammarDefiner) Rule {
-	return g.rb.Rule.Path(
-		syntaxa.GrammarLabel("PRAGMA BLOCK KEY"),
+	return g.rb.Scope(LangSpecGrammarIDFromNode(NodePragmaBlockKey)).Path(
 		NodePragmaBlockKey,
 		NodePragmaBlockKeyPrefix,
 		TokKWTool,
 		TokDot,
+		LangSpecGrammarIDFromNode(NodePragmaBlockKeySegment),
 		NodePragmaBlockKeySegment,
 		TokIdentifier,
 	)
@@ -389,7 +404,7 @@ func buildPragmaConfigurationRule(g *GrammarDefiner) Rule {
 	return g.rb.Rule.RecoverSync(g.sequence(NodePragmaConfiguration, "").
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectVirtualInRule(TokEqualsOperator).
-		rule(g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral)).
+		rule(g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral, TokKWTrue, TokKWFalse)).
 		expectVirtualInRule(TokSemicolon).
 		build(), TokSemicolon)
 }
