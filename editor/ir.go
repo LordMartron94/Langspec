@@ -292,8 +292,8 @@ type EditorIRRole uint8
 
 const (
 	EditorIRRoleToken   EditorIRRole = iota // Terminal; emit token match rule.
-	EditorIRRoleNest                       // Bracketed open/body/close; nest states.
-	EditorIRRoleSegment                    // Composite; no rule for node, only includes/lookahead.
+	EditorIRRoleNest                        // Bracketed open/body/close; nest states.
+	EditorIRRoleSegment                     // Composite; no rule for node, only includes/lookahead.
 	EditorIRRoleEpsilon                     // Empty production; skip in IR.
 )
 
@@ -324,6 +324,30 @@ func editorIRRole[TToken comparable](node *syntaxa.Grammar[TToken]) EditorIRRole
 // ------------------------------------------------------------------ IR ORCHESTRATOR
 
 /*
+validateNodeOverrideLabels ensures every node override label exists in the grammar. If any override
+is registered for a label that never appears in nodesByGrammarLabel, the build fails with a clear
+error so that "override for a node that is never added" cannot slip through.
+*/
+func validateNodeOverrideLabels[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	nodesByGrammarLabel map[syntaxa.GrammarLabel][]*syntaxa.Grammar[TToken],
+) {
+	var missing []string
+	for label := range config.nodeOverrides {
+		if len(nodesByGrammarLabel[label]) == 0 {
+			missing = append(missing, string(label))
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		panic(fmt.Sprintf(
+			"editor IR: node scope/metascope override has no matching grammar node for label(s) %s; ensure the grammar uses the same label (e.g. LangSpecGrammarIDFromNode for that node kind) so the node is actually added",
+			formatting.FormatStringSlice(missing, formatting.FormatSliceOptions[string]{Separator: ", ", Quote: true}),
+		))
+	}
+}
+
+/*
 PushDownAutomatonIR is the result of IR construction. It holds the language name and version (from the grammar package),
 the slice of States (contexts and rules), and the scope extension applied to all scopes. Pass to a generator (e.g. Sublime) to emit syntax files.
 */
@@ -343,6 +367,8 @@ func PushDownAutomatonIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
 	grammarPackage syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 ) *PushDownAutomatonIR {
+	validateNodeOverrideLabels(config, grammarPackage.NodesByGrammarLabel)
+
 	entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
 
 	plan := BuildIRPlan(config, grammarPackage.Analysis, entryGrammar)
@@ -543,7 +569,7 @@ func buildExpectState[TToken, TTokenRole comparable](
 		ID:            expectStateID,
 		Label:         nestLabel + "_expect",
 		IsRootContext: false,
-		Includes:      includes,
+		Includes:      dedupeStateIDs(includes),
 		Rules: []StateRule{
 			{
 				ID:           StateRuleID(produceStateID(nestLabel + "_open")),
@@ -775,7 +801,7 @@ func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainC
 		ID:       id,
 		Label:    lbl,
 		Rules:    rules,
-		Includes: includes,
+		Includes: dedupeStateIDs(includes),
 	}
 	if index > 0 && chainCtx.MetaScope != "" {
 		st.MetaScope = getScopeString([]string{chainCtx.MetaScope}, config.scopeExtension)
@@ -922,7 +948,7 @@ func buildIncludesForNode[TToken, TTokenRole comparable](
 	includes = append(includes, buildIncludesWhitelist(validTokens, *new(TToken), tokensInUse, func(tok TToken) StateID {
 		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
 	})...)
-	return includes
+	return dedupeStateIDs(includes)
 }
 
 func injectPlannedNodeStates[TToken, TTokenRole comparable](
@@ -941,22 +967,44 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 		if len(nodes) == 0 {
 			continue
 		}
-		tok := nodes[0]
-
 		oc := config.nodeOverrides[label]
+		if !oc.HasScope() {
+			continue
+		}
+		scopeStr := getScopeString(oc.Scopes, config.scopeExtension)
+		baseLabel := sanitizeContextName(string(label))
 		stateID := nodeOverrideStateID(label)
-		regex, _ := tokenPatternMap[tok.Token].ToRegEx()
 
+		// Only GToken nodes have a Token field; GChoice/GConcat etc. do not. When a label is
+		// shared (e.g. ExpectOneOf produces one GChoice and multiple GTokens with the same label),
+		// nodes[0] can be the non-token node, yielding wrong/empty regex. Use only GToken nodes
+		// and emit one rule per distinct token so override states match correctly.
+		seenToken := make(map[TToken]struct{})
+		var rules []StateRule
+		for _, n := range nodes {
+			if n.Kind != syntaxa.GToken {
+				continue
+			}
+			if _, seen := seenToken[n.Token]; seen {
+				continue
+			}
+			seenToken[n.Token] = struct{}{}
+			regex, _ := tokenPatternMap[n.Token].ToRegEx()
+			rules = append(rules, StateRule{
+				ID:     StateRuleID(produceStateID(fmt.Sprintf("node_override_%s_match_%v", baseLabel, n.Token))),
+				Label:  fmt.Sprintf("node_override_%s_match", baseLabel),
+				Action: ACTION_MATCH,
+				Scope:  scopeStr,
+				RegEx:  regex,
+			})
+		}
+		if len(rules) == 0 {
+			continue
+		}
 		allStates = append(allStates, State{
 			ID:    stateID,
-			Label: fmt.Sprintf("node_override_%s", sanitizeContextName(string(label))),
-			Rules: []StateRule{{
-				ID:     StateRuleID(stateID),
-				Label:  fmt.Sprintf("node_override_%s_match", sanitizeContextName(string(label))),
-				Action: ACTION_MATCH,
-				Scope:  getScopeString(oc.Scopes, config.scopeExtension),
-				RegEx:  regex,
-			}},
+			Label: fmt.Sprintf("node_override_%s", baseLabel),
+			Rules: rules,
 		})
 	}
 
@@ -1070,10 +1118,11 @@ func deriveTriggerID(tokenLabel string, targetID syntaxa.GrammarLabel) StateID {
 // ------------------------------------------------------------------ CONTEXT EXTRACTION & INJECTION
 
 type includeAnalysis[TToken comparable] struct {
-	ValidTokens  map[TToken]struct{}
-	TriggerIDs   []StateID
-	OverrideIDs  []StateID
-	ConstructIDs []StateID
+	ValidTokens      map[TToken]struct{}
+	SuppressedTokens map[TToken]struct{}
+	TriggerIDs       []StateID
+	OverrideIDs      []StateID
+	ConstructIDs     []StateID
 }
 
 func extractIncludes[TToken, TTokenRole comparable](
@@ -1100,15 +1149,16 @@ func traverseIncludes[TToken, TTokenRole comparable](
 	isRoot bool,
 ) includeAnalysis[TToken] {
 	out := includeAnalysis[TToken]{
-		ValidTokens: make(map[TToken]struct{}),
-	}
-
-	if root != nil && root.Kind == syntaxa.GNest && root.OpenToken != nil {
-		out.ValidTokens[*root.OpenToken] = struct{}{}
+		ValidTokens:      make(map[TToken]struct{}),
+		SuppressedTokens: make(map[TToken]struct{}),
 	}
 
 	if root == nil {
 		return out
+	}
+
+	if root.Kind == syntaxa.GNest && root.OpenToken != nil {
+		out.ValidTokens[*root.OpenToken] = struct{}{}
 	}
 
 	seenTriggers := make(map[StateID]bool)
@@ -1116,7 +1166,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 	seenConstructs := make(map[StateID]bool)
 
 	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		// Analysis-driven: merge First(node) into ValidTokens for any node with analysis.
+		// 1. Semantic Discovery: Add everything the grammar says is valid at this point
 		if analysis != nil && n != nil && n.NodePath != nil {
 			first := syntaxa.GrammarAnalysisFirst(analysis, n)
 			for tok := range first {
@@ -1124,27 +1174,33 @@ func traverseIncludes[TToken, TTokenRole comparable](
 			}
 		}
 
+		// 2. Structural Construction: Handled by custom state chains
 		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
 			if plan == nil || plan.containsConstruct(n.GrammarLabel) {
 				cid := nodeConstructEntryStateID(n.GrammarLabel)
 				if !seenConstructs[cid] {
 					seenConstructs[cid] = true
 					out.ConstructIDs = append(out.ConstructIDs, cid)
+					// We don't suppress tokens here because constructs typically
+					// encapsulate multiple steps, but watch this if you see overlap.
 				}
 				return true, false
 			}
 		}
 
+		// 3. Sequence Triggers: Hijack the token for a specific transition
 		if n.Kind == syntaxa.GConcat {
 			for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
 				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
 				if !seenTriggers[id] {
 					seenTriggers[id] = true
 					out.TriggerIDs = append(out.TriggerIDs, id)
+					out.SuppressedTokens[p.Token] = struct{}{}
 				}
 			}
 		}
 
+		// 4. Role-based overrides and base token inclusion
 		switch editorIRRole(n) {
 		case EditorIRRoleToken:
 			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasScope() {
@@ -1152,6 +1208,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 				if !seenOverrides[oid] {
 					seenOverrides[oid] = true
 					out.OverrideIDs = append(out.OverrideIDs, oid)
+					out.SuppressedTokens[n.Token] = struct{}{}
 				}
 			} else {
 				out.ValidTokens[n.Token] = struct{}{}
@@ -1168,6 +1225,12 @@ func traverseIncludes[TToken, TTokenRole comparable](
 
 		return false, false
 	})
+
+	// Final cleanup: Remove any tokens that were "promoted" to triggers or overrides
+	for tok := range out.SuppressedTokens {
+		delete(out.ValidTokens, tok)
+	}
+
 	return out
 }
 
@@ -1180,7 +1243,7 @@ func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []Stat
 		ID:            StateID(produceStateID("prototype")),
 		Label:         "prototype",
 		IsRootContext: false,
-		Includes:      prototypeIncludes,
+		Includes:      dedupeStateIDs(prototypeIncludes),
 	})
 }
 
@@ -1197,6 +1260,23 @@ func buildIncludesWhitelist[TToken comparable](
 		}
 	}
 	return includes
+}
+
+// dedupeStateIDs returns a slice with duplicate StateIDs removed; first occurrence is kept, order preserved.
+func dedupeStateIDs(includes []StateID) []StateID {
+	if len(includes) <= 1 {
+		return includes
+	}
+	seen := make(map[StateID]struct{}, len(includes))
+	out := make([]StateID, 0, len(includes))
+	for _, id := range includes {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 /*
@@ -1412,7 +1492,7 @@ func buildBodyStatePlanned[TToken, TTokenRole comparable](
 		ID:        bodyStateID,
 		Label:     nestLabel,
 		MetaScope: getScopeString([]string{metaScopeBase}, config.scopeExtension),
-		Includes:  includes,
+		Includes:  dedupeStateIDs(includes),
 		Rules: []StateRule{
 			{
 				ID:     StateRuleID(produceStateID(nestLabel + "_close")),
@@ -1501,7 +1581,7 @@ func injectMainStatePlanned[TToken, TTokenRole comparable](
 	return append(allStates, State{
 		ID:       StateID(produceStateID("main")),
 		Label:    "main",
-		Includes: rootIncludes,
+		Includes: dedupeStateIDs(rootIncludes),
 		Rules: []StateRule{
 			InvalidFallbackRule(StateRuleID(produceStateID("main_invalid")), scopeExtension),
 		},
