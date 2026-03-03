@@ -62,6 +62,7 @@ const (
 
 	TokKWTrue
 	TokKWFalse
+	TokKWLocal
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -131,6 +132,8 @@ const (
 	NodePatternConcat
 	NodePatternAlternation
 	NodePatternStringLiteral
+
+	NodeLocalVariable
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -172,6 +175,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWPattern, "keyword.declaration.pattern", "PATTERN", 2},
 		{TokKWTrue, "constant.language.boolean", "true", 2},
 		{TokKWFalse, "constant.language.boolean", "false", 2},
+		{TokKWLocal, "keyword.modifier.local", "local", 2},
 	}
 
 	for _, st := range statics {
@@ -360,6 +364,7 @@ func (b *dslGrammarBuilder) patternDefinitionList() Rule {
 
 func (b *dslGrammarBuilder) patternDefinition() Rule {
 	return b.g.rb.Rule.RecoverSync(b.g.sequence(NodePatternDefinition, "").
+		optionalToken(NodeLocalVariable, TokKWLocal).
 		expectToken(NodePatternDefName, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
 		requiredRule(b.patternExpr(), "pattern definition must have an expression").

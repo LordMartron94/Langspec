@@ -427,7 +427,6 @@ func extractLexerTokens[TToken, TTokenRole comparable](
 	}
 	var withIndex []tokenWithIndex
 	for i, lexerRule := range lexingRuleSet.GetRules() {
-		tokensInUse = append(tokensInUse, lexerRule.Token)
 		tokenPatternMap[lexerRule.Token] = lexerRule.Pattern
 		tokenPriorityMap[lexerRule.Token] = lexerRule.Priority
 		if slices.Contains(prototypeTokenRoles, lexerRule.Role) {
@@ -694,13 +693,13 @@ func mutateStateAction(allStates []State, targetStateID StateID, action RuleActi
 
 // constructBuildEnv holds shared context for the construct-state pipeline (config, plan, analysis, token patterns, token priorities).
 type constructBuildEnv[TToken, TTokenRole comparable] struct {
-	Config            *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
-	Plan              *IRPlan[TToken]
-	Analysis          *syntaxa.GrammarAnalysis[TToken]
-	TokenPatternMap   map[TToken]Pattern
-	TokenPriorityMap  map[TToken]int
-	NestBodyRegistry   map[syntaxa.GrammarLabel]StateID
-	TokensInUse       []TToken
+	Config           *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
+	Plan             *IRPlan[TToken]
+	Analysis         *syntaxa.GrammarAnalysis[TToken]
+	TokenPatternMap  map[TToken]Pattern
+	TokenPriorityMap map[TToken]int
+	NestBodyRegistry map[syntaxa.GrammarLabel]StateID
+	TokensInUse      []TToken
 }
 
 // constructChainCtx holds context for building one construct state chain (one GConcat). Derived fields are set by buildConstructStateChain.
@@ -839,10 +838,10 @@ func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainC
 		rules, includes = handleTokenConstructStep(chainCtx, child, index, lbl, includes)
 	case EditorIRRoleSegment, EditorIRRoleEpsilon:
 		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
-		rules, includes = handleSegmentConstructStep(chainCtx, index, lbl, includes)
+		rules, includes = handleSegmentConstructStep(chainCtx, child, index, lbl, includes)
 	default:
 		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
-		rules, includes = handleSegmentConstructStep(chainCtx, index, lbl, includes)
+		rules, includes = handleSegmentConstructStep(chainCtx, child, index, lbl, includes)
 	}
 
 	if index > 0 {
@@ -912,12 +911,18 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 
 func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	chainCtx *constructChainCtx[TToken, TTokenRole],
+	child *syntaxa.Grammar[TToken],
 	index int,
 	lbl string,
 	includes []StateID,
 ) ([]StateRule, []StateID) {
 	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
 	rules := buildLookaheadRules(chainCtx, index, action, nextID)
+	if child != nil && child.Kind == syntaxa.GOptional {
+		for i := range rules {
+			rules[i].Priority = PriorityAfterIncludes
+		}
+	}
 	return rules, includes
 }
 

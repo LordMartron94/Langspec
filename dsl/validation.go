@@ -17,6 +17,7 @@ const (
 	VALIDATION_DUPLICATE_PATTERN_NAME   ValidationCode = "V_PAT001"
 	VALIDATION_UNRESOLVED_PATTERN_REF   ValidationCode = "V_PAT002"
 	VALIDATION_EMPTY_PATTERN_EXPRESSION ValidationCode = "V_PAT003"
+	VALIDATION_LOCAL_REF_OUTSIDE_SECTION ValidationCode = "V_PAT004"
 )
 
 func (v ValidationCode) String() string {
@@ -50,16 +51,21 @@ func getValidationStages() []*ValidationStage {
 		},
 		{
 			Name:        "Pattern Validation",
-			Description: "Validates pattern section: duplicate declarations and unresolved variable references. Variables must be declared before use.",
+			Description: "Validates pattern section: duplicate declarations, unresolved variable references, and local variables used outside the pattern section. Variables must be declared before use; locals may be used in any pattern definition but not outside the pattern section.",
 			Order:       1,
 			Processor: func(ctx *ValidationCtx) {
 				allDeclared := make(map[string]struct{})
+				localNameToDef := make(map[string]*Node)
 				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
 					defNameNode := def.FindFirstKind(NodePatternDefName)
 					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
 						continue
 					}
-					allDeclared[string(defNameNode.Tokens()[0].Raw)] = struct{}{}
+					name := string(defNameNode.Tokens()[0].Raw)
+					allDeclared[name] = struct{}{}
+					if def.FindFirstKind(NodeLocalVariable) != nil {
+						localNameToDef[name] = def
+					}
 				}
 
 				declaredSoFar := make(map[string]struct{})
@@ -94,6 +100,21 @@ func getValidationStages() []*ValidationStage {
 						}
 					}
 				}
+
+				for _, varRef := range ctx.RootNode.FindAllKind(NodeVarRef) {
+					if enclosingPatternDef(varRef) != nil {
+						continue
+					}
+					tokens := varRef.Tokens()
+					if len(tokens) < 2 {
+						continue
+					}
+					refName := string(tokens[1].Raw)
+					if _, isLocal := localNameToDef[refName]; isLocal {
+						msg := fmt.Sprintf("local variable '%s' referenced outside pattern section (e.g. in lex section)", refName)
+						ctx.ReportError(VALIDATION_LOCAL_REF_OUTSIDE_SECTION.String(), msg, varRef)
+					}
+				}
 			},
 		},
 	}
@@ -108,4 +129,16 @@ func getStringValue(node *Node) string {
 	}
 
 	return value
+}
+
+/*
+enclosingPatternDef returns the innermost NodePatternDefinition that contains node, or nil if node is not inside any pattern definition. Walks Parent() upward.
+*/
+func enclosingPatternDef(node *Node) *Node {
+	for n := node; n != nil; n = n.Parent() {
+		if n.Kind() == NodePatternDefinition {
+			return n
+		}
+	}
+	return nil
 }
