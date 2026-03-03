@@ -553,16 +553,23 @@ func buildExpectState[TToken, TTokenRole comparable](
 	tokenPatternMap map[TToken]Pattern,
 	expectStateID StateID,
 	bodyStateID StateID,
-	betweenTokens map[TToken]struct{},
+	expectAnalysis includeAnalysis[TToken],
 	tokensInUse []TToken,
 ) State {
 	openRegex, _ := tokenPatternMap[nest.Open].ToRegEx()
 
 	var includes []StateID
-	if len(betweenTokens) > 0 && len(tokensInUse) > 0 {
-		includes = buildIncludesWhitelist(betweenTokens, nest.Open, tokensInUse, func(tok TToken) StateID {
+
+	// Inject the smart structural overrides
+	includes = append(includes, expectAnalysis.TriggerIDs...)
+	includes = append(includes, expectAnalysis.ConstructIDs...)
+	includes = append(includes, expectAnalysis.OverrideIDs...)
+
+	// Inject the remaining base tokens
+	if len(expectAnalysis.ValidTokens) > 0 && len(tokensInUse) > 0 {
+		includes = append(includes, buildIncludesWhitelist(expectAnalysis.ValidTokens, nest.Open, tokensInUse, func(tok TToken) StateID {
 			return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
-		})
+		})...)
 	}
 
 	return State{
@@ -583,34 +590,20 @@ func buildExpectState[TToken, TTokenRole comparable](
 	}
 }
 
-// mergeFirstOfSubtreeInto merges GrammarAnalysis.First(node) for every node in the subtree of g into out.
-func mergeFirstOfSubtreeInto[TToken comparable](analysis *syntaxa.GrammarAnalysis[TToken], g *syntaxa.Grammar[TToken], out map[TToken]struct{}) {
-	if analysis == nil || g == nil {
-		return
-	}
-	_ = g.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		if n != nil && n.NodePath != nil {
-			first := syntaxa.GrammarAnalysisFirst(analysis, n)
-			for tok := range first {
-				out[tok] = struct{}{}
-			}
-		}
-		return false, false
-	})
-}
-
-// collectTokensBetweenTriggerAndNest returns tokens that can appear between a sequence trigger and the nest open.
-// When a concat has (prev, nest) and prev is not a single GToken, those tokens are all First(n) for every n in the
-// subtree of prev from child index 1 onward (so we include e.g. TokDot and TokIdentifier in "tool" . id).
-func collectTokensBetweenTriggerAndNest[TToken comparable](
+func collectExpectStateIncludes[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
 	root *syntaxa.Grammar[TToken],
 	nestID syntaxa.GrammarLabel,
-) map[TToken]struct{} {
-	out := make(map[TToken]struct{})
-	if analysis == nil || root == nil {
+) includeAnalysis[TToken] {
+	out := includeAnalysis[TToken]{
+		ValidTokens: make(map[TToken]struct{}),
+	}
+	if root == nil {
 		return out
 	}
+
 	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
 		if n.Kind != syntaxa.GConcat || len(n.Children) < 2 {
 			return false, false
@@ -618,18 +611,29 @@ func collectTokensBetweenTriggerAndNest[TToken comparable](
 		for i := 0; i < len(n.Children)-1; i++ {
 			prev := n.Children[i]
 			next := n.Children[i+1]
+
 			if prev == nil || next == nil || next.Kind != syntaxa.GNest || next.GrammarLabel != nestID {
 				continue
 			}
 			if prev.Kind == syntaxa.GToken {
 				continue
 			}
+
+			// For everything between the trigger token and the nest open:
 			for j := 1; j < len(prev.Children); j++ {
-				mergeFirstOfSubtreeInto(analysis, prev.Children[j], out)
+				sub := traverseIncludes(config, plan, analysis, prev.Children[j], false)
+
+				for t := range sub.ValidTokens {
+					out.ValidTokens[t] = struct{}{}
+				}
+				out.ConstructIDs = append(out.ConstructIDs, sub.ConstructIDs...)
+				out.OverrideIDs = append(out.OverrideIDs, sub.OverrideIDs...)
+				out.TriggerIDs = append(out.TriggerIDs, sub.TriggerIDs...)
 			}
 		}
 		return false, false
 	})
+
 	return out
 }
 
@@ -1327,24 +1331,38 @@ func sanitizeContextName(name string) string {
 // ------------------------------------------------------------------ SEQUENCE DFA COMPILATION
 
 func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole], node *syntaxa.Grammar[TToken]) bool {
-	if node == nil {
+	if node == nil || node.Kind != syntaxa.GConcat {
 		return false
 	}
 
+	// 1. If the concat itself has a meta-scope, it MUST be a construct state chain.
+	if oc, exists := config.nodeOverrides[node.GrammarLabel]; exists && oc.HasMetaScope() {
+		return true
+	}
+
 	var found bool
-	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		if n.Kind == syntaxa.GNest {
-			return true, false
+	for _, child := range node.Children {
+		if child == nil {
+			continue
 		}
-		if oc, exists := config.nodeOverrides[n.GrammarLabel]; exists && oc.HasAny() {
-			if (n.Kind == syntaxa.GToken && oc.HasScope()) || (n.Kind == syntaxa.GConcat && oc.HasMetaScope()) {
-				found = true
-				return true, true
+		_ = child.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+			if n.Kind == syntaxa.GNest || n.Kind == syntaxa.GConcat {
+				return true, false
 			}
+			if n.Kind == syntaxa.GToken {
+				if oc, exists := config.nodeOverrides[n.GrammarLabel]; exists && oc.HasScope() {
+					found = true
+					return true, true
+				}
+			}
+			return false, false
+		})
+		if found {
+			return true
 		}
-		return false, false
-	})
-	return found
+	}
+
+	return false
 }
 
 func generateRulesForNode[TToken, TTokenRole comparable](
@@ -1546,9 +1564,11 @@ func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNode
 			mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
 		} else {
 			entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
-			betweenTokens := collectTokensBetweenTriggerAndNest(grammarPackage.Analysis, entryGrammar, nest.ID)
+
+			expectAnalysis := collectExpectStateIncludes(config, plan, grammarPackage.Analysis, entryGrammar, nest.ID)
+
 			expectStateID := StateID(produceStateID(nestLabel + "_expect"))
-			expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID, betweenTokens, tokensInUse)
+			expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID, expectAnalysis, tokensInUse)
 
 			nestRegistry[nest.ID] = expectStateID
 			allStates = append(allStates, expectState)
