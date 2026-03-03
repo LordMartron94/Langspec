@@ -190,14 +190,19 @@ type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken
 /*
 OverrideConfig holds optional scope and meta-scope for a grammar node override. HasScope / HasMetaScope / HasAny report which fields are set.
 */
-type OverrideConfig struct {
-	Scopes    []string
-	MetaScope string
+type OverrideConfig[TToken comparable] struct {
+	Scopes      []string
+	TokenScopes map[TToken][]string
+	MetaScope   string
 }
 
-func (c OverrideConfig) HasScope() bool     { return len(c.Scopes) > 0 }
-func (c OverrideConfig) HasMetaScope() bool { return c.MetaScope != "" }
-func (c OverrideConfig) HasAny() bool       { return c.HasScope() || c.HasMetaScope() }
+func (c OverrideConfig[TToken]) HasAnyScope() bool {
+	return len(c.Scopes) > 0 || len(c.TokenScopes) > 0
+}
+
+func (c OverrideConfig[TToken]) HasMetaScope() bool {
+	return c.MetaScope != ""
+}
 
 type nestOverrideHandler[TToken comparable] struct {
 	pred NestOverridePredicate[TToken]
@@ -215,7 +220,7 @@ type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
 	overrides            map[TToken]TokenOverrideFunc
 	prototypeTokenRoles  []TTokenRole
 	nestOverrideHandlers []nestOverrideHandler[TToken]
-	nodeOverrides        map[syntaxa.GrammarLabel]OverrideConfig
+	nodeOverrides        map[syntaxa.GrammarLabel]OverrideConfig[TToken]
 }
 
 /*
@@ -233,7 +238,7 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 		overrides:            make(map[TToken]TokenOverrideFunc),
 		prototypeTokenRoles:  make([]TTokenRole, 0),
 		nestOverrideHandlers: make([]nestOverrideHandler[TToken], 0),
-		nodeOverrides:        make(map[syntaxa.GrammarLabel]OverrideConfig),
+		nodeOverrides:        make(map[syntaxa.GrammarLabel]OverrideConfig[TToken]),
 	}
 }
 
@@ -263,7 +268,7 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverrideBy
 /*
 AddNodeOverride attaches scope and/or meta-scope to a grammar node by GrammarLabel. Node must be a GToken (scope) or GConcat (meta-scope) for the override to apply.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(nodeID syntaxa.GrammarLabel, config OverrideConfig) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(nodeID syntaxa.GrammarLabel, config OverrideConfig[TToken]) {
 	c.nodeOverrides[nodeID] = config
 }
 
@@ -271,7 +276,7 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(n
 AddNodeScopeOverride is a convenience for AddNodeOverride with only Scope set. Use for token nodes that need a custom scope.
 */
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeScopeOverride(nodeID syntaxa.GrammarLabel, scopes ...string) {
-	c.AddNodeOverride(nodeID, OverrideConfig{Scopes: scopes})
+	c.AddNodeOverride(nodeID, OverrideConfig[TToken]{Scopes: scopes})
 }
 
 /*
@@ -279,6 +284,15 @@ AddPrototypeTokenRoles marks tokens with the given roles as prototype contexts: 
 */
 func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
 	c.prototypeTokenRoles = append(c.prototypeTokenRoles, tokenRoles...)
+}
+
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddConditionalNodeScopeOverride(nodeID syntaxa.GrammarLabel, token TToken, scopes ...string) {
+	oc := c.nodeOverrides[nodeID]
+	if oc.TokenScopes == nil {
+		oc.TokenScopes = make(map[TToken][]string)
+	}
+	oc.TokenScopes[token] = scopes
+	c.nodeOverrides[nodeID] = oc
 }
 
 // ------------------------------------------------------------------ GRAMMAR NODE IR ROLE
@@ -972,17 +986,12 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 			continue
 		}
 		oc := config.nodeOverrides[label]
-		if !oc.HasScope() {
+		if !oc.HasAnyScope() {
 			continue
 		}
-		scopeStr := getScopeString(oc.Scopes, config.scopeExtension)
 		baseLabel := sanitizeContextName(string(label))
 		stateID := nodeOverrideStateID(label)
 
-		// Only GToken nodes have a Token field; GChoice/GConcat etc. do not. When a label is
-		// shared (e.g. ExpectOneOf produces one GChoice and multiple GTokens with the same label),
-		// nodes[0] can be the non-token node, yielding wrong/empty regex. Use only GToken nodes
-		// and emit one rule per distinct token so override states match correctly.
 		seenToken := make(map[TToken]struct{})
 		var rules []StateRule
 		for _, n := range nodes {
@@ -993,12 +1002,22 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 				continue
 			}
 			seenToken[n.Token] = struct{}{}
+
+			nodeScopes := oc.Scopes
+			if ts, match := oc.TokenScopes[n.Token]; match {
+				nodeScopes = ts
+			}
+
+			if len(nodeScopes) == 0 {
+				continue
+			}
+
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
 			rules = append(rules, StateRule{
 				ID:     StateRuleID(produceStateID(fmt.Sprintf("node_override_%s_match_%v", baseLabel, n.Token))),
 				Label:  fmt.Sprintf("node_override_%s_match", baseLabel),
 				Action: ACTION_MATCH,
-				Scope:  scopeStr,
+				Scope:  getScopeString(nodeScopes, config.scopeExtension),
 				RegEx:  regex,
 			})
 		}
@@ -1207,7 +1226,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 		// 4. Role-based overrides and base token inclusion
 		switch editorIRRole(n) {
 		case EditorIRRoleToken:
-			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasScope() {
+			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasAnyScope() {
 				oid := nodeOverrideStateID(n.GrammarLabel)
 				if !seenOverrides[oid] {
 					seenOverrides[oid] = true
@@ -1350,7 +1369,7 @@ func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIR
 				return true, false
 			}
 			if n.Kind == syntaxa.GToken {
-				if oc, exists := config.nodeOverrides[n.GrammarLabel]; exists && oc.HasScope() {
+				if oc, exists := config.nodeOverrides[n.GrammarLabel]; exists && oc.HasAnyScope() {
 					found = true
 					return true, true
 				}
@@ -1384,10 +1403,19 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 			if _, hasTokOverride := config.overrides[n.Token]; hasTokOverride {
 				return true, false
 			}
+
+			// 1. Default to the provider
 			scope := []string{config.scopeProvider(n.Token)}
-			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasScope() {
-				scope = oc.Scopes
+
+			// 2. Check for overrides
+			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok {
+				if specificScopes, hasSpecific := oc.TokenScopes[n.Token]; hasSpecific {
+					scope = specificScopes
+				} else if len(oc.Scopes) > 0 {
+					scope = oc.Scopes
+				}
 			}
+
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
 			rules = append(rules, StateRule{
 				ID:           StateRuleID(produceStateID(fmt.Sprintf("%s_match_%s_%v", stateLabel, n.GrammarLabel, n.Token))),
@@ -1455,7 +1483,7 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 		}
 
 		if n.Kind == syntaxa.GToken {
-			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasScope() {
+			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasAnyScope() {
 				plan.OverrideTokens[n.GrammarLabel] = struct{}{}
 			}
 		}
