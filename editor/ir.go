@@ -386,16 +386,16 @@ func PushDownAutomatonIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 	entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
 
 	plan := BuildIRPlan(config, grammarPackage.Analysis, entryGrammar)
-	tokensInUse, tokenPatternMap, prototypeTokens := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
+	tokensInUse, tokenPatternMap, prototypeTokens, tokenPriorityMap := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
 	delimitedMap := extractDelimitedRules(lexingRuleSet)
 
 	rootTokens, _, _ := extractIncludes(config, plan, grammarPackage.Analysis, entryGrammar, true)
-	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens, rootTokens, delimitedMap)
+	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, tokenPriorityMap, prototypeTokens, rootTokens, delimitedMap)
 
 	var nestBodyRegistry map[syntaxa.GrammarLabel]StateID
 	allStates, nestRegistry, nestBodyRegistry := injectNestStatesPlanned(config, plan, allStates, grammarPackage, tokenPatternMap, tokensInUse)
 
-	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, grammarPackage.NodesByGrammarLabel, allStates, entryGrammar, tokenPatternMap, nestBodyRegistry, tokensInUse)
+	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, grammarPackage.NodesByGrammarLabel, allStates, entryGrammar, tokenPatternMap, tokenPriorityMap, nestBodyRegistry, tokensInUse)
 	allStates = injectPlannedSequenceTriggers(config, plan, allStates, nestRegistry, tokenPatternMap)
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
 	allStates = injectMainStatePlanned(allStates, config.scopeExtension, config, plan, grammarPackage.Analysis, entryGrammar)
@@ -415,20 +415,38 @@ func PushDownAutomatonIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 func extractLexerTokens[TToken, TTokenRole comparable](
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
 	prototypeTokenRoles []TTokenRole,
-) ([]TToken, map[TToken]Pattern, map[TToken]bool) {
+) ([]TToken, map[TToken]Pattern, map[TToken]bool, map[TToken]int) {
 	var tokensInUse []TToken
 	tokenPatternMap := make(map[TToken]Pattern)
+	tokenPriorityMap := make(map[TToken]int)
 	prototypeTokens := make(map[TToken]bool)
 
-	for _, lexerRule := range lexingRuleSet.GetRules() {
+	type tokenWithIndex struct {
+		token TToken
+		idx   int
+	}
+	var withIndex []tokenWithIndex
+	for i, lexerRule := range lexingRuleSet.GetRules() {
 		tokensInUse = append(tokensInUse, lexerRule.Token)
 		tokenPatternMap[lexerRule.Token] = lexerRule.Pattern
-
+		tokenPriorityMap[lexerRule.Token] = lexerRule.Priority
 		if slices.Contains(prototypeTokenRoles, lexerRule.Role) {
 			prototypeTokens[lexerRule.Token] = true
 		}
+		withIndex = append(withIndex, tokenWithIndex{token: lexerRule.Token, idx: i})
 	}
-	return tokensInUse, tokenPatternMap, prototypeTokens
+	slices.SortFunc(withIndex, func(a, b tokenWithIndex) int {
+		pa, pb := tokenPriorityMap[a.token], tokenPriorityMap[b.token]
+		if pa != pb {
+			return pb - pa // higher priority first
+		}
+		return a.idx - b.idx // stable: preserve original order
+	})
+	tokensInUse = make([]TToken, 0, len(withIndex))
+	for _, w := range withIndex {
+		tokensInUse = append(tokensInUse, w.token)
+	}
+	return tokensInUse, tokenPatternMap, prototypeTokens, tokenPriorityMap
 }
 
 /*
@@ -461,6 +479,7 @@ func buildBaseStates[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	tokensInUse []TToken,
 	tokenPatternMap map[TToken]Pattern,
+	tokenPriorityMap map[TToken]int,
 	prototypeTokens map[TToken]bool,
 	rootTokens map[TToken]struct{},
 	delimitedMap map[TToken]DelimitedRuleRegex[TToken],
@@ -469,7 +488,7 @@ func buildBaseStates[TToken, TTokenRole comparable](
 	var prototypeIncludes []StateID
 
 	for _, token := range tokensInUse {
-		state, extraStates, isProto := buildSingleBaseState(config, token, tokenPatternMap, prototypeTokens, rootTokens, delimitedMap)
+		state, extraStates, isProto := buildSingleBaseState(config, token, tokenPatternMap, tokenPriorityMap, prototypeTokens, rootTokens, delimitedMap)
 		allStates = append(allStates, state)
 		allStates = append(allStates, extraStates...)
 
@@ -484,6 +503,7 @@ func buildSingleBaseState[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	token TToken,
 	tokenPatternMap map[TToken]Pattern,
+	tokenPriorityMap map[TToken]int,
 	prototypeTokens map[TToken]bool,
 	rootTokens map[TToken]struct{},
 	delimitedMap map[TToken]DelimitedRuleRegex[TToken],
@@ -491,6 +511,8 @@ func buildSingleBaseState[TToken, TTokenRole comparable](
 	label := sanitizeContextName(config.formatter(token))
 	id := StateID(produceStateID(label))
 	baseScope := config.scopeProvider(token)
+	lexerPriority := tokenPriorityMap[token] // 0 if missing
+	rulePriority := PriorityDefault - lexerPriority
 
 	var mainRule StateRule
 	var extraStates []State
@@ -498,17 +520,20 @@ func buildSingleBaseState[TToken, TTokenRole comparable](
 	if delimited, hasDelimited := delimitedMap[token]; hasDelimited {
 		ctx := buildTokenOverrideContext(id, label, tokenPatternMap[token], baseScope, config.scopeExtension)
 		mainRule, extraStates = TokenOverrideDelimitedRegion(ctx, delimited.OpenRegex, delimited.CloseRegex, "punctuation.definition.comment.begin", baseScope, "punctuation.definition.comment.end")
+		mainRule.Priority = rulePriority
 	} else if overrideFn, exists := config.overrides[token]; exists {
 		ctx := buildTokenOverrideContext(id, label, tokenPatternMap[token], baseScope, config.scopeExtension)
 		mainRule, extraStates = overrideFn(ctx)
+		mainRule.Priority = rulePriority
 	} else {
 		defaultRegex, _ := tokenPatternMap[token].ToRegEx()
 		mainRule = StateRule{
-			ID:     StateRuleID(id),
-			Label:  label,
-			Action: ACTION_MATCH,
-			Scope:  getScopeString([]string{baseScope}, config.scopeExtension),
-			RegEx:  defaultRegex,
+			ID:       StateRuleID(id),
+			Label:    label,
+			Action:   ACTION_MATCH,
+			Scope:    getScopeString([]string{baseScope}, config.scopeExtension),
+			RegEx:    defaultRegex,
+			Priority: rulePriority,
 		}
 	}
 
@@ -667,14 +692,15 @@ func mutateStateAction(allStates []State, targetStateID StateID, action RuleActi
 // GConcat nodes planned as constructs, and builds state chains from constructBuildEnv
 // and constructChainCtx. One env is shared for the run; one chain context per GConcat.
 
-// constructBuildEnv holds shared context for the construct-state pipeline (config, plan, analysis, token patterns).
+// constructBuildEnv holds shared context for the construct-state pipeline (config, plan, analysis, token patterns, token priorities).
 type constructBuildEnv[TToken, TTokenRole comparable] struct {
-	Config           *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
-	Plan             *IRPlan[TToken]
-	Analysis         *syntaxa.GrammarAnalysis[TToken]
-	TokenPatternMap  map[TToken]Pattern
-	NestBodyRegistry map[syntaxa.GrammarLabel]StateID
-	TokensInUse      []TToken
+	Config            *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
+	Plan              *IRPlan[TToken]
+	Analysis          *syntaxa.GrammarAnalysis[TToken]
+	TokenPatternMap   map[TToken]Pattern
+	TokenPriorityMap  map[TToken]int
+	NestBodyRegistry   map[syntaxa.GrammarLabel]StateID
+	TokensInUse       []TToken
 }
 
 // constructChainCtx holds context for building one construct state chain (one GConcat). Derived fields are set by buildConstructStateChain.
@@ -881,7 +907,7 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	if _, hasTokOverride := env.Config.overrides[child.Token]; hasTokOverride {
 		return buildLookaheadRules(chainCtx, index, action, nextID), includes
 	}
-	return generateRulesForNode(env.Config, child, env.TokenPatternMap, nextID, lbl, action), nil
+	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action), nil
 }
 
 func handleSegmentConstructStep[TToken, TTokenRole comparable](
@@ -985,6 +1011,7 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	allStates []State,
 	grammarNode *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
+	tokenPriorityMap map[TToken]int,
 	nestBodyRegistry map[syntaxa.GrammarLabel]StateID,
 	tokensInUse []TToken,
 ) []State {
@@ -1020,13 +1047,16 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 				continue
 			}
 
+			lexerPriority := tokenPriorityMap[n.Token]
+			rulePriority := PriorityDefault - lexerPriority
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
 			rules = append(rules, StateRule{
-				ID:     StateRuleID(produceStateID(fmt.Sprintf("node_override_%s_match_%v", baseLabel, n.Token))),
-				Label:  fmt.Sprintf("node_override_%s_match", baseLabel),
-				Action: ACTION_MATCH,
-				Scope:  getScopeString(nodeScopes, config.scopeExtension),
-				RegEx:  regex,
+				ID:       StateRuleID(produceStateID(fmt.Sprintf("node_override_%s_match_%v", baseLabel, n.Token))),
+				Label:    fmt.Sprintf("node_override_%s_match", baseLabel),
+				Action:   ACTION_MATCH,
+				Scope:    getScopeString(nodeScopes, config.scopeExtension),
+				RegEx:    regex,
+				Priority: rulePriority,
 			})
 		}
 		if len(rules) == 0 {
@@ -1044,6 +1074,7 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 		Plan:             plan,
 		Analysis:         analysis,
 		TokenPatternMap:  tokenPatternMap,
+		TokenPriorityMap: tokenPriorityMap,
 		NestBodyRegistry: nestBodyRegistry,
 		TokensInUse:      tokensInUse,
 	}
@@ -1403,6 +1434,7 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	node *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
+	tokenPriorityMap map[TToken]int,
 	nextID StateID,
 	stateLabel string,
 	action RuleAction,
@@ -1420,6 +1452,8 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 			}
 			scope := resolveScopeForTokenNode(config, n)
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
+			lexerPriority := tokenPriorityMap[n.Token]
+			rulePriority := PriorityDefault - lexerPriority
 			rules = append(rules, StateRule{
 				ID:           StateRuleID(produceStateID(fmt.Sprintf("%s_match_%s_%v", stateLabel, n.GrammarLabel, n.Token))),
 				Label:        fmt.Sprintf("%s_match_%s", stateLabel, n.GrammarLabel),
@@ -1427,6 +1461,7 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 				Scope:        getScopeString(scope, config.scopeExtension),
 				Action:       action,
 				ActionTarget: nextID,
+				Priority:     rulePriority,
 			})
 			return true, false
 		case EditorIRRoleSegment:
