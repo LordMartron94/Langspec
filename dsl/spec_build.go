@@ -7,7 +7,7 @@ import (
 	"syntaxa/rule"
 )
 
-// ----------------------------------------------------------- LEXER / PARSER ENUMS (single place for definition)
+// ----------------------------------------------------------- LEXER / PARSER ENUMS
 
 //go:generate stringer -type LangSpecLexerState
 type LangSpecLexerState uint8
@@ -133,18 +133,60 @@ const (
 	NodePatternStringLiteral
 )
 
-// ----------------------------------------------------------- SINGLE SOURCE OF TRUTH
+// ----------------------------------------------------------- LEXER DEFINITION
+
+type staticToken struct {
+	Token    LangSpecLexerTokenType
+	Scope    string
+	Match    string
+	Priority int
+}
 
 /*
 buildLanguageSpec is the only place where language constructs are declared.
-Returns a LanguageSpec with tokens (each carrying its pattern directly) and header steps.
-No init() or package-level registries; all definition data lives in the returned value.
+Returns a LanguageSpec with tokens and header steps.
 */
 func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTemplates[rune]) LanguageSpec {
 	spec := LanguageSpec{}
 
-	spec.Tokens = []TokenDefinition{
-		DefineToken(TokEOF).Scope("meta.eof").Build(),
+	// 1. Table-Driven Static Tokens
+	statics := []staticToken{
+		{TokDashes, "punctuation.definition.separator", "---", 0},
+		{TokMetaSection, "punctuation.section.meta", "%%", 0},
+		{TokPipe, "punctuation.pipe", "|", 0},
+		{TokDot, "punctuation.separator.dot", ".", 0},
+		{TokSemicolon, "punctuation.terminator.statement", ";", 0},
+		{TokBraceOpen, "punctuation.section.braces.begin", "{", 0},
+		{TokBraceClose, "punctuation.section.braces.end", "}", 0},
+		{TokAssignment, "keyword.operator.assignment", ":", 0},
+		{TokChainSeparator, "punctuation.separator.chain", "->", 0},
+		{TokEqualsOperator, "keyword.operator.assignment", "=", 0},
+		{TokVarRef, "keyword.operator.variable", "$", 0},
+		{TokConcat, "keyword.operator.concat", "&", 0},
+		{TokRange, "keyword.operator.range", "..", 0},
+		{TokStar, "keyword.operator.star", "*", 0},
+		{TokKWLSpec, "keyword.declaration.lspec", "lspec", 2},
+		{TokKWPragma, "keyword.pragma.lspec", "PRAGMA", 2},
+		{TokKWTool, "keyword.tool.lspec", "tool", 2},
+		{TokKWLex, "keyword.declaration.lex", "LEX", 2},
+		{TokKWPattern, "keyword.declaration.pattern", "PATTERN", 2},
+		{TokKWTrue, "constant.language.boolean", "true", 2},
+		{TokKWFalse, "constant.language.boolean", "false", 2},
+	}
+
+	for _, st := range statics {
+		spec.Tokens = append(spec.Tokens, DefineToken(st.Token).
+			Scope(st.Scope).
+			Priority(st.Priority).
+			Pattern(pattern.LiteralString(f, st.Match)).
+			Build())
+	}
+
+	// 2. Complex & Dynamic Tokens
+	spec.Tokens = append(spec.Tokens,
+		DefineToken(TokEOF).
+			Scope("meta.eof").
+			Build(),
 
 		DefineToken(TokWhitespace).
 			Role(LANG_SPEC_WHITESPACE_ROLE).
@@ -165,64 +207,9 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Pattern(buildBlockCommentPattern(f)).
 			Build(),
 
-		DefineToken(TokDashes).
-			Scope("punctuation.definition.separator").
-			Pattern(pattern.LiteralString(f, "---")).
-			Build(),
-
 		DefineToken(TokInteger).
 			Scope("constant.numeric").
 			PatternFromRegex("[0-9]+", f).
-			Build(),
-
-		DefineToken(TokMetaSection).
-			Scope("punctuation.section.meta").
-			Pattern(pattern.LiteralString(f, "%%")).
-			Build(),
-
-		DefineToken(TokPipe).
-			Scope("punctuation.pipe").
-			Pattern(f.Literal('|')).
-			Build(),
-
-		DefineToken(TokDot).
-			Scope("punctuation.separator.comma").
-			Pattern(f.Literal(',')).
-			Build(),
-
-		DefineToken(TokDot).
-			Scope("punctuation.separator.dot").
-			Pattern(f.Literal('.')).
-			Build(),
-
-		DefineToken(TokSemicolon).
-			Scope("punctuation.terminator.statement").
-			Pattern(f.Literal(';')).
-			Build(),
-
-		DefineToken(TokBraceOpen).
-			Scope("punctuation.section.braces.begin").
-			Pattern(f.Literal('{')).
-			Build(),
-
-		DefineToken(TokBraceClose).
-			Scope("punctuation.section.braces.end").
-			Pattern(f.Literal('}')).
-			Build(),
-
-		DefineToken(TokAssignment).
-			Scope("keyword.operator.assignment").
-			Pattern(f.Literal(':')).
-			Build(),
-
-		DefineToken(TokChainSeparator).
-			Scope("punctuation.separator.chain").
-			Pattern(pattern.LiteralString(f, "->")).
-			Build(),
-
-		DefineToken(TokEqualsOperator).
-			Scope("keyword.operator.assignment").
-			Pattern(pattern.LiteralString(f, "=")).
 			Build(),
 
 		DefineToken(TokStringLiteral).
@@ -243,68 +230,6 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			PatternFromRegex(`v[0-9]+\.[0-9]+\.[0-9]+`, f).
 			Build(),
 
-		DefineToken(TokKWLSpec).
-			Scope("keyword.declaration.lspec").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "lspec")).
-			Build(),
-
-		DefineToken(TokKWPragma).
-			Scope("keyword.pragma.lspec").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "PRAGMA")).
-			Build(),
-
-		DefineToken(TokKWTool).
-			Scope("keyword.tool.lspec").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "tool")).
-			Build(),
-
-		DefineToken(TokKWLex).
-			Scope("keyword.declaration.lex").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "LEX")).
-			Build(),
-
-		DefineToken(TokKWPattern).
-			Scope("keyword.declaration.pattern").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "PATTERN")).
-			Build(),
-
-		DefineToken(TokVarRef).
-			Scope("keyword.operator.variable").
-			Pattern(f.Literal('$')).
-			Build(),
-
-		DefineToken(TokConcat).
-			Scope("keyword.operator.concat").
-			Pattern(f.Literal('&')).
-			Build(),
-
-		DefineToken(TokRange).
-			Scope("keyword.operator.range").
-			Pattern(pattern.LiteralString(f, "..")).
-			Build(),
-
-		DefineToken(TokStar).
-			Scope("keyword.operator.star").
-			Pattern(f.Literal('*')).
-			Build(),
-
-		DefineToken(TokKWTrue).
-			Scope("constant.language.boolean").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "true")).
-			Build(),
-
-		DefineToken(TokKWFalse).
-			Scope("constant.language.boolean").
-			Priority(2).
-			Pattern(pattern.LiteralString(f, "false")).
-			Build(),
-
 		DefineToken(TokCharLiteral).
 			Scope("string.quoted.single").
 			HighPriority().
@@ -316,14 +241,13 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			HighPriority().
 			PatternFromRegex(`[a-zA-Z_][a-zA-Z0-9_\-]*`, f).
 			Build(),
-	}
+	)
 
 	return spec
 }
 
 /*
 dslSpecFactoryAndTemplates creates the factory and templates used by BuildLanguageSpec.
-Exported so the compiler or spec_builder can create them without depending on package-level state.
 */
 func dslSpecFactoryAndTemplates() (*pattern.RegulaASTFactory[rune], *pattern.RegulaTemplates[rune]) {
 	f := pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
@@ -331,61 +255,70 @@ func dslSpecFactoryAndTemplates() (*pattern.RegulaASTFactory[rune], *pattern.Reg
 	return f, t
 }
 
+// ----------------------------------------------------------- PARSER DEFINITION
+
+type dslGrammarBuilder struct {
+	g *GrammarDefiner
+}
+
 /*
-buildProgramRule builds the full program rule (header + optional LEX body + EOF) using the
-GrammarDefiner. All grammar construction for the DSL lives here.
+buildProgramRule builds the full program rule (header + optional LEX body + EOF).
 */
 func buildProgramRule(g *GrammarDefiner) Rule {
-	return g.RootByNode(NodeProgram, false,
-		g.rb.Rule.Required(buildHeaderRule(g), "must have header"),
-		g.rb.Rule.OptionalPrefix(buildPragmaSectionRule(g), TokKWPragma),
-		g.rb.Rule.OptionalPrefix(buildPatternSectionRule(g), TokKWPattern),
-		g.rb.Rule.Required(buildLexSectionRule(g), "must have lex ruleset"),
-		g.expectVirtual(VirtualEOF, TokEOF),
+	builder := &dslGrammarBuilder{g: g}
+	return builder.program()
+}
+
+func (b *dslGrammarBuilder) program() Rule {
+	return b.g.RootByNode(NodeProgram, false,
+		b.g.rb.Rule.Required(b.header(), "must have header"),
+		b.g.rb.Rule.OptionalPrefix(b.pragmaSection(), TokKWPragma),
+		b.g.rb.Rule.OptionalPrefix(b.patternSection(), TokKWPattern),
+		b.g.rb.Rule.Required(b.lexSection(), "must have lex ruleset"),
+		b.g.expectVirtual(VirtualEOF, TokEOF),
 	)
 }
 
 // ----------------------------------------------------------- HEADER
 
-func buildHeaderRule(g *GrammarDefiner) Rule {
-	headerContent := g.sequence(NodeHeader, "CONTENT").
+func (b *dslGrammarBuilder) header() Rule {
+	headerContent := b.g.sequence(NodeHeader, "CONTENT").
 		expect(NodeDSLName, "", TokStringLiteral).
 		expect(NodeVersion, "DSL", TokVersion).
 		expectVirtual(VirtualHeaderSeparator, TokPipe).
 		expect(NodeLSPECName, "", TokKWLSpec).
 		expect(NodeVersion, "LANGSPEC", TokVersion).
 		build()
-	return g.TransparentNestByNode(NodeHeader, "", TokDashes, TokDashes, headerContent)
+	return b.g.TransparentNestByNode(NodeHeader, "", TokDashes, TokDashes, headerContent)
 }
 
 // ----------------------------------------------------------- PRAGMA SECTION
 
-func buildPragmaSectionRule(g *GrammarDefiner) Rule {
-	blockRule := g.block(
+func (b *dslGrammarBuilder) pragmaSection() Rule {
+	blockRule := b.g.block(
 		NodePragmaSection,
 		NodePragmaKeyword,
 		TokKWPragma,
-		buildPragmaBlockListRule(g),
+		b.pragmaBlockList(),
 	)
-	return g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
 }
 
-func buildPragmaBlockListRule(g *GrammarDefiner) Rule {
-	blockRule := buildPragmaBlockRule(g)
-	return g.TransparentZeroOrMoreByNode(NodePragmaBlock, "LIST", blockRule)
+func (b *dslGrammarBuilder) pragmaBlockList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodePragmaBlock, "LIST", b.pragmaBlock())
 }
 
-func buildPragmaBlockRule(g *GrammarDefiner) Rule {
-	blockRule := g.blockByRule(
+func (b *dslGrammarBuilder) pragmaBlock() Rule {
+	blockRule := b.g.blockByRule(
 		NodePragmaBlock,
-		buildBlockKeyRule(g),
-		buildPragmaConfigurationListRule(g),
+		b.blockKey(),
+		b.pragmaConfigurationList(),
 	)
-	return g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
 }
 
-func buildBlockKeyRule(g *GrammarDefiner) Rule {
-	return g.rb.Scope(LangSpecGrammarIDFromNode(NodePragmaBlockKey)).Path(
+func (b *dslGrammarBuilder) blockKey() Rule {
+	return b.g.rb.Scope(LangSpecGrammarIDFromNode(NodePragmaBlockKey)).Path(
 		NodePragmaBlockKey,
 		NodePragmaBlockKeyPrefix,
 		TokKWTool,
@@ -396,76 +329,75 @@ func buildBlockKeyRule(g *GrammarDefiner) Rule {
 	)
 }
 
-func buildPragmaConfigurationListRule(g *GrammarDefiner) Rule {
-	return g.TransparentZeroOrMoreByNode(NodePragmaConfiguration, "LIST", buildPragmaConfigurationRule(g))
+func (b *dslGrammarBuilder) pragmaConfigurationList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodePragmaConfiguration, "LIST", b.pragmaConfiguration())
 }
 
-func buildPragmaConfigurationRule(g *GrammarDefiner) Rule {
-	return g.rb.Rule.RecoverSync(g.sequence(NodePragmaConfiguration, "").
+func (b *dslGrammarBuilder) pragmaConfiguration() Rule {
+	return b.g.rb.Rule.RecoverSync(b.g.sequence(NodePragmaConfiguration, "").
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectVirtualInRule(TokEqualsOperator).
-		rule(g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral, TokKWTrue, TokKWFalse)).
+		rule(b.g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral, TokKWTrue, TokKWFalse)).
 		expectVirtualInRule(TokSemicolon).
 		build(), TokSemicolon)
 }
 
 // ----------------------------------------------------------- PATTERN SECTION
 
-func buildPatternSectionRule(g *GrammarDefiner) Rule {
-	blockRule := g.block(
+func (b *dslGrammarBuilder) patternSection() Rule {
+	blockRule := b.g.block(
 		NodePatternSection,
 		NodePatternKeyword,
 		TokKWPattern,
-		buildPatternDefinitionList(g),
+		b.patternDefinitionList(),
 	)
-	return g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
 }
 
-func buildPatternDefinitionList(g *GrammarDefiner) Rule {
-	defRule := buildPatternDefinition(g)
-	return g.TransparentZeroOrMoreByNode(NodePatternDefinition, "LIST", defRule)
+func (b *dslGrammarBuilder) patternDefinitionList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodePatternDefinition, "LIST", b.patternDefinition())
 }
 
-func buildPatternDefinition(g *GrammarDefiner) Rule {
-	return g.rb.Rule.RecoverSync(g.sequence(NodePatternDefinition, "").
+func (b *dslGrammarBuilder) patternDefinition() Rule {
+	return b.g.rb.Rule.RecoverSync(b.g.sequence(NodePatternDefinition, "").
 		expectToken(NodePatternDefName, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
-		requiredRule(buildPatternExprRule(g), "pattern definition must have an expression").
+		requiredRule(b.patternExpr(), "pattern definition must have an expression").
 		expectVirtualInRule(TokSemicolon).
 		build(), TokSemicolon)
 }
 
-func buildPatternExprRule(g *GrammarDefiner) Rule {
-	segmentPrimary := g.OptionalSuffixByNode(NodePatternStar, buildPatternSegmentRule(g), TokStar)
+func (b *dslGrammarBuilder) patternExpr() Rule {
+	segmentPrimary := b.g.OptionalSuffixByNode(NodePatternStar, b.patternSegment(), TokStar)
 	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
 		Primary:   segmentPrimary,
 		PrefixOps: nil,
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-			g.InfixOp(TokConcat, 20, 19, NodePatternConcat),
-			g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
+			b.g.InfixOp(TokConcat, 20, 19, NodePatternConcat),
+			b.g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
 		},
 		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
 	}
-	return g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
+	return b.g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
 }
 
-func buildPatternSegmentRule(g *GrammarDefiner) Rule {
-	rangeRule := g.rb.Rule.Predict(
-		buildPatternRangeRule(g),
+func (b *dslGrammarBuilder) patternSegment() Rule {
+	rangeRule := b.g.rb.Rule.Predict(
+		b.patternRange(),
 		func(ctx *syntaxa.SelectRuleContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]) bool {
 			return ctx.Peek(1).Token == TokRange
 		},
 	)
-	return g.ChoiceByNode(NodeVarRef,
-		buildVarRefRule(g),
+	return b.g.ChoiceByNode(NodeVarRef,
+		b.varRef(),
 		rangeRule,
-		buildCharLiteralRule(g),
-		g.expectToken(NodePatternStringLiteral, TokStringLiteral),
+		b.charLiteral(),
+		b.g.expectToken(NodePatternStringLiteral, TokStringLiteral),
 	)
 }
 
-func buildPatternRangeRule(g *GrammarDefiner) Rule {
-	return g.sequence(NodePatternRange, "").
+func (b *dslGrammarBuilder) patternRange() Rule {
+	return b.g.sequence(NodePatternRange, "").
 		expectToken(NodeCharLiteral, TokCharLiteral).
 		expectVirtualInRule(TokRange).
 		expectToken(NodeCharLiteral, TokCharLiteral).
@@ -474,48 +406,45 @@ func buildPatternRangeRule(g *GrammarDefiner) Rule {
 
 // ----------------------------------------------------------- LEX SECTION
 
-func buildLexSectionRule(g *GrammarDefiner) Rule {
-	return g.block(
+func (b *dslGrammarBuilder) lexSection() Rule {
+	return b.g.block(
 		NodeLexSection,
 		NodeLexKeyword,
 		TokKWLex,
-		buildLexRuleList(g),
+		b.lexRuleList(),
 	)
 }
 
-func buildLexRuleList(g *GrammarDefiner) Rule {
-	lexRule := buildLexRule(g)
-	lexRuleWithRecovery := g.rb.Rule.RecoverSync(lexRule, TokSemicolon)
-	return g.TransparentZeroOrMoreByNode(NodeLexRule, "LIST", lexRuleWithRecovery)
+func (b *dslGrammarBuilder) lexRuleList() Rule {
+	lexRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.lexRule(), TokSemicolon)
+	return b.g.TransparentZeroOrMoreByNode(NodeLexRule, "LIST", lexRuleWithRecovery)
 }
 
-func buildLexRule(g *GrammarDefiner) Rule {
-	variableRefRule := buildVarRefRule(g)
-
-	return g.sequence(NodeLexRule, "").
+func (b *dslGrammarBuilder) lexRule() Rule {
+	return b.g.sequence(NodeLexRule, "").
 		optionalToken(NodeLexRulePriority, TokInteger).
 		expectToken(NodeLexRuleTokenName, TokStringLiteral).
 		expectVirtualInRule(TokChainSeparator).
 		expectToken(NodeLexRuleRole, TokStringLiteral).
 		expectVirtualInRule(TokAssignment).
-		rule(g.ChoiceByNode(NodeLexRulePattern,
-			variableRefRule,
-			g.expectToken(NodeLexRulePattern, TokRegexLiteral),
+		rule(b.g.ChoiceByNode(NodeLexRulePattern,
+			b.varRef(),
+			b.g.expectToken(NodeLexRulePattern, TokRegexLiteral),
 		)).
-		optionalRule(buildMetaSectionRule(g)).
+		optionalRule(b.metaSection()).
 		expectVirtualInRule(TokSemicolon).
 		build()
 }
 
 // ----------------------------------------------------------- LEX: META SECTION
 
-func buildMetaSectionRule(g *GrammarDefiner) Rule {
-	return g.NestByNode(NodeMetaSection, TokMetaSection, TokMetaSection, buildMetaSectionBodyRule(g))
+func (b *dslGrammarBuilder) metaSection() Rule {
+	return b.g.NestByNode(NodeMetaSection, TokMetaSection, TokMetaSection, b.metaSectionBody())
 }
 
-func buildMetaSectionBodyRule(g *GrammarDefiner) Rule {
-	return g.TransparentZeroOrMoreByNode(NodeMetaKeyValuePair, "",
-		g.sequence(NodeMetaKeyValuePair, "SEQUENCE").
+func (b *dslGrammarBuilder) metaSectionBody() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodeMetaKeyValuePair, "",
+		b.g.sequence(NodeMetaKeyValuePair, "SEQUENCE").
 			expectToken(NodeMetaKey, TokIdentifier).
 			expectVirtual(VirtualMetaAssignment, TokEqualsOperator).
 			expectToken(NodeMetaValue, TokStringLiteral).
@@ -524,15 +453,15 @@ func buildMetaSectionBodyRule(g *GrammarDefiner) Rule {
 
 // ----------------------------------------------------------- GENERAL
 
-func buildVarRefRule(g *GrammarDefiner) Rule {
-	return g.expectPairWithChildNodes(NodeVarRef, NodeVarRefToken, NodeVarRefTarget, TokVarRef, TokIdentifier)
+func (b *dslGrammarBuilder) varRef() Rule {
+	return b.g.expectPairWithChildNodes(NodeVarRef, NodeVarRefToken, NodeVarRefTarget, TokVarRef, TokIdentifier)
 }
 
-func buildCharLiteralRule(g *GrammarDefiner) Rule {
-	return g.expectToken(NodeCharLiteral, TokCharLiteral)
+func (b *dslGrammarBuilder) charLiteral() Rule {
+	return b.g.expectToken(NodeCharLiteral, TokCharLiteral)
 }
 
-// ----------------------------------------------------------- PATTERN HELPERS (used only by BuildLanguageSpec)
+// ----------------------------------------------------------- PATTERN HELPERS
 
 func buildBlockCommentPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
 	notStar := f.NegatedClass(f.Range('*', '*'))
