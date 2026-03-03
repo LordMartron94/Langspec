@@ -582,7 +582,7 @@ func buildExpectState[TToken, TTokenRole comparable](
 	// Inject the remaining base tokens
 	if len(expectAnalysis.ValidTokens) > 0 && len(tokensInUse) > 0 {
 		includes = append(includes, buildIncludesWhitelist(expectAnalysis.ValidTokens, nest.Open, tokensInUse, func(tok TToken) StateID {
-			return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
+			return tokenToStateID(config, tok)
 		})...)
 	}
 
@@ -729,18 +729,26 @@ func buildConstructStateChain[TToken, TTokenRole comparable](
 	return states
 }
 
-// dedupeSyncTokens returns a slice with duplicate tokens removed (first occurrence kept).
-func dedupeSyncTokens[TToken comparable](tokens []TToken) []TToken {
-	seen := make(map[TToken]struct{}, len(tokens))
-	out := make([]TToken, 0, len(tokens))
-	for _, t := range tokens {
-		if _, ok := seen[t]; ok {
+// dedupeSlice returns a slice with duplicate elements removed; first occurrence kept, order preserved.
+func dedupeSlice[T comparable](s []T) []T {
+	if len(s) <= 1 {
+		return s
+	}
+	seen := make(map[T]struct{}, len(s))
+	out := make([]T, 0, len(s))
+	for _, v := range s {
+		if _, ok := seen[v]; ok {
 			continue
 		}
-		seen[t] = struct{}{}
-		out = append(out, t)
+		seen[v] = struct{}{}
+		out = append(out, v)
 	}
 	return out
+}
+
+// dedupeSyncTokens returns a slice with duplicate tokens removed (first occurrence kept).
+func dedupeSyncTokens[TToken comparable](tokens []TToken) []TToken {
+	return dedupeSlice(tokens)
 }
 
 func buildRecoveryState[TToken comparable](
@@ -964,7 +972,7 @@ func buildIncludesForNode[TToken, TTokenRole comparable](
 	includes = append(includes, triggerIDs...)
 	includes = append(includes, overrideIDs...)
 	includes = append(includes, buildIncludesWhitelist(validTokens, *new(TToken), tokensInUse, func(tok TToken) StateID {
-		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
+		return tokenToStateID(config, tok)
 	})...)
 	return dedupeStateIDs(includes)
 }
@@ -1287,19 +1295,7 @@ func buildIncludesWhitelist[TToken comparable](
 
 // dedupeStateIDs returns a slice with duplicate StateIDs removed; first occurrence is kept, order preserved.
 func dedupeStateIDs(includes []StateID) []StateID {
-	if len(includes) <= 1 {
-		return includes
-	}
-	seen := make(map[StateID]struct{}, len(includes))
-	out := make([]StateID, 0, len(includes))
-	for _, id := range includes {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out
+	return dedupeSlice(includes)
 }
 
 /*
@@ -1347,6 +1343,10 @@ func sanitizeContextName(name string) string {
 	return sb.String()
 }
 
+func tokenToStateID[TToken, TTokenRole comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole], tok TToken) StateID {
+	return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
+}
+
 // ------------------------------------------------------------------ SEQUENCE DFA COMPILATION
 
 func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole], node *syntaxa.Grammar[TToken]) bool {
@@ -1384,6 +1384,21 @@ func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIR
 	return false
 }
 
+func resolveScopeForTokenNode[TToken, TTokenRole comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	node *syntaxa.Grammar[TToken],
+) []string {
+	scope := []string{config.scopeProvider(node.Token)}
+	if oc, ok := config.nodeOverrides[node.GrammarLabel]; ok {
+		if specificScopes, hasSpecific := oc.TokenScopes[node.Token]; hasSpecific {
+			scope = specificScopes
+		} else if len(oc.Scopes) > 0 {
+			scope = oc.Scopes
+		}
+	}
+	return scope
+}
+
 func generateRulesForNode[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	node *syntaxa.Grammar[TToken],
@@ -1403,19 +1418,7 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 			if _, hasTokOverride := config.overrides[n.Token]; hasTokOverride {
 				return true, false
 			}
-
-			// 1. Default to the provider
-			scope := []string{config.scopeProvider(n.Token)}
-
-			// 2. Check for overrides
-			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok {
-				if specificScopes, hasSpecific := oc.TokenScopes[n.Token]; hasSpecific {
-					scope = specificScopes
-				} else if len(oc.Scopes) > 0 {
-					scope = oc.Scopes
-				}
-			}
-
+			scope := resolveScopeForTokenNode(config, n)
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
 			rules = append(rules, StateRule{
 				ID:           StateRuleID(produceStateID(fmt.Sprintf("%s_match_%s_%v", stateLabel, n.GrammarLabel, n.Token))),
@@ -1527,7 +1530,7 @@ func buildBodyStatePlanned[TToken, TTokenRole comparable](
 	includes = append(includes, overrideIDs...)
 
 	baseIncludes := buildIncludesWhitelist(validTokens, nest.Close, tokensInUse, func(tok TToken) StateID {
-		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
+		return tokenToStateID(config, tok)
 	})
 	includes = append(includes, baseIncludes...)
 
