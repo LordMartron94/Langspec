@@ -118,7 +118,7 @@ func TokenOverrideDelimitedRegion(
 	openRegex, closeRegex string,
 	scopeOpen, scopeBody, scopeClose string,
 ) (StateRule, []State) {
-	bodyStateID := ctx.DeriveStateID("body")
+	bodyStateID := ctx.DeriveStateID("inner")
 
 	mainRule := StateRule{
 		ID:           StateRuleID(ctx.BaseID),
@@ -131,7 +131,7 @@ func TokenOverrideDelimitedRegion(
 
 	bodyState := State{
 		ID:        bodyStateID,
-		Label:     ctx.Label + "_body",
+		Label:     ctx.Label + "_inner",
 		MetaScope: ctx.ApplyScope(scopeBody),
 		Rules: []StateRule{
 			{

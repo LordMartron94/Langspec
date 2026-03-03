@@ -281,6 +281,46 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeToken
 	c.prototypeTokenRoles = append(c.prototypeTokenRoles, tokenRoles...)
 }
 
+// ------------------------------------------------------------------ GRAMMAR NODE IR ROLE
+
+/*
+EditorIRRole classifies a grammar node for IR generation: Token (terminal, emits match rule),
+Nest (bracketed region), Segment (composite, includes/lookahead only), or Epsilon (empty).
+Used so IR logic dispatches on role instead of GrammarKind; new kinds plug in via editorIRRole.
+*/
+type EditorIRRole uint8
+
+const (
+	EditorIRRoleToken   EditorIRRole = iota // Terminal; emit token match rule.
+	EditorIRRoleNest                       // Bracketed open/body/close; nest states.
+	EditorIRRoleSegment                    // Composite; no rule for node, only includes/lookahead.
+	EditorIRRoleEpsilon                     // Empty production; skip in IR.
+)
+
+/*
+editorIRRole returns the IR role for a grammar node. Handles every known GrammarKind explicitly;
+unknown kinds (e.g. a new kind added in syntaxa before editor is updated) return EditorIRRoleSegment
+so analysis-driven includes and lookahead still apply.
+*/
+func editorIRRole[TToken comparable](node *syntaxa.Grammar[TToken]) EditorIRRole {
+	if node == nil {
+		return EditorIRRoleEpsilon
+	}
+	switch node.Kind {
+	case syntaxa.GToken:
+		return EditorIRRoleToken
+	case syntaxa.GNest:
+		return EditorIRRoleNest
+	case syntaxa.GConcat, syntaxa.GChoice, syntaxa.GRepeat, syntaxa.GOptional:
+		return EditorIRRoleSegment
+	case syntaxa.GEpsilon:
+		return EditorIRRoleEpsilon
+	default:
+		// Unknown GrammarKind: treat as segment so First(node) is still used for includes.
+		return EditorIRRoleSegment
+	}
+}
+
 // ------------------------------------------------------------------ IR ORCHESTRATOR
 
 /*
@@ -305,18 +345,20 @@ func PushDownAutomatonIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 ) *PushDownAutomatonIR {
 	entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
 
-	plan := BuildIRPlan(config, entryGrammar)
+	plan := BuildIRPlan(config, grammarPackage.Analysis, entryGrammar)
 	tokensInUse, tokenPatternMap, prototypeTokens := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
 	delimitedMap := extractDelimitedRules(lexingRuleSet)
 
-	rootTokens, _, _ := extractIncludes(config, plan, entryGrammar, true)
+	rootTokens, _, _ := extractIncludes(config, plan, grammarPackage.Analysis, entryGrammar, true)
 	allStates, prototypeIncludes := buildBaseStates(config, tokensInUse, tokenPatternMap, prototypeTokens, rootTokens, delimitedMap)
 
-	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, grammarPackage.NodesByGrammarLabel, allStates, entryGrammar, tokenPatternMap)
-	allStates, nestRegistry := injectNestStatesPlanned(config, plan, allStates, grammarPackage, tokenPatternMap)
+	var nestBodyRegistry map[syntaxa.GrammarLabel]StateID
+	allStates, nestRegistry, nestBodyRegistry := injectNestStatesPlanned(config, plan, allStates, grammarPackage, tokenPatternMap, tokensInUse)
+
+	allStates = injectPlannedNodeStates(config, plan, grammarPackage.Analysis, grammarPackage.NodesByGrammarLabel, allStates, entryGrammar, tokenPatternMap, nestBodyRegistry, tokensInUse)
 	allStates = injectPlannedSequenceTriggers(config, plan, allStates, nestRegistry, tokenPatternMap)
 	allStates = injectPrototypeState(allStates, prototypeIncludes)
-	allStates = injectMainStatePlanned(allStates, config.scopeExtension, config, plan, entryGrammar)
+	allStates = injectMainStatePlanned(allStates, config.scopeExtension, config, plan, grammarPackage.Analysis, entryGrammar)
 
 	optimizedStates := optimizeAutomaton(allStates)
 
@@ -485,13 +527,23 @@ func buildExpectState[TToken, TTokenRole comparable](
 	tokenPatternMap map[TToken]Pattern,
 	expectStateID StateID,
 	bodyStateID StateID,
+	betweenTokens map[TToken]struct{},
+	tokensInUse []TToken,
 ) State {
 	openRegex, _ := tokenPatternMap[nest.Open].ToRegEx()
+
+	var includes []StateID
+	if len(betweenTokens) > 0 && len(tokensInUse) > 0 {
+		includes = buildIncludesWhitelist(betweenTokens, nest.Open, tokensInUse, func(tok TToken) StateID {
+			return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
+		})
+	}
 
 	return State{
 		ID:            expectStateID,
 		Label:         nestLabel + "_expect",
 		IsRootContext: false,
+		Includes:      includes,
 		Rules: []StateRule{
 			{
 				ID:           StateRuleID(produceStateID(nestLabel + "_open")),
@@ -503,6 +555,56 @@ func buildExpectState[TToken, TTokenRole comparable](
 			InvalidFallbackRule(StateRuleID(produceStateID(nestLabel+"_expect_invalid")), config.scopeExtension),
 		},
 	}
+}
+
+// mergeFirstOfSubtreeInto merges GrammarAnalysis.First(node) for every node in the subtree of g into out.
+func mergeFirstOfSubtreeInto[TToken comparable](analysis *syntaxa.GrammarAnalysis[TToken], g *syntaxa.Grammar[TToken], out map[TToken]struct{}) {
+	if analysis == nil || g == nil {
+		return
+	}
+	_ = g.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+		if n != nil && n.NodePath != nil {
+			first := syntaxa.GrammarAnalysisFirst(analysis, n)
+			for tok := range first {
+				out[tok] = struct{}{}
+			}
+		}
+		return false, false
+	})
+}
+
+// collectTokensBetweenTriggerAndNest returns tokens that can appear between a sequence trigger and the nest open.
+// When a concat has (prev, nest) and prev is not a single GToken, those tokens are all First(n) for every n in the
+// subtree of prev from child index 1 onward (so we include e.g. TokDot and TokIdentifier in "tool" . id).
+func collectTokensBetweenTriggerAndNest[TToken comparable](
+	analysis *syntaxa.GrammarAnalysis[TToken],
+	root *syntaxa.Grammar[TToken],
+	nestID syntaxa.GrammarLabel,
+) map[TToken]struct{} {
+	out := make(map[TToken]struct{})
+	if analysis == nil || root == nil {
+		return out
+	}
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+		if n.Kind != syntaxa.GConcat || len(n.Children) < 2 {
+			return false, false
+		}
+		for i := 0; i < len(n.Children)-1; i++ {
+			prev := n.Children[i]
+			next := n.Children[i+1]
+			if prev == nil || next == nil || next.Kind != syntaxa.GNest || next.GrammarLabel != nestID {
+				continue
+			}
+			if prev.Kind == syntaxa.GToken {
+				continue
+			}
+			for j := 1; j < len(prev.Children); j++ {
+				mergeFirstOfSubtreeInto(analysis, prev.Children[j], out)
+			}
+		}
+		return false, false
+	})
+	return out
 }
 
 func mutateStateAction(allStates []State, targetStateID StateID, action RuleAction, actionTarget StateID) {
@@ -523,10 +625,12 @@ func mutateStateAction(allStates []State, targetStateID StateID, action RuleActi
 
 // constructBuildEnv holds shared context for the construct-state pipeline (config, plan, analysis, token patterns).
 type constructBuildEnv[TToken, TTokenRole comparable] struct {
-	Config          *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
-	Plan            *IRPlan[TToken]
-	Analysis        *syntaxa.GrammarAnalysis[TToken]
-	TokenPatternMap map[TToken]Pattern
+	Config           *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
+	Plan             *IRPlan[TToken]
+	Analysis         *syntaxa.GrammarAnalysis[TToken]
+	TokenPatternMap  map[TToken]Pattern
+	NestBodyRegistry map[syntaxa.GrammarLabel]StateID
+	TokensInUse      []TToken
 }
 
 // constructChainCtx holds context for building one construct state chain (one GConcat). Derived fields are set by buildConstructStateChain.
@@ -642,15 +746,24 @@ func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainC
 	stepCount := chainCtx.StepCount
 	lbl := stepLabel(baseLabel, index, stepCount)
 	id := stepID(baseLabel, chainCtx.ConcatNode.GrammarLabel, index, stepCount)
-	isToken := syntaxa.GrammarIsTokenNode(child)
+	role := editorIRRole(child)
 
 	config := chainCtx.Env.Config
 	var rules []StateRule
-	includes := buildIncludesForNode(config, child)
+	var includes []StateID
 
-	if isToken {
+	switch role {
+	case EditorIRRoleNest:
+		rules, _ = handleNestConstructStep(chainCtx, child, index, lbl, nil)
+		includes = nil
+	case EditorIRRoleToken:
+		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
 		rules, includes = handleTokenConstructStep(chainCtx, child, index, lbl, includes)
-	} else {
+	case EditorIRRoleSegment, EditorIRRoleEpsilon:
+		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
+		rules, includes = handleSegmentConstructStep(chainCtx, index, lbl, includes)
+	default:
+		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
 		rules, includes = handleSegmentConstructStep(chainCtx, index, lbl, includes)
 	}
 
@@ -668,6 +781,39 @@ func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainC
 		st.MetaScope = getScopeString([]string{chainCtx.MetaScope}, config.scopeExtension)
 	}
 	return st
+}
+
+func handleNestConstructStep[TToken, TTokenRole comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	child *syntaxa.Grammar[TToken],
+	index int,
+	lbl string,
+	includes []StateID,
+) ([]StateRule, []StateID) {
+	targetID := chainCtx.Env.NestBodyRegistry[child.GrammarLabel]
+	regex, _ := chainCtx.Env.TokenPatternMap[*child.OpenToken].ToRegEx()
+
+	pushRule := StateRule{
+		ID:           StateRuleID(produceStateID(lbl + "_push")),
+		Label:        lbl + "_push",
+		RegEx:        regex,
+		Scope:        getScopeString([]string{chainCtx.Env.Config.scopeProvider(*child.OpenToken)}, chainCtx.Env.Config.scopeExtension),
+		Action:       ACTION_PUSH,
+		ActionTarget: targetID,
+	}
+
+	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
+
+	advanceRule := StateRule{
+		ID:           StateRuleID(produceStateID(lbl + "_advance")),
+		Label:        lbl + "_advance",
+		RegEx:        `(?=\S)`,
+		Action:       action,
+		ActionTarget: nextID,
+		Priority:     PriorityFallback - 1,
+	}
+
+	return []StateRule{pushRule, advanceRule}, includes
 }
 
 func handleTokenConstructStep[TToken, TTokenRole comparable](
@@ -760,9 +906,11 @@ func baseLabelForTransition(grammarID syntaxa.GrammarLabel) string {
 
 func buildIncludesForNode[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	node *syntaxa.Grammar[TToken],
+	tokensInUse []TToken,
 ) []StateID {
-	validTokens, overrideIDs, triggerIDs := extractIncludes(config, nil, node, false)
+	validTokens, overrideIDs, triggerIDs := extractIncludes(config, nil, analysis, node, false)
 
 	if node != nil && node.Kind == syntaxa.GNest && node.OpenToken != nil {
 		validTokens[*node.OpenToken] = struct{}{}
@@ -771,7 +919,7 @@ func buildIncludesForNode[TToken, TTokenRole comparable](
 	var includes []StateID
 	includes = append(includes, triggerIDs...)
 	includes = append(includes, overrideIDs...)
-	includes = append(includes, buildIncludesWhitelist(validTokens, *new(TToken), *new(TToken), func(tok TToken) StateID {
+	includes = append(includes, buildIncludesWhitelist(validTokens, *new(TToken), tokensInUse, func(tok TToken) StateID {
 		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
 	})...)
 	return includes
@@ -785,6 +933,8 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	allStates []State,
 	grammarNode *syntaxa.Grammar[TToken],
 	tokenPatternMap map[TToken]Pattern,
+	nestBodyRegistry map[syntaxa.GrammarLabel]StateID,
+	tokensInUse []TToken,
 ) []State {
 	for label := range plan.OverrideTokens {
 		nodes := nodesByGrammarLabel[label]
@@ -811,10 +961,12 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 	}
 
 	env := &constructBuildEnv[TToken, TTokenRole]{
-		Config:          config,
-		Plan:            plan,
-		Analysis:        analysis,
-		TokenPatternMap: tokenPatternMap,
+		Config:           config,
+		Plan:             plan,
+		Analysis:         analysis,
+		TokenPatternMap:  tokenPatternMap,
+		NestBodyRegistry: nestBodyRegistry,
+		TokensInUse:      tokensInUse,
 	}
 	allStates = append(allStates, extractConstructStates(env, grammarNode)...)
 	return allStates
@@ -845,6 +997,11 @@ func extractConstructStates[TToken, TTokenRole comparable](
 			currentInRepeat = true
 		case syntaxa.GNest:
 			currentInRepeat = false
+		case syntaxa.GToken, syntaxa.GConcat, syntaxa.GChoice, syntaxa.GOptional, syntaxa.GEpsilon:
+			// No change to InRepeat; inherit from context.
+		default:
+			// Unknown GrammarKind: preserve context so IR generation does not assume repeat.
+			currentInRepeat = ctx.InRepeat
 		}
 
 		tokenSet := make(map[TToken]struct{})
@@ -922,10 +1079,11 @@ type includeAnalysis[TToken comparable] struct {
 func extractIncludes[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken], // Optional: Pass nil to ignore plan checks
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	contextRoot *syntaxa.Grammar[TToken],
 	isRoot bool,
 ) (map[TToken]struct{}, []StateID, []StateID) {
-	a := traverseIncludes(config, plan, contextRoot, isRoot)
+	a := traverseIncludes(config, plan, analysis, contextRoot, isRoot)
 
 	var overrides []StateID
 	overrides = append(overrides, a.ConstructIDs...)
@@ -937,6 +1095,7 @@ func extractIncludes[TToken, TTokenRole comparable](
 func traverseIncludes[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	root *syntaxa.Grammar[TToken],
 	isRoot bool,
 ) includeAnalysis[TToken] {
@@ -957,6 +1116,14 @@ func traverseIncludes[TToken, TTokenRole comparable](
 	seenConstructs := make(map[StateID]bool)
 
 	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+		// Analysis-driven: merge First(node) into ValidTokens for any node with analysis.
+		if analysis != nil && n != nil && n.NodePath != nil {
+			first := syntaxa.GrammarAnalysisFirst(analysis, n)
+			for tok := range first {
+				out.ValidTokens[tok] = struct{}{}
+			}
+		}
+
 		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
 			if plan == nil || plan.containsConstruct(n.GrammarLabel) {
 				cid := nodeConstructEntryStateID(n.GrammarLabel)
@@ -969,7 +1136,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 		}
 
 		if n.Kind == syntaxa.GConcat {
-			for _, p := range syntaxa.GrammarConcatTokenNestPairs(n) {
+			for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
 				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
 				if !seenTriggers[id] {
 					seenTriggers[id] = true
@@ -978,8 +1145,8 @@ func traverseIncludes[TToken, TTokenRole comparable](
 			}
 		}
 
-		switch n.Kind {
-		case syntaxa.GToken:
+		switch editorIRRole(n) {
+		case EditorIRRoleToken:
 			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasScope() {
 				oid := nodeOverrideStateID(n.GrammarLabel)
 				if !seenOverrides[oid] {
@@ -990,7 +1157,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 				out.ValidTokens[n.Token] = struct{}{}
 			}
 
-		case syntaxa.GNest:
+		case EditorIRRoleNest:
 			if isRoot || n != root {
 				if n.OpenToken != nil {
 					out.ValidTokens[*n.OpenToken] = struct{}{}
@@ -1019,12 +1186,13 @@ func injectPrototypeState(allStates []State, prototypeIncludes []StateID) []Stat
 
 func buildIncludesWhitelist[TToken comparable](
 	validTokens map[TToken]struct{},
-	openTok, closeTok TToken,
+	closeTok TToken,
+	tokensInUse []TToken,
 	getID func(TToken) StateID,
 ) []StateID {
 	var includes []StateID
-	for tok := range validTokens {
-		if tok != openTok && tok != closeTok {
+	for _, tok := range tokensInUse {
+		if _, ok := validTokens[tok]; ok && tok != closeTok {
 			includes = append(includes, getID(tok))
 		}
 	}
@@ -1113,8 +1281,8 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 
 	var rules []StateRule
 	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		switch n.Kind {
-		case syntaxa.GToken:
+		switch editorIRRole(n) {
+		case EditorIRRoleToken:
 			if _, hasTokOverride := config.overrides[n.Token]; hasTokOverride {
 				return true, false
 			}
@@ -1132,9 +1300,12 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 				ActionTarget: nextID,
 			})
 			return true, false
-		case syntaxa.GChoice, syntaxa.GOptional, syntaxa.GConcat, syntaxa.GRepeat:
+		case EditorIRRoleSegment:
 			return false, false
+		case EditorIRRoleNest, EditorIRRoleEpsilon:
+			return true, false
 		default:
+			// Unknown role (e.g. new GrammarKind not yet in editorIRRole): skip to avoid wrong rules.
 			return true, false
 		}
 	})
@@ -1163,10 +1334,11 @@ type seqTriggerSpec[TToken comparable] struct {
 }
 
 /*
-BuildIRPlan walks the grammar tree and builds an IRPlan: ConstructConacts (GConcat nodes with node overrides), OverrideTokens (GToken nodes with scope override), and SeqTriggers (token–nest pairs from GConcat children). config.nodeOverrides and config.overrides drive which nodes are considered. root must be the entry grammar (e.g. grammarPackage.Rules[grammarPackage.EntryRule]).
+BuildIRPlan walks the grammar tree and builds an IRPlan: ConstructConacts (GConcat nodes with node overrides), OverrideTokens (GToken nodes with scope override), and SeqTriggers (token–nest pairs from sequence nodes via GrammarSequenceTokenNestPairs). config.nodeOverrides and config.overrides drive which nodes are considered. root must be the entry grammar (e.g. grammarPackage.Rules[grammarPackage.EntryRule]). analysis may be nil; when set, sequence triggers use First(prev) for non-GToken prev.
 */
 func BuildIRPlan[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	root *syntaxa.Grammar[TToken],
 ) *IRPlan[TToken] {
 	plan := &IRPlan[TToken]{
@@ -1191,7 +1363,7 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 		}
 
 		if n.Kind == syntaxa.GConcat {
-			for _, p := range syntaxa.GrammarConcatTokenNestPairs(n) {
+			for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
 				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
 				if _, exists := plan.SeqTriggers[id]; !exists {
 					plan.SeqTriggers[id] = seqTriggerSpec[TToken]{
@@ -1211,22 +1383,24 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 func buildBodyStatePlanned[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	nest syntaxa.NestSpec[TToken],
 	nestLabel string,
 	tokenPatternMap map[TToken]Pattern,
 	bodyStateID StateID,
+	tokensInUse []TToken,
 ) State {
-	bodyGrammar := nest.Node
-	if eff := syntaxa.GrammarEffectiveChildren(bodyGrammar); len(eff) > 0 {
-		bodyGrammar = eff[0]
+	bodyGrammarForIncludes := syntaxa.GrammarNestBody(nest.Node)
+	if bodyGrammarForIncludes == nil {
+		bodyGrammarForIncludes = nest.Node
 	}
-	validTokens, overrideIDs, triggerIDs := extractIncludes(config, plan, bodyGrammar, false)
+	validTokens, overrideIDs, triggerIDs := extractIncludes(config, plan, analysis, bodyGrammarForIncludes, false)
 
 	var includes []StateID
 	includes = append(includes, triggerIDs...)
 	includes = append(includes, overrideIDs...)
 
-	baseIncludes := buildIncludesWhitelist(validTokens, nest.Open, nest.Close, func(tok TToken) StateID {
+	baseIncludes := buildIncludesWhitelist(validTokens, nest.Close, tokensInUse, func(tok TToken) StateID {
 		return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
 	})
 	includes = append(includes, baseIncludes...)
@@ -1236,7 +1410,7 @@ func buildBodyStatePlanned[TToken, TTokenRole comparable](
 
 	return State{
 		ID:        bodyStateID,
-		Label:     nestLabel + "_body",
+		Label:     nestLabel,
 		MetaScope: getScopeString([]string{metaScopeBase}, config.scopeExtension),
 		Includes:  includes,
 		Rules: []StateRule{
@@ -1258,16 +1432,21 @@ func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNode
 	allStates []State,
 	grammarPackage syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	tokenPatternMap map[TToken]Pattern,
-) ([]State, map[syntaxa.GrammarLabel]StateID) {
+	tokensInUse []TToken,
+) ([]State, map[syntaxa.GrammarLabel]StateID, map[syntaxa.GrammarLabel]StateID) {
 	openTokenCounts := syntaxa.NestSpecsOpenTokenCounts(grammarPackage.Nests)
+
 	nestRegistry := make(map[syntaxa.GrammarLabel]StateID)
+	nestBodyRegistry := make(map[syntaxa.GrammarLabel]StateID)
 
 	for _, nest := range grammarPackage.Nests {
 		nestLabel := sanitizeContextName(string(nest.OwnerRule))
 		isUniqueToken := openTokenCounts[nest.Open] == 1
-		openStateID := StateID(produceStateID(sanitizeContextName(config.formatter(nest.Open))))
+		openStateLabel := sanitizeContextName(config.formatter(nest.Open))
+		openStateID := StateID(produceStateID(openStateLabel))
 
 		if customStates, entryID, handled := tryApplyNestOverride(config, nest, nestLabel, tokenPatternMap); handled {
+			nestBodyRegistry[nest.ID] = entryID
 			if isUniqueToken {
 				mutateStateAction(allStates, openStateID, ACTION_PUSH, entryID)
 			} else {
@@ -1277,23 +1456,26 @@ func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNode
 			continue
 		}
 
-		bodyStateID := StateID(produceStateID(nestLabel + "_body"))
-		bodyState := buildBodyStatePlanned(config, plan, nest, nestLabel, tokenPatternMap, bodyStateID)
+		bodyStateID := StateID(produceStateID(nestLabel))
+		nestBodyRegistry[nest.ID] = bodyStateID
+
+		bodyState := buildBodyStatePlanned(config, plan, grammarPackage.Analysis, nest, nestLabel, tokenPatternMap, bodyStateID, tokensInUse)
 		allStates = append(allStates, bodyState)
 
 		if isUniqueToken {
 			mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
-			continue
+		} else {
+			entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
+			betweenTokens := collectTokensBetweenTriggerAndNest(grammarPackage.Analysis, entryGrammar, nest.ID)
+			expectStateID := StateID(produceStateID(nestLabel + "_expect"))
+			expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID, betweenTokens, tokensInUse)
+
+			nestRegistry[nest.ID] = expectStateID
+			allStates = append(allStates, expectState)
 		}
-
-		expectStateID := StateID(produceStateID(nestLabel + "_expect"))
-		expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID)
-
-		nestRegistry[nest.ID] = expectStateID
-		allStates = append(allStates, expectState)
 	}
 
-	return allStates, nestRegistry
+	return allStates, nestRegistry, nestBodyRegistry
 }
 
 func injectMainStatePlanned[TToken, TTokenRole comparable](
@@ -1301,9 +1483,10 @@ func injectMainStatePlanned[TToken, TTokenRole comparable](
 	scopeExtension string,
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
+	analysis *syntaxa.GrammarAnalysis[TToken],
 	entryNode *syntaxa.Grammar[TToken],
 ) []State {
-	_, overrideIDs, triggerIDs := extractIncludes(config, plan, entryNode, true)
+	_, overrideIDs, triggerIDs := extractIncludes(config, plan, analysis, entryNode, true)
 
 	var rootIncludes []StateID
 	rootIncludes = append(rootIncludes, triggerIDs...)

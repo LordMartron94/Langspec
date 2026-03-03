@@ -102,7 +102,7 @@ func (g *GrammarDefiner) expectPairWithChildNodes(
 	secondTokenNode LangSpecParserNodeKind,
 	firstToken, secondToken LangSpecLexerTokenType,
 ) Rule {
-	concatID    := LangSpecGrammarIDFromNodeWithSuffix(constructNode, "")
+	concatID := LangSpecGrammarIDFromNodeWithSuffix(constructNode, "")
 	firstTokenID := LangSpecGrammarIDFromNodeWithSuffix(firstTokenNode, "")
 	secondTokenID := LangSpecGrammarIDFromNodeWithSuffix(secondTokenNode, "")
 	return g.rb.Token.ExpectPairWithChildGrammarIDs(concatID, firstTokenID, secondTokenID, constructNode, firstToken, secondToken)
@@ -200,6 +200,31 @@ func (g *GrammarDefiner) block(
 		grammarID,
 		node,
 		g.expectToken(kwNode, kwTok),
+		g.rb.Rule.TransparentNest(
+			LangSpecGrammarIDFromNodeWithSuffix(node, "BODY"),
+			TokBraceOpen,
+			TokBraceClose,
+			bodyRule,
+		),
+		g.expectVirtualInRule(node, TokSemicolon),
+	)
+}
+
+/*
+block creates a standard delimited section:
+keywordRule -> { -> Body -> } -> ;
+GrammarID is derived from node. The bodyRule is typically a TransparentNest or a list of sub-rules.
+*/
+func (g *GrammarDefiner) blockByRule(
+	node LangSpecParserNodeKind,
+	kwRule Rule,
+	bodyRule Rule,
+) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	return g.rb.Rule.Sequence(
+		grammarID,
+		node,
+		kwRule,
 		g.rb.Rule.TransparentNest(
 			LangSpecGrammarIDFromNodeWithSuffix(node, "BODY"),
 			TokBraceOpen,

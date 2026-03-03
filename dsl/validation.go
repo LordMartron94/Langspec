@@ -3,7 +3,6 @@ package dsl
 import (
 	"fmt"
 	"langspec/validation"
-	"slices"
 )
 
 // ------------------------------------------------------------- TYPES
@@ -15,10 +14,6 @@ type ValidationCode string
 const (
 	VALIDATION_DUPLICATE_TOKEN ValidationCode = "V_R001"
 
-	VALIDATION_UNKNOWN_PRAGMA_KEY   ValidationCode = "V_P001"
-	VALIDATION_UNKNOWN_PRAGMA_VALUE ValidationCode = "V_P002"
-	VALIDATION_UNKNOWN_META_KEY     ValidationCode = "V_P003"
-
 	VALIDATION_DUPLICATE_PATTERN_NAME   ValidationCode = "V_PAT001"
 	VALIDATION_UNRESOLVED_PATTERN_REF   ValidationCode = "V_PAT002"
 	VALIDATION_EMPTY_PATTERN_EXPRESSION ValidationCode = "V_PAT003"
@@ -29,18 +24,6 @@ func (v ValidationCode) String() string {
 }
 
 // ------------------------------------------------------------- STAGES
-
-var validPragmaKeys = []string{
-	"enable-mode",
-}
-
-var validPragmaValues = []string{
-	"sublime",
-}
-
-var validMetaKeys = []string{
-	"scope",
-}
 
 func getValidationStages() []*ValidationStage {
 	stages := []*ValidationStage{
@@ -66,45 +49,9 @@ func getValidationStages() []*ValidationStage {
 			},
 		},
 		{
-			Name:        "Pragma Validation",
-			Description: "Validates all pragmas and meta sections.",
-			Order:       1,
-			Processor: func(ctx *ValidationCtx) {
-				pragmaKeys := ctx.RootNode.FindAllKind(NodePragmaKey)
-				pragmaValues := ctx.RootNode.FindAllKind(NodePragmaValue)
-				metaKeys := ctx.RootNode.FindAllKind(NodeMetaKey)
-
-				for _, pragmaKey := range pragmaKeys {
-					value := string(pragmaKey.Tokens()[0].Raw)
-					if !slices.Contains(validPragmaKeys, value) {
-						msg := fmt.Sprintf("unknown pragma key '%s'", value)
-						ctx.ReportError(VALIDATION_UNKNOWN_PRAGMA_KEY.String(), msg, pragmaKey)
-					}
-				}
-
-				for _, pragmaValue := range pragmaValues {
-					value := getStringValue(pragmaValue)
-
-					if !slices.Contains(validPragmaValues, value) {
-						msg := fmt.Sprintf("unknown pragma value '%s'", value)
-						ctx.ReportWarning(VALIDATION_UNKNOWN_PRAGMA_VALUE.String(), msg, pragmaValue)
-					}
-				}
-
-				for _, metaKey := range metaKeys {
-					value := string(metaKey.Tokens()[0].Raw)
-
-					if !slices.Contains(validMetaKeys, value) {
-						msg := fmt.Sprintf("unknown meta key '%s'", value)
-						ctx.ReportDiagnostic(VALIDATION_UNKNOWN_META_KEY.String(), msg, metaKey)
-					}
-				}
-			},
-		},
-		{
 			Name:        "Pattern Validation",
 			Description: "Validates pattern section: duplicate declarations and unresolved variable references. Variables must be declared before use.",
-			Order:       2,
+			Order:       1,
 			Processor: func(ctx *ValidationCtx) {
 				allDeclared := make(map[string]struct{})
 				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
@@ -130,7 +77,7 @@ func getValidationStages() []*ValidationStage {
 						declaredSoFar[name] = struct{}{}
 					}
 
-					for _, varRef := range def.FindAllKind(NodePatternVarRef) {
+					for _, varRef := range def.FindAllKind(NodeVarRef) {
 						tokens := varRef.Tokens()
 						if len(tokens) < 2 {
 							continue

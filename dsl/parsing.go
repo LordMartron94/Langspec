@@ -64,7 +64,7 @@ func buildLangSpecDSLParserSpec(programRule Rule) (
 				break
 			}
 		}
-		if node.Kind() == NodePatternCharLiteral && len(lexemes) > 0 && lexemes[0].Token == TokCharLiteral {
+		if node.Kind() == NodeCharLiteral && len(lexemes) > 0 && lexemes[0].Token == TokCharLiteral {
 			raw := string(lexemes[0].Raw)
 			if len(raw) >= 2 && raw[0] == '\'' && raw[len(raw)-1] == '\'' {
 				inner := raw[1 : len(raw)-1]
@@ -77,12 +77,11 @@ func buildLangSpecDSLParserSpec(programRule Rule) (
 	}
 
 	grammarPkg := new(syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState])
-	*grammarPkg = syntaxa.ProducePackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState](
+	*grammarPkg = syntaxa.ProducePackage(
 		programRule.GetGrammar(),
 		"LangSpec DSL",
 		"0.0.0",
 		&programRule,
-		nil,
 	)
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,

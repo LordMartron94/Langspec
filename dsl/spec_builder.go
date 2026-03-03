@@ -34,7 +34,7 @@ func buildLangSpecDSLSpec() (
 		LangSpecLexerTokenType.String,
 	)
 	g := grammarDefinerCreate(ruleBuilder)
-	programRule := buildProgramRule(g, spec)
+	programRule := buildProgramRule(g)
 
 	parserSpec, _ := buildLangSpecDSLParserSpec(programRule)
 
