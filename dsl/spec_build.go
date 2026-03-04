@@ -39,7 +39,6 @@ const (
 	TokMetaSection // %%
 
 	TokPipe
-	TokConcat
 	TokRange
 	TokStar
 	TokSeparator // .
@@ -165,7 +164,6 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokChainSeparator, "punctuation.separator.chain", "->", 0},
 		{TokEqualsOperator, "keyword.operator.assignment", "=", 0},
 		{TokVarRef, "keyword.operator.variable", "$", 0},
-		{TokConcat, "keyword.operator.concat", "&", 0},
 		{TokRange, "keyword.operator.range", "..", 0},
 		{TokStar, "keyword.operator.star", "*", 0},
 		{TokKWLSpec, "keyword.declaration.lspec", "lspec", 2},
@@ -374,15 +372,21 @@ func (b *dslGrammarBuilder) patternDefinition() Rule {
 
 func (b *dslGrammarBuilder) patternExpr() Rule {
 	segmentPrimary := b.g.OptionalSuffixByNode(NodePatternStar, b.patternSegment(), TokStar)
+
 	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
 		Primary:   segmentPrimary,
 		PrefixOps: nil,
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-			b.g.InfixOp(TokConcat, 20, 19, NodePatternConcat),
 			b.g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
+		},
+		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+			LeftBP:   20,
+			RightBP:  19,
+			NodeKind: NodePatternConcat,
 		},
 		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
 	}
+
 	return b.g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
 }
 
