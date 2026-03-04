@@ -3,6 +3,8 @@ package dsl
 import (
 	"fmt"
 	"langspec/validation"
+	"strconv"
+	"strings"
 )
 
 // ------------------------------------------------------------- TYPES
@@ -18,6 +20,12 @@ const (
 	VALIDATION_UNRESOLVED_PATTERN_REF   ValidationCode = "V_PAT002"
 	VALIDATION_EMPTY_PATTERN_EXPRESSION ValidationCode = "V_PAT003"
 	VALIDATION_LOCAL_REF_OUTSIDE_SECTION ValidationCode = "V_PAT004"
+	VALIDATION_CYCLIC_PATTERN_REF       ValidationCode = "V_PAT005"
+
+	VALIDATION_UNREACHABLE_PATTERN     ValidationCode = "V_PAT006"
+	VALIDATION_AMBIGUOUS_TOKEN_MATCH   ValidationCode = "V_LEX002"
+	VALIDATION_IDENTICAL_TOKEN_PATTERN ValidationCode = "V_LEX003"
+	VALIDATION_TOKEN_SHADOWED          ValidationCode = "V_LEX004"
 )
 
 func (v ValidationCode) String() string {
@@ -115,6 +123,81 @@ func getValidationStages() []*ValidationStage {
 						ctx.ReportError(VALIDATION_LOCAL_REF_OUTSIDE_SECTION.String(), msg, varRef)
 					}
 				}
+
+				patternDeps := buildPatternDependencyMap(ctx.RootNode, declaredSoFar)
+				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
+					defNameNode := def.FindFirstKind(NodePatternDefName)
+					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
+						continue
+					}
+					name := string(defNameNode.Tokens()[0].Raw)
+					cycle := findCycleInPatternDeps(name, patternDeps)
+					if cycle != nil {
+						msg := fmt.Sprintf("pattern '%s' has cyclic reference (e.g. %s)", name, formatCycle(cycle))
+						ctx.ReportError(VALIDATION_CYCLIC_PATTERN_REF.String(), msg, defNameNode)
+					}
+				}
+			},
+		},
+		{
+			Name:        "Unreachable Patterns",
+			Description: "Emits info for patterns that are never referenced by any lex rule or by another pattern.",
+			Order:       2,
+			Processor: func(ctx *ValidationCtx) {
+				patternDeps := buildPatternDependencyMap(ctx.RootNode, nil)
+				reachable := computeReachablePatterns(ctx.RootNode, patternDeps)
+				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
+					defNameNode := def.FindFirstKind(NodePatternDefName)
+					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
+						continue
+					}
+					name := strings.TrimSpace(string(defNameNode.Tokens()[0].Raw))
+					if def.FindFirstKind(NodeLocalVariable) != nil {
+						continue
+					}
+					if !reachable[name] {
+						msg := fmt.Sprintf("pattern '%s' is never referenced (unreachable)", name)
+						ctx.ReportInfo(VALIDATION_UNREACHABLE_PATTERN.String(), msg, defNameNode)
+					}
+				}
+			},
+		},
+		{
+			Name:        "Lex Pattern Analysis",
+			Description: "Detects ambiguous token matches, identical token patterns, and tokens shadowed by higher-priority rules.",
+			Order:       3,
+			Processor: func(ctx *ValidationCtx) {
+				lexRules := collectLexRules(ctx.RootNode)
+				patternKeyToRules := make(map[string][]lexRuleInfo)
+				for _, r := range lexRules {
+					key := r.patternKey
+					patternKeyToRules[key] = append(patternKeyToRules[key], r)
+				}
+				for key, rules := range patternKeyToRules {
+					if len(rules) < 2 {
+						continue
+					}
+					for _, r := range rules {
+						msg := fmt.Sprintf("token '%s' produces the same pattern as other token(s) (pattern key: %s)", r.tokenName, key)
+						ctx.ReportWarning(VALIDATION_IDENTICAL_TOKEN_PATTERN.String(), msg, r.tokenNameNode)
+					}
+					for _, r := range rules {
+						msg := fmt.Sprintf("token '%s' can match the same input as other token(s) (ambiguous)", r.tokenName)
+						ctx.ReportWarning(VALIDATION_AMBIGUOUS_TOKEN_MATCH.String(), msg, r.patternNode)
+					}
+					maxPri := rules[0].priority
+					for _, r := range rules[1:] {
+						if r.priority > maxPri {
+							maxPri = r.priority
+						}
+					}
+					for _, r := range rules {
+						if r.priority < maxPri {
+							msg := fmt.Sprintf("token '%s' is shadowed by higher-priority token(s) with the same pattern", r.tokenName)
+							ctx.ReportWarning(VALIDATION_TOKEN_SHADOWED.String(), msg, r.tokenNameNode)
+						}
+					}
+				}
 			},
 		},
 	}
@@ -141,4 +224,185 @@ func enclosingPatternDef(node *Node) *Node {
 		}
 	}
 	return nil
+}
+
+// getVarRefTargetName returns the pattern name referenced by a NodeVarRef (from second token or NodeVarRefTarget child). Trimmed.
+func getVarRefTargetName(varRef *Node) string {
+	if targetNode := varRef.FindFirstKind(NodeVarRefTarget); targetNode != nil && len(targetNode.Tokens()) > 0 {
+		return strings.TrimSpace(string(targetNode.Tokens()[0].Raw))
+	}
+	tokens := varRef.Tokens()
+	if len(tokens) >= 2 {
+		return strings.TrimSpace(string(tokens[1].Raw))
+	}
+	return ""
+}
+
+// buildPatternDependencyMap returns a map from pattern name to the list of pattern names it references (via VarRef).
+// If declaredOnly is non-nil, only refs that are keys in declaredOnly are included.
+func buildPatternDependencyMap(root *Node, declaredOnly map[string]struct{}) map[string][]string {
+	out := make(map[string][]string)
+	for _, def := range root.FindAllKind(NodePatternDefinition) {
+		defNameNode := def.FindFirstKind(NodePatternDefName)
+		if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(string(defNameNode.Tokens()[0].Raw))
+		var refs []string
+		for _, varRef := range def.FindAllKind(NodeVarRef) {
+			refName := getVarRefTargetName(varRef)
+			if refName == "" {
+				continue
+			}
+			if declaredOnly != nil {
+				if _, ok := declaredOnly[refName]; !ok {
+					continue
+				}
+			}
+			refs = append(refs, refName)
+		}
+		out[name] = refs
+	}
+	return out
+}
+
+func findCycleInPatternDeps(start string, deps map[string][]string) []string {
+	path := make(map[string]bool)
+	stack := make([]string, 0, 8)
+	var cycle []string
+	var dfs func(name string) bool
+	dfs = func(name string) bool {
+		if path[name] {
+			for i := range stack {
+				if stack[i] == name {
+					cycle = make([]string, 0, len(stack)-i+1)
+					cycle = append(cycle, stack[i:]...)
+					cycle = append(cycle, name)
+					return true
+				}
+			}
+			return true
+		}
+		path[name] = true
+		stack = append(stack, name)
+		for _, ref := range deps[name] {
+			if dfs(ref) {
+				return true
+			}
+		}
+		stack = stack[:len(stack)-1]
+		path[name] = false
+		return false
+	}
+	if dfs(start) && cycle != nil {
+		return cycle
+	}
+	return nil
+}
+
+func formatCycle(cycle []string) string {
+	if len(cycle) == 0 {
+		return ""
+	}
+	s := cycle[0]
+	for i := 1; i < len(cycle); i++ {
+		s += " -> " + cycle[i]
+	}
+	return s
+}
+
+func computeReachablePatterns(root *Node, deps map[string][]string) map[string]bool {
+	entryPoints := make(map[string]bool)
+	lexSection := root.FindFirstKind(NodeLexSection)
+	if lexSection != nil {
+		for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
+			varRef := ruleNode.FindFirstKind(NodeVarRef)
+			if varRef != nil {
+				name := getVarRefTargetName(varRef)
+				if name != "" {
+					entryPoints[name] = true
+				}
+			}
+		}
+	}
+	reachable := make(map[string]bool)
+	var bfs func(name string)
+	bfs = func(name string) {
+		if reachable[name] {
+			return
+		}
+		reachable[name] = true
+		for _, ref := range deps[name] {
+			bfs(ref)
+		}
+	}
+	for name := range entryPoints {
+		bfs(name)
+	}
+	return reachable
+}
+
+type lexRuleInfo struct {
+	tokenName    string
+	patternKey   string
+	priority     int
+	tokenNameNode *Node
+	patternNode   *Node
+}
+
+func collectLexRules(root *Node) []lexRuleInfo {
+	var out []lexRuleInfo
+	lexSection := root.FindFirstKind(NodeLexSection)
+	if lexSection == nil {
+		return out
+	}
+	for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
+		tokenNameNode := ruleNode.FindFirstKind(NodeLexRuleTokenName)
+		priNode := ruleNode.FindFirstKind(NodeLexRulePriority)
+		if tokenNameNode == nil {
+			continue
+		}
+		tokenName, ok := AttributeAs[string](tokenNameNode, ATTRIBUTE_LITERAL_STRING_FORMATTED)
+		if !ok {
+			continue
+		}
+		priority := 0
+		if priNode != nil {
+			raw := priNode.GetContent("")
+			if raw != "" {
+				if n, err := parseIntFromContent(raw); err == nil {
+					priority = n
+				}
+			}
+		}
+		var patternKey string
+		var patternNode *Node
+		if varRef := ruleNode.FindFirstKind(NodeVarRef); varRef != nil {
+			if name := getVarRefTargetName(varRef); name != "" {
+				patternKey = "ref:" + name
+				patternNode = varRef
+			}
+		}
+		if patternKey == "" {
+			if regexNode := ruleNode.FindFirstKind(NodeLexRulePattern); regexNode != nil {
+				patternKey = "regex:" + regexNode.GetContent("")
+				patternNode = regexNode
+			}
+		}
+		if patternKey == "" || patternNode == nil {
+			continue
+		}
+		out = append(out, lexRuleInfo{
+			tokenName:     tokenName,
+			patternKey:    patternKey,
+			priority:      priority,
+			tokenNameNode: tokenNameNode,
+			patternNode:   patternNode,
+		})
+	}
+	return out
+}
+
+func parseIntFromContent(s string) (int, error) {
+	return strconv.Atoi(strings.TrimSpace(s))
 }

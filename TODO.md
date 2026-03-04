@@ -26,12 +26,12 @@ In this file I will outline the things I still need/want to do for LSPEC.
 
 - [x] Support private variables that are local to Pattern section.
 	- DONE ON 04 March 2026 @ 12.03am
-- [ ] Extend validation
-	- [ ] Cyclic patterns/variables (i.e., variables cannot refer to themselves)
-	- [ ] Validate unreachable patterns (emit warning or info)
-	- [ ] Detect ambiguous token matches
-	- [ ] Warn when two tokens produce identical patterns
-	- [ ] Detect tokens shadowed by higher priority tokens
+- [X] Extend validation -- DONE ON 04 March 2026 @ 11.25pm
+	- [X] Cyclic patterns/variables (i.e., variables cannot refer to themselves)
+	- [X] Validate unreachable patterns (emit warning or info)
+	- [X] Detect ambiguous token matches
+	- [X] Warn when two tokens produce identical patterns
+	- [X] Detect tokens shadowed by higher priority tokens
 - [ ] Import system
 
 ### Priority 3
