@@ -31,6 +31,8 @@ const (
 	TokDashes
 	TokBraceOpen
 	TokBraceClose
+	TokParenOpen
+	TokParenClose
 	TokSemicolon
 	TokDot
 	TokChainSeparator
@@ -42,6 +44,8 @@ const (
 	TokRange
 	TokStar
 	TokSeparator // .
+	TokNegation  // !
+	TokPlus      // +
 
 	// -- Literals --
 	TokStringLiteral
@@ -128,9 +132,13 @@ const (
 	NodePatternRange
 	NodeCharLiteral
 	NodePatternStar
+	NodePatternPlus
+	NodePatternNegation
 	NodePatternConcat
 	NodePatternAlternation
 	NodePatternStringLiteral
+	NodePatternGroup
+	NodePatternSegment
 
 	NodeLocalVariable
 )
@@ -160,15 +168,19 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokSemicolon, "punctuation.terminator.statement", ";", 0},
 		{TokBraceOpen, "punctuation.section.braces.begin", "{", 0},
 		{TokBraceClose, "punctuation.section.braces.end", "}", 0},
+		{TokParenOpen, "punctuation.section.parens.begin", "(", 0},
+		{TokParenClose, "punctuation.section.parens.end", ")", 0},
+		{TokPlus, "punctuation.section.parens.end", "+", 0},
+		{TokNegation, "punctuation.section.parens.end", "!", 0},
 		{TokAssignment, "keyword.operator.assignment", ":", 0},
 		{TokChainSeparator, "punctuation.separator.chain", "->", 0},
 		{TokEqualsOperator, "keyword.operator.assignment", "=", 0},
 		{TokVarRef, "keyword.operator.variable", "$", 0},
 		{TokRange, "keyword.operator.range", "..", 0},
 		{TokStar, "keyword.operator.star", "*", 0},
-		{TokKWLSpec, "keyword.declaration.lspec", "lspec", 2},
-		{TokKWPragma, "keyword.pragma.lspec", "PRAGMA", 2},
-		{TokKWTool, "keyword.tool.lspec", "tool", 2},
+		{TokKWLSpec, "keyword.declaration", "lspec", 2},
+		{TokKWPragma, "keyword.pragma", "PRAGMA", 2},
+		{TokKWTool, "keyword.tool", "tool", 2},
 		{TokKWLex, "keyword.declaration.lex", "LEX", 2},
 		{TokKWPattern, "keyword.declaration.pattern", "PATTERN", 2},
 		{TokKWTrue, "constant.language.boolean", "true", 2},
@@ -272,6 +284,8 @@ func buildProgramRule(g *GrammarDefiner) Rule {
 }
 
 func (b *dslGrammarBuilder) program() Rule {
+	b.declareVarRef()
+
 	return b.g.RootByNode(NodeProgram, false,
 		b.g.rb.Rule.Required(b.header(), "must have header"),
 		b.g.rb.Rule.OptionalPrefix(b.pragmaSection(), TokKWPragma),
@@ -371,14 +385,27 @@ func (b *dslGrammarBuilder) patternDefinition() Rule {
 }
 
 func (b *dslGrammarBuilder) patternExpr() Rule {
-	segmentPrimary := b.g.OptionalSuffixByNode(NodePatternStar, b.patternSegment(), TokStar)
-
 	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-		Primary:   segmentPrimary,
-		PrefixOps: nil,
+		// PRIMARY: Only the base units (literals, groups, var refs)
+		Primary: b.patternSegment(),
+
+		// PREFIX: Bindings that happen BEFORE the expression
+		PrefixOps: []rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+			b.g.PrefixOp(TokNegation, 40, NodePatternNegation), // High precedence
+		},
+
+		// POSTFIX: Bindings that happen AFTER the expression (Star, Plus)
+		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+			b.g.PostfixOp(TokStar, 30, NodePatternStar),
+			b.g.PostfixOp(TokPlus, 30, NodePatternPlus),
+		},
+
+		// INFIX: Bindings BETWEEN expressions
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
 		},
+
+		// IMPLICIT: Handling 'a' 'b' (Concat)
 		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			LeftBP:   20,
 			RightBP:  19,
@@ -397,11 +424,14 @@ func (b *dslGrammarBuilder) patternSegment() Rule {
 			return ctx.Peek(1).Token == TokRange
 		},
 	)
-	return b.g.ChoiceByNode(NodeVarRef,
-		b.varRef(),
+
+	return b.g.ChoiceByNode(NodePatternSegment,
+		b.varRefReference(),
 		rangeRule,
 		b.charLiteral(),
 		b.g.expectToken(NodePatternStringLiteral, TokStringLiteral),
+		b.g.NestByNode(NodePatternGroup, TokParenOpen, TokParenClose,
+			b.g.rb.Rule.Reference("PATTERN EXPR REF", VirtualGrammarIDToGrammarID(VirtualPatternExpression))),
 	)
 }
 
@@ -437,7 +467,7 @@ func (b *dslGrammarBuilder) lexRule() Rule {
 		expectToken(NodeLexRuleRole, TokStringLiteral).
 		expectVirtualInRule(TokAssignment).
 		rule(b.g.ChoiceByNode(NodeLexRulePattern,
-			b.varRef(),
+			b.varRefReference(), // Using the DAG proxy
 			b.g.expectToken(NodeLexRulePattern, TokRegexLiteral),
 		)).
 		optionalRule(b.metaSection()).
@@ -462,8 +492,19 @@ func (b *dslGrammarBuilder) metaSectionBody() Rule {
 
 // ----------------------------------------------------------- GENERAL
 
-func (b *dslGrammarBuilder) varRef() Rule {
-	return b.g.expectPairWithChildNodes(NodeVarRef, NodeVarRefToken, NodeVarRefTarget, TokVarRef, TokIdentifier)
+/*
+varRefReference returns the late-bound DAG proxy.
+*/
+func (b *dslGrammarBuilder) varRefReference() Rule {
+	return b.g.rb.Rule.Reference(
+		syntaxa.GrammarLabel("VAR REF PROXY"),
+		LangSpecGrammarIDFromNode(NodeVarRef),
+	)
+}
+
+func (b *dslGrammarBuilder) declareVarRef() {
+	r := b.g.expectPairWithChildNodes(NodeVarRef, NodeVarRefToken, NodeVarRefTarget, TokVarRef, TokIdentifier)
+	b.g.rb.Rule.Define(r)
 }
 
 func (b *dslGrammarBuilder) charLiteral() Rule {

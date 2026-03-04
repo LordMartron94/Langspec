@@ -50,7 +50,11 @@ func unescapeCharLiteralContent(inner string) string {
 
 // --------------------------------------------------------------- BUILDING
 
-func buildLangSpecDSLParserSpec(programRule Rule) (
+func buildLangSpecDSLParserSpec(
+	programRule Rule,
+	registry syntaxa.RuleRegistry[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
+	additionalRules []*syntaxa.Grammar[LangSpecLexerTokenType],
+) (
 	*langspec.ParserSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	Rule,
 ) {
@@ -79,12 +83,14 @@ func buildLangSpecDSLParserSpec(programRule Rule) (
 	grammarPkg := new(syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState])
 	*grammarPkg = syntaxa.ProducePackage(
 		programRule.GetGrammar(),
+		additionalRules,
 		"LangSpec DSL",
 		"0.0.0",
 		&programRule,
 	)
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,
+		registry,
 		NodeProgram,
 		NodeError,
 		true, // freeze LST after parse

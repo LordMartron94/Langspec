@@ -19,6 +19,7 @@ func SublimeTextGenerateSyntaxFile(
 	editorIR *editor.PushDownAutomatonIR,
 	syntaxFile string,
 	fileExtensions []string,
+	forceDisableTargetStateValidation bool,
 ) error {
 	sb := &strings.Builder{}
 
@@ -31,7 +32,7 @@ func SublimeTextGenerateSyntaxFile(
 
 	sb.WriteString("\n")
 
-	if err := writeRules(sb, editorIR); err != nil {
+	if err := writeRules(sb, editorIR, forceDisableTargetStateValidation); err != nil {
 		return fmt.Errorf("could not construct rules section: %w", err)
 	}
 
@@ -91,7 +92,7 @@ type contextsSection struct {
 	Contexts map[string][]contextEntry `yaml:"contexts"`
 }
 
-func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error {
+func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR, disableError bool) error {
 	writeSectionHeader(sb, "Contexts & Rules")
 
 	idToLabel := make(map[editor.StateID]string)
@@ -122,11 +123,13 @@ func writeRules(sb *strings.Builder, editorIR *editor.PushDownAutomatonIR) error
 		}
 		for _, incID := range state.Includes {
 			targetLabel, ok := idToLabel[incID]
-			if !ok {
+			if ok {
+				labelCopy := targetLabel
+				entries = append(entries, contextEntry{Include: &labelCopy})
+			} else if !disableError {
 				return fmt.Errorf("missing target ID %d for include in state %s", incID, state.Label)
 			}
-			labelCopy := targetLabel
-			entries = append(entries, contextEntry{Include: &labelCopy})
+
 		}
 		for _, rule := range rules {
 			if rule.Priority >= editor.PriorityAfterIncludes {

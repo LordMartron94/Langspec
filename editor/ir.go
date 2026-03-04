@@ -325,7 +325,7 @@ func editorIRRole[TToken comparable](node *syntaxa.Grammar[TToken]) EditorIRRole
 		return EditorIRRoleToken
 	case syntaxa.GNest:
 		return EditorIRRoleNest
-	case syntaxa.GConcat, syntaxa.GChoice, syntaxa.GRepeat, syntaxa.GOptional:
+	case syntaxa.GConcat, syntaxa.GChoice, syntaxa.GRepeat, syntaxa.GOptional, syntaxa.GReference:
 		return EditorIRRoleSegment
 	case syntaxa.GEpsilon:
 		return EditorIRRoleEpsilon
@@ -383,7 +383,7 @@ func PushDownAutomatonIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 ) *PushDownAutomatonIR {
 	validateNodeOverrideLabels(config, grammarPackage.NodesByGrammarLabel)
 
-	entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
+	entryGrammar := grammarPackage.Grammars[grammarPackage.EntryRule]
 
 	plan := BuildIRPlan(config, grammarPackage.Analysis, entryGrammar)
 	tokensInUse, tokenPatternMap, prototypeTokens, tokenPriorityMap := extractLexerTokens(lexingRuleSet, config.prototypeTokenRoles)
@@ -1634,7 +1634,7 @@ func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNode
 		if isUniqueToken {
 			mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
 		} else {
-			entryGrammar := grammarPackage.Rules[grammarPackage.EntryRule]
+			entryGrammar := grammarPackage.Grammars[grammarPackage.EntryRule]
 
 			expectAnalysis := collectExpectStateIncludes(config, plan, grammarPackage.Analysis, entryGrammar, nest.ID)
 

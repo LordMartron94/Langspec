@@ -3,6 +3,7 @@ package dsl
 import (
 	"langspec"
 	"lexarch"
+	"syntaxa"
 	"syntaxa/rule"
 )
 
@@ -14,6 +15,24 @@ func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangPar
 	session := langspec.LangParserSessionCreate[rune](sourceFile, nil, false)
 	compiler.sessionCache = session
 	return session
+}
+
+/*
+additionalRulesFromBuilder returns all defined context-boundary grammars from the builder
+except the root, for use as ProducePackage additionalRules (disconnected sub-graphs).
+*/
+func additionalRulesFromBuilder(
+	rb *rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
+	root *syntaxa.Grammar[LangSpecLexerTokenType],
+) []*syntaxa.Grammar[LangSpecLexerTokenType] {
+	defined := rb.GetDefinedGrammars()
+	out := make([]*syntaxa.Grammar[LangSpecLexerTokenType], 0, len(defined))
+	for _, g := range defined {
+		if g != root {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 func buildLangSpecDSLSpec() (
@@ -35,8 +54,10 @@ func buildLangSpecDSLSpec() (
 	)
 	g := grammarDefinerCreate(ruleBuilder)
 	programRule := buildProgramRule(g)
+	registry := ruleBuilder.GetRegistry()
+	additionalRules := additionalRulesFromBuilder(ruleBuilder, programRule.GetGrammar())
 
-	parserSpec, _ := buildLangSpecDSLParserSpec(programRule)
+	parserSpec, _ := buildLangSpecDSLParserSpec(programRule, registry, additionalRules)
 
 	dslSpec := langspec.LangSpecCreate(
 		lexerSpec,

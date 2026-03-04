@@ -103,6 +103,7 @@ type ParserSpec[
 	errorNodeKind TNodeKind
 
 	grammarPackage    *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
+	registry          syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 	nodePostProcessor syntaxa.NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
 
 	errorHook ParserSyntaxErrorHook[TObservation]
@@ -112,9 +113,11 @@ type ParserSpec[
 	freezeAfterParse bool
 }
 
-/* ParserSpecCreate constructs a parser specification from a grammar package.
+/* ParserSpecCreate constructs a parser specification from a grammar package and rule registry.
 
 The package must have been produced with an entry rule (ProducePackage(..., &programRule)).
+The registry maps grammar labels to parser rules for context-boundary productions; typically
+obtained from the same RuleBuilder used to build the grammar (RuleBuilderGetRegistry).
 */
 func ParserSpecCreate[
 	TObservation cmp.Ordered,
@@ -124,11 +127,13 @@ func ParserSpecCreate[
 	TNodeKind comparable,
 ](
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	registry syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		grammarPackage:    grammarPackage,
+		registry:          registry,
 		rootNodeKind:      rootNodeKind,
 		errorNodeKind:     errorNodeKind,
 		freezeAfterParse:  freezeAfterParse,
@@ -576,6 +581,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 
 	parser := syntaxa.SyntaxaParserCreate(
 		config.spec.Parser.grammarPackage,
+		config.spec.Parser.registry,
 		config.spec.Lexer.tokenFormatter,
 		config.spec.Lexer.observationFormatter,
 		config.spec.Parser.nodePostProcessor,

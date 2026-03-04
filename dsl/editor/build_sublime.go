@@ -44,7 +44,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		*dsl.LangSpecCompilerGrammarPackage(compiler),
 	)
 
-	return sublime.SublimeTextGenerateSyntaxFile(editorIR, syntaxFile, []string{".lspec"})
+	return sublime.SublimeTextGenerateSyntaxFile(editorIR, syntaxFile, []string{".lspec"}, false)
 }
 
 // ------------------------------------------------------------- NODE BINDING

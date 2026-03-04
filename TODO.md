@@ -11,11 +11,11 @@ In this file I will outline the things I still need/want to do for LSPEC.
 - [x] Fix Editor Engine bug where a certain override causes subsequent content to be invalid.
 	- FIXED ON 03 March 2026 @ 06.52pm
 - [ ] Complete Pattern section syntax.
-	- [ ] Plus
+	- [X] Plus -- DONE ON 04 March 2026 @ 07.25pm
 	- [ ] Optional
 	- [ ] Repeat(min, max)
-	- [ ] Negation
-	- [ ] Grouping
+	- [X] Negation -- DONE ON 04 March 2026 @ 07.25pm
+	- [X] Grouping -- DONE ON 04 March 2026 @ 07.25pm
 - [ ] Test LSpec LSpec lexemes against Go compiler
 	- [ ] Add all current LSpec patterns & lexemes to input.lspec
 	- [ ] Build initial compiler stage for compiling patterns to Regula

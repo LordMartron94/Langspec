@@ -102,9 +102,9 @@ func (g *GrammarDefiner) expectPairWithChildNodes(
 	secondTokenNode LangSpecParserNodeKind,
 	firstToken, secondToken LangSpecLexerTokenType,
 ) Rule {
-	concatID := LangSpecGrammarIDFromNodeWithSuffix(constructNode, "")
-	firstTokenID := LangSpecGrammarIDFromNodeWithSuffix(firstTokenNode, "")
-	secondTokenID := LangSpecGrammarIDFromNodeWithSuffix(secondTokenNode, "")
+	concatID := LangSpecGrammarIDFromNode(constructNode)
+	firstTokenID := LangSpecGrammarIDFromNode(firstTokenNode)
+	secondTokenID := LangSpecGrammarIDFromNode(secondTokenNode)
 	return g.rb.Token.ExpectPairWithChildGrammarIDs(concatID, firstTokenID, secondTokenID, constructNode, firstToken, secondToken)
 }
 
@@ -179,6 +179,24 @@ func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int
 		Token:             tok,
 		LeftBP:            leftBP,
 		RightBP:           rightBP,
+		NodeKind:          node,
+		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
+	}
+}
+
+func (g *GrammarDefiner) PrefixOp(tok LangSpecLexerTokenType, rightBP int, node LangSpecParserNodeKind) rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
+	return rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		Token:             tok,
+		RightBP:           rightBP,
+		NodeKind:          node,
+		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
+	}
+}
+
+func (g *GrammarDefiner) PostfixOp(tok LangSpecLexerTokenType, leftBP int, node LangSpecParserNodeKind) rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
+	return rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		Token:             tok,
+		LeftBP:            leftBP,
 		NodeKind:          node,
 		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
 	}
