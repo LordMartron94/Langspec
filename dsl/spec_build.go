@@ -46,6 +46,7 @@ const (
 	TokSeparator // .
 	TokNegation  // !
 	TokPlus      // +
+	TokOptional  // ?
 
 	// -- Literals --
 	TokStringLiteral
@@ -139,6 +140,7 @@ const (
 	NodePatternStringLiteral
 	NodePatternGroup
 	NodePatternSegment
+	NodePatternOptional
 
 	NodeLocalVariable
 )
@@ -175,6 +177,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokAssignment, "keyword.operator.assignment", ":", 0},
 		{TokChainSeparator, "punctuation.separator.chain", "->", 0},
 		{TokEqualsOperator, "keyword.operator.assignment", "=", 0},
+		{TokOptional, "keyword.operator.optional", "?", 0},
 		{TokVarRef, "keyword.operator.variable", "$", 0},
 		{TokRange, "keyword.operator.range", "..", 0},
 		{TokStar, "keyword.operator.star", "*", 0},
@@ -398,6 +401,7 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokStar, 30, NodePatternStar),
 			b.g.PostfixOp(TokPlus, 30, NodePatternPlus),
+			b.g.PostfixOp(TokOptional, 30, NodePatternOptional),
 		},
 
 		// INFIX: Bindings BETWEEN expressions

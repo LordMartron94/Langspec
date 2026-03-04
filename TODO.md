@@ -12,7 +12,7 @@ In this file I will outline the things I still need/want to do for LSPEC.
 	- FIXED ON 03 March 2026 @ 06.52pm
 - [ ] Complete Pattern section syntax.
 	- [X] Plus -- DONE ON 04 March 2026 @ 07.25pm
-	- [ ] Optional
+	- [X] Optional -- DONE ON 04 March 2026 @ 09.15pm
 	- [ ] Repeat(min, max)
 	- [X] Negation -- DONE ON 04 March 2026 @ 07.25pm
 	- [X] Grouping -- DONE ON 04 March 2026 @ 07.25pm
