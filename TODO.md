@@ -13,7 +13,7 @@ In this file I will outline the things I still need/want to do for LSPEC.
 - [ ] Complete Pattern section syntax.
 	- [X] Plus -- DONE ON 04 March 2026 @ 07.25pm
 	- [X] Optional -- DONE ON 04 March 2026 @ 09.15pm
-	- [ ] Repeat(min, max)
+	- [X] Repeat(min, max) -- DONE ON 04 March 2026 @ 09.32pm
 	- [X] Negation -- DONE ON 04 March 2026 @ 07.25pm
 	- [X] Grouping -- DONE ON 04 March 2026 @ 07.25pm
 - [ ] Test LSpec LSpec lexemes against Go compiler

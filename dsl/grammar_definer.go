@@ -62,7 +62,7 @@ using the same GrammarID as the enclosing rule (derived from node). Use for
 punctuation slots inside a sequence (e.g. semicolon after a lex rule).
 */
 func (g *GrammarDefiner) expectVirtualInRule(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
-	return g.rb.Token.ExpectVirtual(LangSpecGrammarIDFromNodeWithSuffix(node, ""), tok)
+	return g.rb.Token.ExpectVirtual(LangSpecGrammarIDFromNode(node), tok)
 }
 
 /*
@@ -70,7 +70,7 @@ expectOneOf returns a rule that expects one of the given tokens and creates an L
 of that kind. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectOneOf(node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Token.ExpectOneOf(grammarID, node, tokens...)
 }
 
@@ -87,7 +87,7 @@ expectPair returns a rule that expects two tokens in sequence and creates a sing
 with both lexemes attached. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
 */
 func (g *GrammarDefiner) expectPair(node LangSpecParserNodeKind, firstToken, secondToken LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Token.ExpectPair(grammarID, node, firstToken, secondToken)
 }
 
@@ -134,7 +134,7 @@ func (g *GrammarDefiner) TransparentNestByNode(node LangSpecParserNodeKind, suff
 RootByNode builds a root rule with grammar ID derived from node (suffix "").
 */
 func (g *GrammarDefiner) RootByNode(node LangSpecParserNodeKind, transparent bool, rules ...Rule) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Rule.Root(grammarID, node, transparent, rules...)
 }
 
@@ -150,7 +150,7 @@ func (g *GrammarDefiner) TransparentZeroOrMoreByNode(node LangSpecParserNodeKind
 NestByNode builds a nest (open ... close) with grammar ID derived from node (suffix "").
 */
 func (g *GrammarDefiner) NestByNode(node LangSpecParserNodeKind, open, close LangSpecLexerTokenType, body Rule) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Rule.Nest(grammarID, node, open, close, body)
 }
 
@@ -158,7 +158,7 @@ func (g *GrammarDefiner) NestByNode(node LangSpecParserNodeKind, open, close Lan
 ChoiceByNode builds a choice over rules with grammar ID derived from node (suffix "").
 */
 func (g *GrammarDefiner) ChoiceByNode(node LangSpecParserNodeKind, rules ...Rule) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Rule.Choice(grammarID, rules...)
 }
 
@@ -166,7 +166,7 @@ func (g *GrammarDefiner) ChoiceByNode(node LangSpecParserNodeKind, rules ...Rule
 OptionalSuffixByNode builds an optional-suffix rule (rule followed by optional tok) with grammar ID and node derived from node (suffix "").
 */
 func (g *GrammarDefiner) OptionalSuffixByNode(node LangSpecParserNodeKind, rule Rule, tok LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Rule.OptionalSuffix(grammarID, node, rule, tok)
 }
 
@@ -180,7 +180,7 @@ func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int
 		LeftBP:            leftBP,
 		RightBP:           rightBP,
 		NodeKind:          node,
-		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
+		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
 	}
 }
 
@@ -189,7 +189,7 @@ func (g *GrammarDefiner) PrefixOp(tok LangSpecLexerTokenType, rightBP int, node 
 		Token:             tok,
 		RightBP:           rightBP,
 		NodeKind:          node,
-		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
+		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
 	}
 }
 
@@ -198,7 +198,26 @@ func (g *GrammarDefiner) PostfixOp(tok LangSpecLexerTokenType, leftBP int, node 
 		Token:             tok,
 		LeftBP:            leftBP,
 		NodeKind:          node,
-		TokenGrammarLabel: LangSpecGrammarIDFromNodeWithSuffix(node, ""),
+		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
+	}
+}
+
+/*
+PostfixRuleOp returns a Pratt postfix rule operator descriptor.
+It binds a trigger token to an executable sub-rule (e.g., for composite bounds like {min,max}).
+*/
+func (g *GrammarDefiner) PostfixRuleOp(
+	tok LangSpecLexerTokenType,
+	leftBP int,
+	node LangSpecParserNodeKind,
+	r Rule,
+) rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind] {
+	return rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+		TriggerToken:      tok,
+		LeftBP:            leftBP,
+		NodeKind:          node,
+		Rule:              r,
+		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
 	}
 }
 
@@ -213,7 +232,7 @@ func (g *GrammarDefiner) block(
 	kwTok LangSpecLexerTokenType,
 	bodyRule Rule,
 ) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Rule.Sequence(
 		grammarID,
 		node,
@@ -238,7 +257,7 @@ func (g *GrammarDefiner) blockByRule(
 	kwRule Rule,
 	bodyRule Rule,
 ) Rule {
-	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, "")
+	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.rb.Rule.Sequence(
 		grammarID,
 		node,

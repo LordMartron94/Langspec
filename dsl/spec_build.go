@@ -39,6 +39,7 @@ const (
 	TokAssignment // :
 	TokEqualsOperator
 	TokMetaSection // %%
+	TokComma
 
 	TokPipe
 	TokRange
@@ -141,6 +142,9 @@ const (
 	NodePatternGroup
 	NodePatternSegment
 	NodePatternOptional
+	NodePatternRepetition
+	NodeRepetitionMin
+	NodeRepetitionMax
 
 	NodeLocalVariable
 )
@@ -172,6 +176,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokBraceClose, "punctuation.section.braces.end", "}", 0},
 		{TokParenOpen, "punctuation.section.parens.begin", "(", 0},
 		{TokParenClose, "punctuation.section.parens.end", ")", 0},
+		{TokComma, "punctuation.separator.comma", ",", 0},
 		{TokPlus, "keyword.operator.plus", "+", 0},
 		{TokNegation, "keyword.operator.negation", "!", 0},
 		{TokAssignment, "keyword.operator.assignment", ":", 0},
@@ -404,6 +409,11 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 			b.g.PostfixOp(TokOptional, 30, NodePatternOptional),
 		},
 
+		// POSTFIX RULES: Composite postfix bindings that require full sub-rule execution
+		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+			b.g.PostfixRuleOp(TokBraceOpen, 30, NodePatternRepetition, b.patternRepetition()),
+		},
+
 		// INFIX: Bindings BETWEEN expressions
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
@@ -415,7 +425,8 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 			RightBP:  19,
 			NodeKind: NodePatternConcat,
 		},
-		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
+
+		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon},
 	}
 
 	return b.g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
@@ -445,6 +456,35 @@ func (b *dslGrammarBuilder) patternRange() Rule {
 		expectVirtualInRule(TokRange).
 		expectToken(NodeCharLiteral, TokCharLiteral).
 		build()
+}
+
+func (b *dslGrammarBuilder) patternRepetition() Rule {
+	return b.g.NestByNode(
+		NodePatternRepetition,
+		TokBraceOpen,
+		TokBraceClose,
+		b.repetitionBounds(),
+	)
+}
+
+func (b *dslGrammarBuilder) repetitionBounds() Rule {
+	return b.g.ChoiceByNode(
+		NodePatternRepetition,
+		b.rangedRepetition(),
+		b.exactRepetition(),
+	)
+}
+
+func (b *dslGrammarBuilder) rangedRepetition() Rule {
+	return b.g.sequence(NodePatternRepetition, "RANGED").
+		optionalToken(NodeRepetitionMin, TokInteger).
+		expectVirtualInRule(TokComma).
+		optionalToken(NodeRepetitionMax, TokInteger).
+		build()
+}
+
+func (b *dslGrammarBuilder) exactRepetition() Rule {
+	return b.g.expectToken(NodeRepetitionMin, TokInteger)
 }
 
 // ----------------------------------------------------------- LEX SECTION
