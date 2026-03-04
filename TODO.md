@@ -10,7 +10,7 @@ In this file I will outline the things I still need/want to do for LSPEC.
 	- FIXED ON 03 March 2026 @ 06.35pm
 - [x] Fix Editor Engine bug where a certain override causes subsequent content to be invalid.
 	- FIXED ON 03 March 2026 @ 06.52pm
-- [ ] Complete Pattern section syntax.
+- [X] Complete Pattern section syntax. -- DONE ON 04 March 2026 @ 09.32pm
 	- [X] Plus -- DONE ON 04 March 2026 @ 07.25pm
 	- [X] Optional -- DONE ON 04 March 2026 @ 09.15pm
 	- [X] Repeat(min, max) -- DONE ON 04 March 2026 @ 09.32pm

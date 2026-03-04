@@ -1190,11 +1190,12 @@ type includeAnalysis[TToken comparable] struct {
 	TriggerIDs       []StateID
 	OverrideIDs      []StateID
 	ConstructIDs     []StateID
+	DirectNestIDs    []StateID
 }
 
 func extractIncludes[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	plan *IRPlan[TToken], // Optional: Pass nil to ignore plan checks
+	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
 	contextRoot *syntaxa.Grammar[TToken],
 	isRoot bool,
@@ -1204,6 +1205,7 @@ func extractIncludes[TToken, TTokenRole comparable](
 	var overrides []StateID
 	overrides = append(overrides, a.ConstructIDs...)
 	overrides = append(overrides, a.OverrideIDs...)
+	overrides = append(overrides, a.DirectNestIDs...)
 
 	return a.ValidTokens, overrides, a.TriggerIDs
 }
@@ -1231,9 +1233,10 @@ func traverseIncludes[TToken, TTokenRole comparable](
 	seenTriggers := make(map[StateID]bool)
 	seenOverrides := make(map[StateID]bool)
 	seenConstructs := make(map[StateID]bool)
+	seenDirectNests := make(map[StateID]bool)
 
 	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		// 1. Semantic Discovery: Add everything the grammar says is valid at this point
+		// 1. Semantic Discovery
 		if analysis != nil && n != nil && n.NodePath != nil {
 			first := syntaxa.GrammarAnalysisFirst(analysis, n)
 			for tok := range first {
@@ -1241,21 +1244,19 @@ func traverseIncludes[TToken, TTokenRole comparable](
 			}
 		}
 
-		// 2. Structural Construction: Handled by custom state chains
+		// 2. Structural Construction
 		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
 			if plan == nil || plan.containsConstruct(n.GrammarLabel) {
 				cid := nodeConstructEntryStateID(n.GrammarLabel)
 				if !seenConstructs[cid] {
 					seenConstructs[cid] = true
 					out.ConstructIDs = append(out.ConstructIDs, cid)
-					// We don't suppress tokens here because constructs typically
-					// encapsulate multiple steps, but watch this if you see overlap.
 				}
 				return true, false
 			}
 		}
 
-		// 3. Sequence Triggers: Hijack the token for a specific transition
+		// 3. Sequence Triggers
 		if n.Kind == syntaxa.GConcat {
 			for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
 				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
@@ -1267,7 +1268,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 			}
 		}
 
-		// 4. Role-based overrides and base token inclusion
+		// 4. Role-based overrides, base token inclusion, and direct nest triggers
 		switch editorIRRole(n) {
 		case EditorIRRoleToken:
 			if oc, ok := config.nodeOverrides[n.GrammarLabel]; ok && oc.HasAnyScope() {
@@ -1283,8 +1284,16 @@ func traverseIncludes[TToken, TTokenRole comparable](
 
 		case EditorIRRoleNest:
 			if isRoot || n != root {
-				if n.OpenToken != nil {
-					out.ValidTokens[*n.OpenToken] = struct{}{}
+				nestLabel := sanitizeContextName(string(n.GrammarLabel))
+				directTriggerID := StateID(produceStateID("direct_trigger_" + nestLabel))
+
+				if !seenDirectNests[directTriggerID] {
+					seenDirectNests[directTriggerID] = true
+					out.DirectNestIDs = append(out.DirectNestIDs, directTriggerID)
+
+					if n.OpenToken != nil {
+						out.SuppressedTokens[*n.OpenToken] = struct{}{}
+					}
 				}
 				return true, false
 			}
@@ -1293,7 +1302,6 @@ func traverseIncludes[TToken, TTokenRole comparable](
 		return false, false
 	})
 
-	// Final cleanup: Remove any tokens that were "promoted" to triggers or overrides
 	for tok := range out.SuppressedTokens {
 		delete(out.ValidTokens, tok)
 	}
@@ -1614,36 +1622,52 @@ func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNode
 		openStateLabel := sanitizeContextName(config.formatter(nest.Open))
 		openStateID := StateID(produceStateID(openStateLabel))
 
+		var targetID StateID
+
 		if customStates, entryID, handled := tryApplyNestOverride(config, nest, nestLabel, tokenPatternMap); handled {
 			nestBodyRegistry[nest.ID] = entryID
+			targetID = entryID
 			if isUniqueToken {
 				mutateStateAction(allStates, openStateID, ACTION_PUSH, entryID)
 			} else {
 				nestRegistry[nest.ID] = entryID
 			}
 			allStates = append(allStates, customStates...)
-			continue
-		}
-
-		bodyStateID := StateID(produceStateID(nestLabel))
-		nestBodyRegistry[nest.ID] = bodyStateID
-
-		bodyState := buildBodyStatePlanned(config, plan, grammarPackage.Analysis, nest, nestLabel, tokenPatternMap, bodyStateID, tokensInUse)
-		allStates = append(allStates, bodyState)
-
-		if isUniqueToken {
-			mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
 		} else {
-			entryGrammar := grammarPackage.Grammars[grammarPackage.EntryRule]
+			bodyStateID := StateID(produceStateID(nestLabel))
+			nestBodyRegistry[nest.ID] = bodyStateID
+			targetID = bodyStateID
 
-			expectAnalysis := collectExpectStateIncludes(config, plan, grammarPackage.Analysis, entryGrammar, nest.ID)
+			bodyState := buildBodyStatePlanned(config, plan, grammarPackage.Analysis, nest, nestLabel, tokenPatternMap, bodyStateID, tokensInUse)
+			allStates = append(allStates, bodyState)
 
-			expectStateID := StateID(produceStateID(nestLabel + "_expect"))
-			expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID, expectAnalysis, tokensInUse)
-
-			nestRegistry[nest.ID] = expectStateID
-			allStates = append(allStates, expectState)
+			if isUniqueToken {
+				mutateStateAction(allStates, openStateID, ACTION_PUSH, bodyStateID)
+			} else {
+				entryGrammar := grammarPackage.Grammars[grammarPackage.EntryRule]
+				expectAnalysis := collectExpectStateIncludes(config, plan, grammarPackage.Analysis, entryGrammar, nest.ID)
+				expectStateID := StateID(produceStateID(nestLabel + "_expect"))
+				expectState := buildExpectState(config, nest, nestLabel, tokenPatternMap, expectStateID, bodyStateID, expectAnalysis, tokensInUse)
+				nestRegistry[nest.ID] = expectStateID
+				allStates = append(allStates, expectState)
+			}
 		}
+
+		directTriggerID := StateID(produceStateID("direct_trigger_" + nestLabel))
+		openRegex, _ := tokenPatternMap[nest.Open].ToRegEx()
+
+		allStates = append(allStates, State{
+			ID:    directTriggerID,
+			Label: "direct_trigger_" + nestLabel,
+			Rules: []StateRule{{
+				ID:           StateRuleID(directTriggerID),
+				Label:        "direct_trigger_" + nestLabel + "_match",
+				RegEx:        openRegex,
+				Scope:        getScopeString([]string{config.scopeProvider(nest.Open)}, config.scopeExtension),
+				Action:       ACTION_PUSH,
+				ActionTarget: targetID,
+			}},
+		})
 	}
 
 	return allStates, nestRegistry, nestBodyRegistry
