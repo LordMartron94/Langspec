@@ -992,9 +992,8 @@ func buildLookaheadRules[TToken, TTokenRole comparable](
 func getTransition(baseLabel string, currentIndex, targetIndex, stepCount int, isRepeating bool, recoveryStateID StateID) (RuleAction, StateID) {
 	if targetIndex >= stepCount {
 		if !isRepeating {
-			return ACTION_SET, recoveryStateID
+			return ACTION_POP, 0
 		}
-
 		if currentIndex == 0 {
 			return ACTION_MATCH, 0
 		}
@@ -1284,25 +1283,41 @@ func traverseIncludes[TToken, TTokenRole comparable](
 		}
 
 		// 2. Structural Construction
-		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
-			if plan == nil || plan.containsConstruct(n.GrammarLabel) {
+		if n.Kind == syntaxa.GConcat {
+			isConstruct := false
+			if plan != nil {
+				isConstruct = plan.containsConstruct(n.GrammarLabel)
+			} else {
+				isConstruct = hasNodeOverrides(config, n) || requiresStructuralChain(n)
+			}
+
+			if isConstruct {
 				cid := nodeConstructEntryStateID(n.GrammarLabel)
 				if !seenConstructs[cid] {
 					seenConstructs[cid] = true
 					out.ConstructIDs = append(out.ConstructIDs, cid)
 				}
-				return true, false
+				return true, false // Skip children
 			}
 		}
 
 		// 3. Sequence Triggers
 		if n.Kind == syntaxa.GConcat {
-			for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
-				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
-				if !seenTriggers[id] {
-					seenTriggers[id] = true
-					out.TriggerIDs = append(out.TriggerIDs, id)
-					out.SuppressedTokens[p.Token] = struct{}{}
+			isConstruct := false
+			if plan != nil {
+				isConstruct = plan.containsConstruct(n.GrammarLabel)
+			} else {
+				isConstruct = hasNodeOverrides(config, n) || requiresStructuralChain(n)
+			}
+
+			if !isConstruct {
+				for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
+					id := deriveTriggerID(config.formatter(p.Token), p.NestID)
+					if !seenTriggers[id] {
+						seenTriggers[id] = true
+						out.TriggerIDs = append(out.TriggerIDs, id)
+						out.SuppressedTokens[p.Token] = struct{}{}
+					}
 				}
 			}
 		}
@@ -1568,8 +1583,25 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 	}
 
 	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
-		if n.Kind == syntaxa.GConcat && hasNodeOverrides(config, n) {
-			plan.ConstructConacts[n.GrammarLabel] = struct{}{}
+		if n.Kind == syntaxa.GConcat {
+			isGlobalRoot := (n == root)
+			isConstruct := hasNodeOverrides(config, n) || (!isGlobalRoot && requiresStructuralChain(n))
+
+			if isConstruct {
+				plan.ConstructConacts[n.GrammarLabel] = struct{}{}
+			} else {
+				for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
+					id := deriveTriggerID(config.formatter(p.Token), p.NestID)
+					if _, exists := plan.SeqTriggers[id]; !exists {
+						plan.SeqTriggers[id] = seqTriggerSpec[TToken]{
+							ID:         id,
+							Label:      fmt.Sprintf("seq_trigger_%s", sanitizeContextName(string(p.NestID))),
+							Token:      p.Token,
+							TargetNest: p.NestID,
+						}
+					}
+				}
+			}
 		}
 
 		if n.Kind == syntaxa.GToken {
@@ -1577,25 +1609,10 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 				plan.OverrideTokens[n.GrammarLabel] = struct{}{}
 			}
 		}
-
-		if n.Kind == syntaxa.GConcat {
-			for _, p := range syntaxa.GrammarSequenceTokenNestPairs(analysis, n) {
-				id := deriveTriggerID(config.formatter(p.Token), p.NestID)
-				if _, exists := plan.SeqTriggers[id]; !exists {
-					plan.SeqTriggers[id] = seqTriggerSpec[TToken]{
-						ID:         id,
-						Label:      fmt.Sprintf("seq_trigger_%s", sanitizeContextName(string(p.NestID))),
-						Token:      p.Token,
-						TargetNest: p.NestID,
-					}
-				}
-			}
-		}
 		return false, false
 	})
 	return plan
 }
-
 func buildBodyStatePlanned[TToken, TTokenRole comparable](
 	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
 	plan *IRPlan[TToken],
@@ -1766,7 +1783,28 @@ func optimizeAutomaton(allStates []State) []State {
 	roots := getRootStateIDs(allStates)
 	reachable := markReachableStates(stateMap, roots)
 
-	return sweepUnreachable(allStates, reachable)
+	prunedStates := sweepUnreachable(allStates, reachable)
+
+	return pruneDanglingEdges(prunedStates)
+}
+
+func pruneDanglingEdges(states []State) []State {
+	validIDs := make(map[StateID]struct{}, len(states))
+	for _, s := range states {
+		validIDs[s.ID] = struct{}{}
+	}
+
+	for i := range states {
+		var validIncludes []StateID
+		for _, inc := range states[i].Includes {
+			if _, exists := validIDs[inc]; exists {
+				validIncludes = append(validIncludes, inc)
+			}
+		}
+		states[i].Includes = validIncludes
+	}
+
+	return states
 }
 
 func mapStatesByID(states []State) map[StateID]State {
@@ -1848,4 +1886,17 @@ func appendStrictSequenceBailout(rules []StateRule, stateLabel string, recoveryS
 	}
 
 	return append(rules, bailoutRule)
+}
+
+func requiresStructuralChain[TToken comparable](node *syntaxa.Grammar[TToken]) bool {
+	if node == nil || node.Kind != syntaxa.GConcat {
+		return false
+	}
+
+	for _, child := range node.Children {
+		if editorIRRole(child) == EditorIRRoleNest {
+			return true
+		}
+	}
+	return false
 }
