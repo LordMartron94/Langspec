@@ -826,22 +826,30 @@ func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainC
 	role := editorIRRole(child)
 
 	config := chainCtx.Env.Config
+
+	var laSuffix string
+	if index == 0 && index+1 < stepCount {
+		suffixFirst := syntaxa.GrammarAnalysisFirstOfSuffix(chainCtx.Env.Analysis, chainCtx.ConcatNode, index+1)
+		if la, ok := buildLookaheadForTokens(suffixFirst, chainCtx.Env.TokenPatternMap); ok {
+			laSuffix = la
+		}
+	}
+
 	var rules []StateRule
 	var includes []StateID
 
 	switch role {
 	case EditorIRRoleNest:
-		rules, _ = handleNestConstructStep(chainCtx, child, index, lbl, nil)
-		includes = nil
+		rules, _ = handleNestConstructStep(chainCtx, child, index, lbl, nil, laSuffix)
 	case EditorIRRoleToken:
 		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
-		rules, includes = handleTokenConstructStep(chainCtx, child, index, lbl, includes)
+		rules, includes = handleTokenConstructStep(chainCtx, child, index, lbl, includes, laSuffix)
 	case EditorIRRoleSegment, EditorIRRoleEpsilon:
 		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
-		rules, includes = handleSegmentConstructStep(chainCtx, child, index, lbl, includes)
+		rules, includes = handleSegmentConstructStep(chainCtx, child, index, lbl, includes, laSuffix)
 	default:
 		includes = buildIncludesForNode(config, chainCtx.Env.Analysis, child, chainCtx.Env.TokensInUse)
-		rules, includes = handleSegmentConstructStep(chainCtx, child, index, lbl, includes)
+		rules, includes = handleSegmentConstructStep(chainCtx, child, index, lbl, includes, laSuffix)
 	}
 
 	if index > 0 {
@@ -866,9 +874,14 @@ func handleNestConstructStep[TToken, TTokenRole comparable](
 	index int,
 	lbl string,
 	includes []StateID,
+	laSuffix string,
 ) ([]StateRule, []StateID) {
 	targetID := chainCtx.Env.NestBodyRegistry[child.GrammarLabel]
 	regex, _ := chainCtx.Env.TokenPatternMap[*child.OpenToken].ToRegEx()
+
+	if laSuffix != "" {
+		regex += laSuffix
+	}
 
 	pushRule := StateRule{
 		ID:           StateRuleID(produceStateID(lbl + "_push")),
@@ -899,6 +912,7 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	index int,
 	lbl string,
 	includes []StateID,
+	laSuffix string,
 ) ([]StateRule, []StateID) {
 	env := chainCtx.Env
 	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
@@ -906,7 +920,7 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	if _, hasTokOverride := env.Config.overrides[child.Token]; hasTokOverride {
 		return buildLookaheadRules(chainCtx, index, action, nextID), includes
 	}
-	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action), nil
+	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action, laSuffix), nil
 }
 
 func handleSegmentConstructStep[TToken, TTokenRole comparable](
@@ -915,18 +929,12 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	index int,
 	lbl string,
 	includes []StateID,
+	laSuffix string,
 ) ([]StateRule, []StateID) {
-	action, nextID := getTransition(
-		baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel),
-		index,
-		index+1,
-		chainCtx.StepCount,
-		chainCtx.IsRepeating,
-		chainCtx.RecoveryStateID,
-	)
+	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
 
 	if isTerminalStep(index, chainCtx.StepCount) {
-		rules := buildTerminalSegmentRules(chainCtx, child, lbl, action, nextID)
+		rules := buildTerminalSegmentRules(chainCtx, child, lbl, action, nextID, laSuffix)
 		return rules, nil
 	}
 
@@ -943,9 +951,10 @@ func buildTerminalSegmentRules[TToken, TTokenRole comparable](
 	lbl string,
 	action RuleAction,
 	nextID StateID,
+	laSuffix string,
 ) []StateRule {
 	env := chainCtx.Env
-	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action)
+	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action, laSuffix)
 }
 
 func buildIntermediateSegmentRules[TToken, TTokenRole comparable](
@@ -1505,6 +1514,7 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 	nextID StateID,
 	stateLabel string,
 	action RuleAction,
+	laSuffix string,
 ) []StateRule {
 	if node == nil {
 		return nil
@@ -1519,6 +1529,11 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 			}
 			scope := resolveScopeForTokenNode(config, n)
 			regex, _ := tokenPatternMap[n.Token].ToRegEx()
+
+			if laSuffix != "" {
+				regex += laSuffix
+			}
+
 			lexerPriority := tokenPriorityMap[n.Token]
 			rulePriority := PriorityDefault - lexerPriority
 			rules = append(rules, StateRule{
