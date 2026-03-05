@@ -916,7 +916,46 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	lbl string,
 	includes []StateID,
 ) ([]StateRule, []StateID) {
-	action, nextID := getTransition(baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel), index, index+1, chainCtx.StepCount, chainCtx.IsRepeating, chainCtx.RecoveryStateID)
+	action, nextID := getTransition(
+		baseLabelForTransition(chainCtx.ConcatNode.GrammarLabel),
+		index,
+		index+1,
+		chainCtx.StepCount,
+		chainCtx.IsRepeating,
+		chainCtx.RecoveryStateID,
+	)
+
+	if isTerminalStep(index, chainCtx.StepCount) {
+		rules := buildTerminalSegmentRules(chainCtx, child, lbl, action, nextID)
+		return rules, nil
+	}
+
+	return buildIntermediateSegmentRules(chainCtx, child, index, action, nextID, includes)
+}
+
+func isTerminalStep(index, stepCount int) bool {
+	return index+1 >= stepCount
+}
+
+func buildTerminalSegmentRules[TToken, TTokenRole comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	child *syntaxa.Grammar[TToken],
+	lbl string,
+	action RuleAction,
+	nextID StateID,
+) []StateRule {
+	env := chainCtx.Env
+	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action)
+}
+
+func buildIntermediateSegmentRules[TToken, TTokenRole comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	child *syntaxa.Grammar[TToken],
+	index int,
+	action RuleAction,
+	nextID StateID,
+	includes []StateID,
+) ([]StateRule, []StateID) {
 	rules := buildLookaheadRules(chainCtx, index, action, nextID)
 	if child != nil && child.Kind == syntaxa.GOptional {
 		for i := range rules {
