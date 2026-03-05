@@ -76,6 +76,7 @@ const (
 	VirtualHeaderSeparator
 	VirtualMetaAssignment
 	VirtualPatternExpression
+	VirtualParseExpression
 )
 
 /*
@@ -94,6 +95,8 @@ func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarLabel {
 		return "META ASSIGNMENT"
 	case VirtualPatternExpression:
 		return "PATTERN EXPRESSION"
+	case VirtualParseExpression:
+		return "PARSE EXPRESSION"
 	default:
 		return syntaxa.GrammarLabel("VIRTUAL_UNKNOWN")
 	}

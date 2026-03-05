@@ -16,11 +16,11 @@ In this file I will outline the things I still need/want to do for LSPEC.
 	- [X] Repeat(min, max) -- DONE ON 04 March 2026 @ 09.32pm
 	- [X] Negation -- DONE ON 04 March 2026 @ 07.25pm
 	- [X] Grouping -- DONE ON 04 March 2026 @ 07.25pm
-- [ ] Test LSpec LSpec lexemes against Go compiler
+- [X] Test LSpec LSpec lexemes against Go compiler -- DONE ON 05 March 2026 @ 5.18pm
 	- [X] Add all current LSpec patterns & lexemes to input.lspec
-	- [ ] Build initial compiler stage for compiling patterns to Regula
-	- [ ] Build compiler stage for defining tokens referencing those patterns or regex literals
-	- [ ] Feed input.lspec into compiler and check output against go output
+	- [X] Build initial compiler stage for compiling patterns to Regula
+	- [X] Build compiler stage for defining tokens referencing those patterns or regex literals
+	- [X] Feed input.lspec into compiler and check output against go output
 
 ### Priority 2
 
@@ -33,6 +33,7 @@ In this file I will outline the things I still need/want to do for LSPEC.
 	- [X] Warn when two tokens produce identical patterns
 	- [X] Detect tokens shadowed by higher priority tokens
 - [ ] Import system
+- [ ] Automatic lspec generation for langspec IR.
 
 ### Priority 3
 

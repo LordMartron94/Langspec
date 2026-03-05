@@ -84,6 +84,18 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 			dsl.TokKWFalse:       {"entity.other.attribute-value", "constant.language.bool"},
 		},
 	},
+	dsl.NodeParseRuleName: {
+		Scopes: []string{"entity.name.function.parser-rule"},
+	},
+	dsl.NodeParseNodeName: {
+		Scopes: []string{"entity.name.type.parser-node"},
+	},
+	dsl.NodeParseTokenReference: {
+		Scopes: []string{"constant.language.token-reference"},
+	},
+	dsl.NodeParseRuleReference: {
+		Scopes: []string{"entity.name.function.rule-reference"},
+	},
 }
 
 // ------------------------------------------------------------- PATTERN BUILDING

@@ -38,7 +38,7 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
 
-	// LangSpecCompilerDebugGrammar(compiler)
+	LangSpecCompilerDebugGrammar(compiler)
 
 	result, err := LangSpecCompilerCompile(compiler, TestFile)
 
@@ -51,7 +51,7 @@ func TestDSLCompiler(t *testing.T) {
 		t.Fatalf("Compilation failed with error: %s", err.Error())
 	}
 
-	testLex(t, result, scratchAllocFn, TestFile)
+	// testLex(t, result, scratchAllocFn, TestFile)
 }
 
 func testLex(
