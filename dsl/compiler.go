@@ -97,6 +97,8 @@ type LangSpecCompiler struct {
 	programRule   Rule
 
 	sessionCache *langspec.LangParserSession[rune]
+
+	diagnosticWriter io.Writer
 }
 
 /* LangSpecCompilerCreate constructs a compiler instance. */
@@ -114,13 +116,19 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 		getValidationStages()...,
 	)
 
+	var w io.Writer
+	if compilerConfig.diagnosticSink != nil && compilerConfig.diagnosticSink.Writer != nil {
+		w = compilerConfig.diagnosticSink.Writer
+	}
+
 	return &LangSpecCompiler{
-		config:          compilerConfig,
-		languageSpec:    spec,
-		parser:          parser,
-		validatorConfig: validationConfig,
-		lexingRuleSet:   ruleset,
-		programRule:     programRule,
+		config:           compilerConfig,
+		languageSpec:     spec,
+		parser:           parser,
+		validatorConfig:  validationConfig,
+		lexingRuleSet:    ruleset,
+		programRule:      programRule,
+		diagnosticWriter: w,
 	}
 }
 
@@ -143,18 +151,84 @@ func LangSpecCompilerCompile(
 	compiler *LangSpecCompiler,
 	sourceFile string,
 ) (*LangSpecCompileResult, error) {
-
 	if !system.PathHasExt(sourceFile, ".lspec") {
 		return nil, fmt.Errorf("file is not a .lspec file: %s", sourceFile)
 	}
 
-	var w io.Writer
-	if compiler.config.diagnosticSink != nil && compiler.config.diagnosticSink.Writer != nil {
-		w = compiler.config.diagnosticSink.Writer
+	contentRune, _ := system.FileReadAllRunes(sourceFile)
+	session := getSession(compiler, sourceFile)
+
+	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
+		compiler.parser,
+		session,
+	)
+
+	result := &LangSpecCompileResult{
+		RootNode:     rootNode,
+		Trace:        trace,
+		SyntaxErrors: syntaxErrors,
 	}
 
-	contentRune, _ := system.FileReadAllRunes(sourceFile)
+	if syntaxErrors != nil && syntaxErrors.HasErrors() {
+		renderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors)
+		err = fmt.Errorf(
+			"langspec parse failed with %d syntax errors",
+			len(syntaxErrors.Errors),
+		)
+	}
 
+	// Validation entries
+	if !syntaxErrors.HasErrors() {
+		validationEntries, validationErr := validation.LSTValidatorRun(compiler.validatorConfig, rootNode)
+		if validationErr != nil {
+			err = validationErr
+		}
+
+		result.ValidationEntries = validationEntries
+
+		if validationEntries != nil && len(validationEntries.Results) > 0 {
+			renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries)
+
+			errorAmount := 0
+			for _, stage := range validationEntries.Results {
+				for _, entry := range stage.Entries {
+					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
+						errorAmount++
+					}
+				}
+			}
+
+			if errorAmount > 0 {
+				err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
+			}
+		}
+	}
+
+	return result, err
+}
+
+type CompilerDebugConfig struct {
+	DebugParseTrace bool
+	DebugLST        bool
+}
+
+func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string) error {
+	session := getSession(compiler, sourceFile)
+
+	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
+	if err != nil {
+		return fmt.Errorf("lexing error: %w", err)
+	}
+
+	renderLexemes(compiler.diagnosticWriter, lexemes,
+		func(t LangSpecLexerTokenType) string { return t.String() },
+		func(r LangSpecLexerTokenRole) string { return r.String() },
+	)
+
+	return nil
+}
+
+func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	grammarDump := compiler.programRule.GetGrammar().DebugDump(
 		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType]{
 			FormatKind:  syntaxa.GrammarKind.String,
@@ -176,119 +250,62 @@ func LangSpecCompilerCompile(
 		FormatToken: LangSpecLexerTokenType.String,
 	})
 
-	renderGrammarDumps(w, grammarDump, grammarPackageDump)
+	renderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump)
+}
 
-	session := getSession(compiler, sourceFile)
-
-	// lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("lexing error: %w", err)
-	// }
-
-	// renderLexemes(w, lexemes,
-	// 	func(t LangSpecLexerTokenType) string { return t.String() },
-	// 	func(r LangSpecLexerTokenRole) string { return r.String() },
-	// )
-
-	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
-		compiler.parser,
-		session,
-	)
-
-	result := &LangSpecCompileResult{
-		RootNode:     rootNode,
-		Trace:        trace,
-		SyntaxErrors: syntaxErrors,
+func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
+	if config.DebugParseTrace {
+		renderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })
 	}
 
-	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		renderSyntaxErrorsWithContext(w, contentRune, syntaxErrors)
-		err = fmt.Errorf(
-			"langspec parse failed with %d syntax errors",
-			len(syntaxErrors.Errors),
-		)
-	}
-
-	// renderParseTrace(w, trace, func(t LangSpecLexerTokenType) string { return t.String() })
-
-	// Validation entries
-	if !syntaxErrors.HasErrors() {
-		validationEntries, validationErr := validation.LSTValidatorRun(compiler.validatorConfig, rootNode)
-		if validationErr != nil {
-			err = validationErr
-		}
-
-		result.ValidationEntries = validationEntries
-
-		if validationEntries != nil && len(validationEntries.Results) > 0 {
-			renderValidationEntries(w, contentRune, validationEntries)
-
-			errorAmount := 0
-			for _, stage := range validationEntries.Results {
-				for _, entry := range stage.Entries {
-					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
-						errorAmount++
-					}
-				}
-			}
-
-			if errorAmount > 0 {
-				err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
-			}
-		}
-	}
-
-	// LST dump (visual ground truth)
-	dump := rootNode.DebugDump(
-		syntaxa.LSTDebugFormatter[
-			rune,
-			LangSpecLexerTokenType,
-			LangSpecLexerTokenRole,
-			LangSpecParserNodeKind,
-		]{
-			FormatKind: func(k LangSpecParserNodeKind) string {
-				return k.String()
-			},
-
-			FormatToken: func(l lexarch.Lexeme[
+	if config.DebugLST {
+		lstDump := result.RootNode.DebugDump(
+			syntaxa.LSTDebugFormatter[
 				rune,
 				LangSpecLexerTokenType,
 				LangSpecLexerTokenRole,
-			]) string {
-				return string(l.Raw)
+				LangSpecParserNodeKind,
+			]{
+				FormatKind: func(k LangSpecParserNodeKind) string {
+					return k.String()
+				},
+
+				FormatToken: func(l lexarch.Lexeme[
+					rune,
+					LangSpecLexerTokenType,
+					LangSpecLexerTokenRole,
+				]) string {
+					return string(l.Raw)
+				},
+
+				FormatAttribute: func(k string, v any) string {
+					return fmt.Sprintf("%s=%v", k, v)
+				},
+
+				/* ───── visual toggles ───── */
+
+				ShowTokens:     true,
+				ShowAttributes: true,
+
+				ShowByteSpan: true,
+				ShowLineSpan: true,
+
+				ShowNodeID:   true,
+				ShowRevision: false,
+
+				SlotPrefix: "@",
+
+				/* colors disabled for now */
+				ColorKind:      nil,
+				ColorToken:     nil,
+				ColorSpan:      nil,
+				ColorAttribute: nil,
 			},
+		)
 
-			FormatAttribute: func(k string, v any) string {
-				return fmt.Sprintf("%s=%v", k, v)
-			},
-
-			/* ───── visual toggles ───── */
-
-			ShowTokens:     true,
-			ShowAttributes: true,
-
-			ShowByteSpan: true,
-			ShowLineSpan: true,
-
-			ShowNodeID:   true,
-			ShowRevision: false,
-
-			SlotPrefix: "@",
-
-			/* colors disabled for now */
-			ColorKind:      nil,
-			ColorToken:     nil,
-			ColorSpan:      nil,
-			ColorAttribute: nil,
-		},
-	)
-
-	renderLSTDump(w, dump)
-
-	return result, err
+		renderLSTDump(compiler.diagnosticWriter, lstDump)
+	}
 }
-
-// --------------------------------------------------------------- PRIVATE HELPERS
 
 /*
 LangSpecCompilerScopeMap returns the token-to-scope map from the compiler's language spec.

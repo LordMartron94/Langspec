@@ -127,6 +127,7 @@ const (
 	NodePatternSection
 	NodePatternKeyword
 	NodePatternDefinition
+	NodePatternAny
 	NodePatternDefName
 	NodeVarRef
 	NodeVarRefToken
@@ -445,6 +446,7 @@ func (b *dslGrammarBuilder) patternSegment() Rule {
 		rangeRule,
 		b.charLiteral(),
 		b.g.expectToken(NodePatternStringLiteral, TokStringLiteral),
+		b.g.expectToken(NodePatternAny, TokDot),
 		b.g.NestByNode(NodePatternGroup, TokParenOpen, TokParenClose,
 			b.g.rb.Rule.Reference("PATTERN EXPR REF", VirtualGrammarIDToGrammarID(VirtualPatternExpression))),
 	)

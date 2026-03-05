@@ -37,30 +37,31 @@ func _() {
 	_ = x[NodePatternSection-27]
 	_ = x[NodePatternKeyword-28]
 	_ = x[NodePatternDefinition-29]
-	_ = x[NodePatternDefName-30]
-	_ = x[NodeVarRef-31]
-	_ = x[NodeVarRefToken-32]
-	_ = x[NodeVarRefTarget-33]
-	_ = x[NodePatternRange-34]
-	_ = x[NodeCharLiteral-35]
-	_ = x[NodePatternStar-36]
-	_ = x[NodePatternPlus-37]
-	_ = x[NodePatternNegation-38]
-	_ = x[NodePatternConcat-39]
-	_ = x[NodePatternAlternation-40]
-	_ = x[NodePatternStringLiteral-41]
-	_ = x[NodePatternGroup-42]
-	_ = x[NodePatternSegment-43]
-	_ = x[NodePatternOptional-44]
-	_ = x[NodePatternRepetition-45]
-	_ = x[NodeRepetitionMin-46]
-	_ = x[NodeRepetitionMax-47]
-	_ = x[NodeLocalVariable-48]
+	_ = x[NodePatternAny-30]
+	_ = x[NodePatternDefName-31]
+	_ = x[NodeVarRef-32]
+	_ = x[NodeVarRefToken-33]
+	_ = x[NodeVarRefTarget-34]
+	_ = x[NodePatternRange-35]
+	_ = x[NodeCharLiteral-36]
+	_ = x[NodePatternStar-37]
+	_ = x[NodePatternPlus-38]
+	_ = x[NodePatternNegation-39]
+	_ = x[NodePatternConcat-40]
+	_ = x[NodePatternAlternation-41]
+	_ = x[NodePatternStringLiteral-42]
+	_ = x[NodePatternGroup-43]
+	_ = x[NodePatternSegment-44]
+	_ = x[NodePatternOptional-45]
+	_ = x[NodePatternRepetition-46]
+	_ = x[NodeRepetitionMin-47]
+	_ = x[NodeRepetitionMax-48]
+	_ = x[NodeLocalVariable-49]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternStringLiteralNodePatternGroupNodePatternSegmentNodePatternOptionalNodePatternRepetitionNodeRepetitionMinNodeRepetitionMaxNodeLocalVariable"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternStringLiteralNodePatternGroupNodePatternSegmentNodePatternOptionalNodePatternRepetitionNodeRepetitionMinNodeRepetitionMaxNodeLocalVariable"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 477, 487, 502, 518, 534, 549, 564, 579, 598, 615, 637, 661, 677, 695, 714, 735, 752, 769, 786}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 675, 691, 709, 728, 749, 766, 783, 800}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

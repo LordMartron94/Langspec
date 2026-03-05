@@ -17,7 +17,7 @@ In this file I will outline the things I still need/want to do for LSPEC.
 	- [X] Negation -- DONE ON 04 March 2026 @ 07.25pm
 	- [X] Grouping -- DONE ON 04 March 2026 @ 07.25pm
 - [ ] Test LSpec LSpec lexemes against Go compiler
-	- [ ] Add all current LSpec patterns & lexemes to input.lspec
+	- [X] Add all current LSpec patterns & lexemes to input.lspec
 	- [ ] Build initial compiler stage for compiling patterns to Regula
 	- [ ] Build compiler stage for defining tokens referencing those patterns or regex literals
 	- [ ] Feed input.lspec into compiler and check output against go output
