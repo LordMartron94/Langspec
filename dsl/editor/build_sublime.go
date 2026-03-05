@@ -56,16 +56,23 @@ type NodeBinding struct {
 }
 
 var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
-	dsl.NodeDSLName:               {Scopes: []string{"entity.name.language"}},
-	dsl.NodePatternAlternation:    {Scopes: []string{"keyword.operator.alternation"}},
-	dsl.NodePatternDefName:        {Scopes: []string{"entity.name.variable.constant"}},
-	dsl.NodeVarRefToken:           {Scopes: []string{"punctuation.reference.variable"}},
-	dsl.NodeVarRefTarget:          {Scopes: []string{"variable.constant.reference.target"}},
-	dsl.NodeVarRef:                {MetaScope: "meta.variable.reference"},
-	dsl.NodeLexRuleTokenName:      {Scopes: []string{"entity.name.token"}},
-	dsl.NodeLexRuleRole:           {Scopes: []string{"entity.name.token-role"}},
-	dsl.NodeMetaKey:               {Scopes: []string{"entity.other.attribute-name.meta"}},
-	dsl.NodeMetaValue:             {Scopes: []string{"meta.annotation.value", "string.quoted.double"}},
+	dsl.NodeDSLName:            {Scopes: []string{"entity.name.language"}},
+	dsl.NodePatternAlternation: {Scopes: []string{"keyword.operator.alternation"}},
+	dsl.NodePatternDefName:     {Scopes: []string{"entity.name.variable.constant"}},
+	dsl.NodeVarRefToken:        {Scopes: []string{"punctuation.reference.variable"}},
+	dsl.NodeVarRefTarget:       {Scopes: []string{"variable.constant.reference.target"}},
+	dsl.NodeVarRef:             {MetaScope: "meta.variable.reference"},
+	dsl.NodeLexRuleTokenName:   {Scopes: []string{"entity.name.token"}},
+	dsl.NodeLexRuleRole:        {Scopes: []string{"entity.name.token-role"}},
+	dsl.NodeMetaKey:            {Scopes: []string{"entity.other.attribute-name.meta"}},
+	dsl.NodeMetaValue: {
+		Scopes: []string{"meta.annotation.value"},
+		TokenScopes: map[dsl.LangSpecLexerTokenType][]string{
+			dsl.TokStringLiteral: {"meta.annotation.value", "string.quoted.double"},
+			dsl.TokKWTrue:        {"meta.annotation.value", "constant.language.bool"},
+			dsl.TokKWFalse:       {"meta.annotation.value", "constant.language.bool"},
+		},
+	},
 	dsl.NodePragmaConfiguration:   {MetaScope: "meta.pragma.configuration"},
 	dsl.NodePragmaBlockKeySegment: {Scopes: []string{"entity.name.namespace"}},
 	dsl.NodePragmaKey:             {Scopes: []string{"entity.other.attribute-name"}},

@@ -1,52 +1,16 @@
 package dsl
 
 import (
+	"foundation/text"
 	"langspec"
-	"strings"
 	"syntaxa"
 )
 
-// ATTRIBUTE_LITERAL_STRING_FORMATTED is set on nodes that carry a string literal token
-// (e.g. NodeLexRuleTokenName, NodePragmaValue); value is the content with surrounding
-// quotes removed. Evaluators should use this attribute rather than parsing token text.
-// ATTRIBUTE_CHAR_LITERAL_VALUE is set on NodePatternCharLiteral; value is the decoded
-// character (after stripping quotes and resolving \', \\, \n, \r, \t).
-
 const (
-	ATTRIBUTE_LITERAL_STRING_FORMATTED = "formattedString"
-	ATTRIBUTE_CHAR_LITERAL_VALUE       = "charLiteralValue"
+	ATTRIBUTE_LITERAL_STRING_VALUE = "stringLiteralValue"
+	ATTRIBUTE_CHAR_LITERAL_VALUE   = "charLiteralValue"
+	ATTRIBUTE_REGEX_LITERAL_VALUE  = "regexLiteralValue"
 )
-
-/*
-unescapeCharLiteralContent interprets escape sequences in the inner content of a
-single-quoted char literal (after stripping quotes). Supports \', \\, \n, \r, \t.
-Returns the decoded string (typically one rune for a valid char literal).
-*/
-func unescapeCharLiteralContent(inner string) string {
-	var out strings.Builder
-	for i := 0; i < len(inner); i++ {
-		if inner[i] == '\\' && i+1 < len(inner) {
-			switch inner[i+1] {
-			case '\'':
-				out.WriteByte('\'')
-			case '\\':
-				out.WriteByte('\\')
-			case 'n':
-				out.WriteByte('\n')
-			case 'r':
-				out.WriteByte('\r')
-			case 't':
-				out.WriteByte('\t')
-			default:
-				out.WriteByte(inner[i+1])
-			}
-			i++
-			continue
-		}
-		out.WriteByte(inner[i])
-	}
-	return out.String()
-}
 
 // --------------------------------------------------------------- BUILDING
 
@@ -58,28 +22,6 @@ func buildLangSpecDSLParserSpec(
 	*langspec.ParserSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	Rule,
 ) {
-	finalizationPostProcessor := func(node *Node, finalizationCTX *NodeFinalizationCtx, _ syntaxa.RuleIdentity) {
-		lexemes := node.Tokens()
-		for _, lexeme := range lexemes {
-			if lexeme.Token == TokStringLiteral {
-				raw := node.GetContent(" ")
-				formatted := strings.Replace(raw, "\"", "", -1)
-				finalizationCTX.SetAttribute(node, ATTRIBUTE_LITERAL_STRING_FORMATTED, formatted)
-				break
-			}
-		}
-		if node.Kind() == NodeCharLiteral && len(lexemes) > 0 && lexemes[0].Token == TokCharLiteral {
-			raw := string(lexemes[0].Raw)
-			if len(raw) >= 2 && raw[0] == '\'' && raw[len(raw)-1] == '\'' {
-				inner := raw[1 : len(raw)-1]
-				unescaped := unescapeCharLiteralContent(inner)
-				if unescaped != "" {
-					finalizationCTX.SetAttribute(node, ATTRIBUTE_CHAR_LITERAL_VALUE, unescaped)
-				}
-			}
-		}
-	}
-
 	grammarPkg := new(syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState])
 	*grammarPkg = syntaxa.ProducePackage(
 		programRule.GetGrammar(),
@@ -99,7 +41,40 @@ func buildLangSpecDSLParserSpec(
 		LANG_SPEC_WHITESPACE_ROLE,
 		LANG_SPEC_COMMENT_ROLE,
 	)
-	parserSpec.WithPostProcessor(finalizationPostProcessor)
+	parserSpec.WithPostProcessor(applyLiteralAttributes)
 
 	return parserSpec, programRule
+}
+
+// applyLiteralAttributes is extracted to keep cognitive load low and isolate AST modification logic.
+func applyLiteralAttributes(node *Node, finalizationCTX *NodeFinalizationCtx, _ syntaxa.RuleIdentity) {
+	lexemes := node.Tokens()
+	if len(lexemes) == 0 {
+		return
+	}
+
+	token := lexemes[0]
+	raw := string(token.Raw)
+
+	switch token.Token {
+	case TokStringLiteral:
+		inner := stripQuotes(raw, '"')
+		finalizationCTX.SetAttribute(node, ATTRIBUTE_LITERAL_STRING_VALUE, text.Unescape(inner))
+
+	case TokCharLiteral:
+		inner := stripQuotes(raw, '\'')
+		finalizationCTX.SetAttribute(node, ATTRIBUTE_CHAR_LITERAL_VALUE, text.Unescape(inner))
+
+	case TokRegexLiteral:
+		inner := stripQuotes(raw, '`')
+		finalizationCTX.SetAttribute(node, ATTRIBUTE_REGEX_LITERAL_VALUE, inner)
+	}
+}
+
+// stripQuotes safely removes surrounding quote characters if they match the expected boundary.
+func stripQuotes(raw string, boundary byte) string {
+	if len(raw) >= 2 && raw[0] == boundary && raw[len(raw)-1] == boundary {
+		return raw[1 : len(raw)-1]
+	}
+	return raw
 }

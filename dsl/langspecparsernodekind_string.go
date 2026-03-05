@@ -49,7 +49,7 @@ func _() {
 	_ = x[NodePatternNegation-39]
 	_ = x[NodePatternConcat-40]
 	_ = x[NodePatternAlternation-41]
-	_ = x[NodePatternStringLiteral-42]
+	_ = x[NodeStringLiteral-42]
 	_ = x[NodePatternGroup-43]
 	_ = x[NodePatternSegment-44]
 	_ = x[NodePatternOptional-45]
@@ -59,9 +59,9 @@ func _() {
 	_ = x[NodeLocalVariable-49]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternStringLiteralNodePatternGroupNodePatternSegmentNodePatternOptionalNodePatternRepetitionNodeRepetitionMinNodeRepetitionMaxNodeLocalVariable"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodeStringLiteralNodePatternGroupNodePatternSegmentNodePatternOptionalNodePatternRepetitionNodeRepetitionMinNodeRepetitionMaxNodeLocalVariable"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 675, 691, 709, 728, 749, 766, 783, 800}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 668, 684, 702, 721, 742, 759, 776, 793}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

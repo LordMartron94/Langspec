@@ -28,7 +28,7 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 	toBytes         func(observations []TObservation) []byte
 
 	observationFormatter lexarch.ObservationFormatter[TObservation]
-	observationDomain   *domain.DiscreteDomain[TObservation]
+	observationDomain    *domain.DiscreteDomain[TObservation]
 
 	tokenFormatter func(token TToken) string
 	dfaFormatter   *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]]
@@ -53,13 +53,13 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 		rulesets:             make(map[TLexerState]lexarch.LexingRuleset[TObservation, TToken, TTokenRole]),
 		initialState:         initialState,
 		newlineDetect:        newlineDetect,
-		columnAdvanceFn:     columnAdvanceFn,
+		columnAdvanceFn:      columnAdvanceFn,
 		toBytes:              toBytes,
 		eofToken:             eofToken,
 		observationFormatter: observationFormatter,
-		observationDomain:   observationDomain,
-		tokenFormatter:      tokenFormatter,
-		compilerMode:        lexarch.Glushkov,
+		observationDomain:    observationDomain,
+		tokenFormatter:       tokenFormatter,
+		compilerMode:         lexarch.Glushkov,
 	}
 }
 
@@ -113,7 +113,8 @@ type ParserSpec[
 	freezeAfterParse bool
 }
 
-/* ParserSpecCreate constructs a parser specification from a grammar package and rule registry.
+/*
+	ParserSpecCreate constructs a parser specification from a grammar package and rule registry.
 
 The package must have been produced with an entry rule (ProducePackage(..., &programRule)).
 The registry maps grammar labels to parser rules for context-boundary productions; typically
@@ -562,22 +563,35 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 	destroyed atomic.Bool
 }
 
+/*
+LangParserLexerCreateFromSpec creates a lexer according to the spec.
+
+This is useful if clients want to delegate lexing creation without relying on the rest of LSpec's LangParser.
+*/
+func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole comparable](
+	scratchAllocationFn memarch.AllocationFn,
+	maxLexerAutomatonMemory memcore.MemoryUnitBytes,
+	spec *LexerSpec[TObservation, TToken, TTokenRole, TLexerState],
+) *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole] {
+	return lexarch.LexerCreate(
+		spec.rulesets,
+		spec.eofToken,
+		scratchAllocationFn,
+		maxLexerAutomatonMemory,
+		lexarch.ObservationCTXCreate(
+			spec.observationFormatter,
+			spec.observationDomain,
+			spec.toBytes,
+		),
+		spec.compilerMode,
+	)
+}
+
 /* LangParserCreate constructs a language parser instance. */
 func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	config *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind] {
-	lexer := lexarch.LexerCreate(
-		config.spec.Lexer.rulesets,
-		config.spec.Lexer.eofToken,
-		config.scratchAllocationFn,
-		config.maxLexerAutomatonMemory,
-		lexarch.ObservationCTXCreate[TObservation](
-			config.spec.Lexer.observationFormatter,
-			config.spec.Lexer.observationDomain,
-			config.spec.Lexer.toBytes,
-		),
-		config.spec.Lexer.compilerMode,
-	)
+	lexer := LangParserLexerCreateFromSpec(config.scratchAllocationFn, config.maxLexerAutomatonMemory, config.spec.Lexer)
 
 	parser := syntaxa.SyntaxaParserCreate(
 		config.spec.Parser.grammarPackage,

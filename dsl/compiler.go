@@ -1,342 +1,583 @@
 package dsl
 
 import (
+	"autarch/pattern"
 	"fmt"
-	"foundation/system"
-	"io"
 	"langspec"
-	"langspec/validation"
 	"lexarch"
-	"memarch"
-	"syntaxa"
-	"syntaxa/rule"
+	"strconv"
+	"strings"
 )
 
-// --------------------------------------------------------------- TYPE ALIASES
+type LexerSpec = langspec.LexerSpec[rune, string, string, string]
+type LexerRuleset = lexarch.LexingRuleset[rune, string, string]
 
-type LexingRuleset = lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
+type CompiledLangSpec struct {
+	dslName    string
+	dslVersion string
 
-type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
-type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
-type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
-type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
-type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
-type Node = syntaxa.SyntaxaLSTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
-func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
-	return syntaxa.AttributeAs[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, TAttribute](
-		node, attributeName,
-	)
+	lexerSpec *LexerSpec
+	eofToken  string
 }
 
-// --------------------------------------------------------------- CONFIGURATION
-
-/* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
-type LangSpecCompilerConfiguration struct {
-	scratchAllocationFunction memarch.AllocationFn
-	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-	diagnosticSink            *LangSpecDiagnosticSink
+type compiler struct {
+	factory *pattern.RegulaASTFactory[rune]
 }
 
-/*
-LangSpecCompilerConfigurationCreate creates an instance of the compiler configuration.
+func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
+	dslName, dslVersion := getInfoFromHeader(rootNode.FindFirstKind(NodeHeader))
 
-Stage reporter is optional. DiagnosticSink is optional; when set, compilation diagnostics
-(syntax errors, trace, validation, LST dump) are written to the sink's Writer.
-*/
-func LangSpecCompilerConfigurationCreate(
-	scratchAllocationFunction memarch.AllocationFn,
-	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
-) *LangSpecCompilerConfiguration {
-	return &LangSpecCompilerConfiguration{
-		scratchAllocationFunction: scratchAllocationFunction,
-		stageReporter:             stageReporter,
-		diagnosticSink:            nil,
-	}
-}
-
-/*
-WithDiagnosticSink configures where compilation diagnostics are written.
-When nil, no diagnostic output is produced. Use DefaultLangSpecDiagnosticSink() for stdout.
-*/
-func (c *LangSpecCompilerConfiguration) WithDiagnosticSink(sink *LangSpecDiagnosticSink) *LangSpecCompilerConfiguration {
-	c.diagnosticSink = sink
-	return c
-}
-
-// --------------------------------------------------------------- COMPILER
-
-/*
-LangSpecCompileResult holds the result of compiling a .lspec file: the parsed LST,
-parse trace, syntax errors (if any), and validation entries (when validation was run).
-Callers can inspect the result without parsing stdout.
-*/
-type LangSpecCompileResult struct {
-	RootNode          *Node
-	Trace             *syntaxa.ParseTrace[LangSpecLexerTokenType]
-	SyntaxErrors      *syntaxa.SyntaxErrors[rune]
-	ValidationEntries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-}
-
-/*
-LangSpecCompiler compiles a .lspec file into the LangSpec configuration needed by the LangParser.
-*/
-type LangSpecCompiler struct {
-	config *LangSpecCompilerConfiguration
-
-	languageSpec LanguageSpec
-
-	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
-	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
-	programRule   Rule
-
-	sessionCache *langspec.LangParserSession[rune]
-
-	diagnosticWriter io.Writer
-}
-
-/* LangSpecCompilerCreate constructs a compiler instance. */
-func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *LangSpecCompiler {
-	spec, dslSpec, ruleset, programRule := buildLangSpecDSLSpec()
-
-	langParserConfig := langspec.LangParserConfigurationCreate(
-		dslSpec,
-		compilerConfig.scratchAllocationFunction,
-	)
-	parser := langspec.LangParserCreate(langParserConfig)
-
-	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]()
-	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
-		getValidationStages()...,
-	)
-
-	var w io.Writer
-	if compilerConfig.diagnosticSink != nil && compilerConfig.diagnosticSink.Writer != nil {
-		w = compilerConfig.diagnosticSink.Writer
-	}
-
-	return &LangSpecCompiler{
-		config:           compilerConfig,
-		languageSpec:     spec,
-		parser:           parser,
-		validatorConfig:  validationConfig,
-		lexingRuleSet:    ruleset,
-		programRule:      programRule,
-		diagnosticWriter: w,
-	}
-}
-
-/*
-LangSpecCompilerDestroy destroys the compiler.
-
-Forgetting to call this results in memory leaks.
-*/
-func LangSpecCompilerDestroy(compiler *LangSpecCompiler) {
-	langspec.LangParserDestroy(compiler.parser)
-}
-
-/*
-LangSpecCompilerCompile compiles a .lspec file and returns a structured result plus an error.
-When the file is not .lspec or lexing fails, result is nil. Otherwise result is populated
-with the parsed LST, trace, syntax errors, and validation entries (if validation ran).
-Diagnostic output is written only when config's DiagnosticSink is set.
-*/
-func LangSpecCompilerCompile(
-	compiler *LangSpecCompiler,
-	sourceFile string,
-) (*LangSpecCompileResult, error) {
-	if !system.PathHasExt(sourceFile, ".lspec") {
-		return nil, fmt.Errorf("file is not a .lspec file: %s", sourceFile)
-	}
-
-	contentRune, _ := system.FileReadAllRunes(sourceFile)
-	session := getSession(compiler, sourceFile)
-
-	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
-		compiler.parser,
-		session,
-	)
-
-	result := &LangSpecCompileResult{
-		RootNode:     rootNode,
-		Trace:        trace,
-		SyntaxErrors: syntaxErrors,
-	}
-
-	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		renderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors)
-		err = fmt.Errorf(
-			"langspec parse failed with %d syntax errors",
-			len(syntaxErrors.Errors),
-		)
-	}
-
-	// Validation entries
-	if !syntaxErrors.HasErrors() {
-		validationEntries, validationErr := validation.LSTValidatorRun(compiler.validatorConfig, rootNode)
-		if validationErr != nil {
-			err = validationErr
-		}
-
-		result.ValidationEntries = validationEntries
-
-		if validationEntries != nil && len(validationEntries.Results) > 0 {
-			renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries)
-
-			errorAmount := 0
-			for _, stage := range validationEntries.Results {
-				for _, entry := range stage.Entries {
-					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
-						errorAmount++
-					}
-				}
-			}
-
-			if errorAmount > 0 {
-				err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
-			}
-		}
-	}
-
-	return result, err
-}
-
-type CompilerDebugConfig struct {
-	DebugParseTrace bool
-	DebugLST        bool
-}
-
-func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string) error {
-	session := getSession(compiler, sourceFile)
-
-	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
-	if err != nil {
-		return fmt.Errorf("lexing error: %w", err)
-	}
-
-	renderLexemes(compiler.diagnosticWriter, lexemes,
-		func(t LangSpecLexerTokenType) string { return t.String() },
-		func(r LangSpecLexerTokenRole) string { return r.String() },
-	)
-
-	return nil
-}
-
-func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
-	grammarDump := compiler.programRule.GetGrammar().DebugDump(
-		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType]{
-			FormatKind:  syntaxa.GrammarKind.String,
-			FormatToken: LangSpecLexerTokenType.String,
-			FormatRange: func(min int, max *int) string {
-				if max == nil {
-					return fmt.Sprintf("[%d..∞]", min)
-				}
-				return fmt.Sprintf("[%d..%d]", min, *max)
-			},
-			FormatGrammarLabel: func(label syntaxa.GrammarLabel) string {
-				return "(" + string(label) + ")"
-			},
+	eofToken := getEOFToken(rootNode)
+	domain := lexarch.LexarchRuneDomain()
+	spec := langspec.LexerSpecCreate[rune, string, string](
+		eofToken,
+		"default",
+		lexarch.NewlineDetectorRune(),
+		lexarch.ColumnAdvanceRune(4),
+		lexarch.RunesToBytesDefault(),
+		lexarch.RuneFormatterDefault(),
+		domain,
+		func(token string) string {
+			return token
 		},
 	)
 
-	grammarPackage := compiler.parser.GetGrammarPackage()
-	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState]{
-		FormatToken: LangSpecLexerTokenType.String,
-	})
-
-	renderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump)
-}
-
-func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
-	if config.DebugParseTrace {
-		renderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })
+	lspecCompiler := compiler{
+		factory: pattern.RegulaASTFactoryCreate(domain),
 	}
 
-	if config.DebugLST {
-		lstDump := result.RootNode.DebugDump(
-			syntaxa.LSTDebugFormatter[
-				rune,
-				LangSpecLexerTokenType,
-				LangSpecLexerTokenRole,
-				LangSpecParserNodeKind,
-			]{
-				FormatKind: func(k LangSpecParserNodeKind) string {
-					return k.String()
-				},
+	ruleset := lspecCompiler.compileRuleset(rootNode)
+	spec.WithRuleset("default", *ruleset)
 
-				FormatToken: func(l lexarch.Lexeme[
-					rune,
-					LangSpecLexerTokenType,
-					LangSpecLexerTokenRole,
-				]) string {
-					return string(l.Raw)
-				},
-
-				FormatAttribute: func(k string, v any) string {
-					return fmt.Sprintf("%s=%v", k, v)
-				},
-
-				/* ───── visual toggles ───── */
-
-				ShowTokens:     true,
-				ShowAttributes: true,
-
-				ShowByteSpan: true,
-				ShowLineSpan: true,
-
-				ShowNodeID:   true,
-				ShowRevision: false,
-
-				SlotPrefix: "@",
-
-				/* colors disabled for now */
-				ColorKind:      nil,
-				ColorToken:     nil,
-				ColorSpan:      nil,
-				ColorAttribute: nil,
-			},
-		)
-
-		renderLSTDump(compiler.diagnosticWriter, lstDump)
+	return &CompiledLangSpec{
+		dslName:    dslName,
+		dslVersion: dslVersion,
+		lexerSpec:  spec,
+		eofToken:   eofToken,
 	}
 }
 
-/*
-LangSpecCompilerScopeMap returns the token-to-scope map from the compiler's language spec.
-Used by editor integrations for syntax highlighting.
-*/
-func LangSpecCompilerScopeMap(compiler *LangSpecCompiler) map[LangSpecLexerTokenType]string {
-	return LanguageSpecScopeMap(compiler.languageSpec)
+func getInfoFromHeader(headerNode *Node) (string, string) {
+	dslName := nodeFormattedContent(headerNode.FindFirstKind(NodeDSLName), ATTRIBUTE_LITERAL_STRING_VALUE)
+	dslVersion := lexemeRawContent(headerNode.FindFirstKind(NodeVersion).Tokens()[0])
+
+	return dslName, dslVersion
 }
 
-/*
-LangSpecCompilerLexingRuleSet returns the lexing ruleset used by the DSL compiler.
-Used by editor integrations to build syntax highlighting IR without depending on parser internals.
-*/
-func LangSpecCompilerLexingRuleSet(compiler *LangSpecCompiler) *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole] {
-	return compiler.lexingRuleSet
+func getEOFToken(rootNode *Node) string {
+	lexerSection := rootNode.FindFirstKind(NodeLexSection)
+
+	eofToken := checkForEOFLexeme(lexerSection)
+	if eofToken == "" {
+		eofToken = "EOF_INJECTED"
+	}
+
+	return eofToken
 }
 
-/*
-LangSpecCompilerProgramRule returns the program rule used by the DSL compiler.
-Used by editor integrations that need the rule or its grammar.
-*/
-func LangSpecCompilerProgramRule(compiler *LangSpecCompiler) Rule {
-	return compiler.programRule
+func (c *compiler) compileRuleset(rootNode *Node) *LexerRuleset {
+	patternTable := c.compilePatterns(rootNode)
+
+	ruleset := lexarch.LexingRulesetCreate[rune, string, string](
+		lexarch.TokenResolutionStepLongestThenPriority[string],
+	)
+
+	lexSection := rootNode.FindFirstKind(NodeLexSection)
+	lexRules := c.gatherRules(lexSection, patternTable)
+
+	for _, rule := range lexRules {
+		ruleset.WithRulePriority(rule.tokenPattern, rule.tokenName, rule.tokenRole, rule.priority)
+	}
+
+	return ruleset
 }
 
-/*
-LangSpecCompilerGrammarPackage returns the grammar package used by the DSL parser.
-Use for editor IR (e.g. syntax highlighting) or debug dumps.
-*/
-func LangSpecCompilerGrammarPackage(compiler *LangSpecCompiler) *syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState] {
-	return compiler.parser.GetGrammarPackage()
+type lexRule struct {
+	priority     int
+	tokenName    string
+	tokenRole    string
+	tokenPattern pattern.RegulaAST[rune]
 }
 
-var runeFormatter = lexarch.RuneFormatterDefault()
+func (c *compiler) gatherRules(
+	sectionNode *Node,
+	patternTable map[string]pattern.RegulaAST[rune],
+) []lexRule {
+	rules := sectionNode.FindAllKind(NodeLexRule)
+	out := make([]lexRule, 0)
+
+	for _, rule := range rules {
+		if !nodeHasMetaByPred(rule, func(metaKVPNode *Node) bool {
+			key := metaKVPNode.Children()[0]
+			if lexemeRawContentEqualTo(key.Tokens()[0], "EOF") {
+				value := metaKVPNode.Children()[1]
+				if lexemeKindEqualTo(value.Tokens()[0], TokKWTrue) {
+					return true
+				}
+			}
+
+			return false
+		}) {
+			out = append(out, c.constructLexRule(rule, patternTable))
+		}
+	}
+
+	return out
+}
+
+func (c *compiler) constructLexRule(
+	ruleNode *Node,
+	patternTable map[string]pattern.RegulaAST[rune],
+) lexRule {
+	priority := 0
+	if priorityNode, ok := nodeContains(ruleNode, NodeLexRulePriority); ok {
+		priority = extractIntContent(priorityNode)
+	}
+
+	tokenName := nodeSingleTokenContent(ruleNode.FindFirstKind(NodeLexRuleTokenName))
+	tokenRole := nodeSingleTokenContent(ruleNode.FindFirstKind(NodeLexRuleRole))
+
+	var tokenPattern pattern.RegulaAST[rune]
+	patternNode := ruleNode.FindFirstKind(NodeLexRulePattern)
+
+	if patternNode == nil {
+		patternNode = ruleNode.FindFirstKind(NodeVarRef)
+	}
+
+	if patternNode == nil {
+		panic("compiler error: lex rule must have a pattern or a variable reference")
+	}
+
+	switch patternNode.Kind() {
+	case NodeVarRef:
+		target := resolveVarRefTargetName(patternNode)
+		p, ok := patternTable[target]
+		if !ok {
+			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
+		}
+		tokenPattern = p
+
+	case NodeLexRulePattern:
+		content := nodeFormattedContent(patternNode, ATTRIBUTE_REGEX_LITERAL_VALUE)
+		p, err := pattern.RegexToRegula(content, c.factory)
+		if err != nil {
+			panic(fmt.Errorf("engine error while converting regex to pattern: %w", err))
+		}
+		tokenPattern = p
+
+	default:
+		panic(fmt.Errorf("unsupported node kind for lex rule: %s", patternNode.Kind()))
+	}
+
+	return lexRule{
+		priority:     priority,
+		tokenName:    tokenName,
+		tokenRole:    tokenRole,
+		tokenPattern: tokenPattern,
+	}
+}
+
+func (c *compiler) compilePatterns(rootNode *Node) map[string]pattern.RegulaAST[rune] {
+	out := make(map[string]pattern.RegulaAST[rune])
+	temp := make(map[string]pattern.RegulaAST[rune])
+	patternSection := rootNode.FindFirstKind(NodePatternSection)
+	definitions := patternSection.FindAllKind(NodePatternDefinition)
+
+	for _, definition := range definitions {
+		defName := lexemeRawContent(definition.FindFirstKind(NodePatternDefName).Tokens()[0])
+
+		// 1. Isolate: Extract the actual expression node by skipping modifiers
+		var exprNode *Node
+		for _, child := range definition.Children() {
+			kind := child.Kind()
+			if kind != NodePatternDefName && kind != NodeLocalVariable {
+				exprNode = child
+				break
+			}
+		}
+
+		if exprNode == nil {
+			panic(fmt.Sprintf("invariant violated: definition '%s' has no expression", defName))
+		}
+
+		// 2. Delegate: Pass the pure expression node to the dispatcher
+		pattern := c.compilePatternExpression(exprNode, temp)
+
+		temp[defName] = pattern
+		if _, contains := nodeContains(definition, NodeLocalVariable); !contains {
+			out[defName] = pattern
+		}
+	}
+
+	return out
+}
+
+func (c *compiler) compilePatternExpression(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+
+	kind := node.Kind()
+
+	switch kind {
+	case NodeCharLiteral:
+		return c.charLiteralToPattern(node)
+	case NodeStringLiteral:
+		return c.stringLiteralToPattern(node)
+	case NodeVarRef:
+		return c.varRefToPattern(node, variables)
+	case NodePatternConcat:
+		return c.concatToPattern(node, variables)
+	case NodePatternAlternation:
+		return c.alternationToPattern(node, variables)
+	case NodePatternRange:
+		return c.rangeToPattern(node)
+	case NodePatternStar:
+		return c.starToPattern(node, variables)
+	case NodePatternPlus:
+		return c.plusToPattern(node, variables)
+	case NodePatternOptional:
+		return c.optionalToPattern(node, variables)
+	case NodePatternRepetition:
+		return c.repetitionToPattern(node, variables)
+	case NodePatternGroup:
+		return c.groupToPattern(node, variables)
+	case NodePatternNegation:
+		return c.negationToPattern(node)
+	case NodePatternAny:
+		return c.factory.NegatedClass()
+	default:
+		panic(fmt.Errorf("engine error: unsupported pattern kind: '%s'", kind))
+	}
+}
+
+// --- PATTERNS
+
+func (c *compiler) concatToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+
+	concatPattern := c.compilePatternExpression(children[0], variables)
+
+	for i, child := range children {
+		if i == 0 {
+			continue
+		}
+
+		pattern := c.compilePatternExpression(child, variables)
+		concatPattern = concatPattern.Then(pattern)
+	}
+
+	return concatPattern
+}
+
+func (c *compiler) alternationToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+
+	alternationPattern := c.compilePatternExpression(children[0], variables)
+
+	for i, child := range children {
+		if i == 0 {
+			continue
+		}
+
+		pattern := c.compilePatternExpression(child, variables)
+		alternationPattern = alternationPattern.Or(pattern)
+	}
+
+	return alternationPattern
+}
+
+func (c *compiler) rangeToPattern(
+	node *Node,
+) pattern.RegulaAST[rune] {
+	charRange := c.extractPatternRange(node)
+	return c.factory.Class(charRange)
+}
+
+func (c *compiler) starToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+
+	if len(children) != 1 {
+		panic("error: star pattern must have exactly 1 child")
+	}
+
+	childPattern := c.compilePatternExpression(children[0], variables)
+	return childPattern.Star()
+}
+
+func (c *compiler) plusToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+
+	if len(children) != 1 {
+		panic("error: plus pattern must have exactly 1 child")
+	}
+
+	childPattern := c.compilePatternExpression(children[0], variables)
+	return childPattern.Plus()
+}
+
+func (c *compiler) optionalToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+
+	if len(children) != 1 {
+		panic("error: optional pattern must have exactly 1 child")
+	}
+
+	childPattern := c.compilePatternExpression(children[0], variables)
+	return childPattern.Optional()
+}
+
+func (c *compiler) repetitionToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+
+	if len(children) != 2 {
+		panic("compiler error: repetition node must have exactly 2 children (pattern and settings)")
+	}
+
+	childPattern := c.compilePatternExpression(children[0], variables)
+	repetitionSettings := children[1]
+
+	minVal := 0
+	maxVal := -1
+
+	if minNode, ok := nodeContains(repetitionSettings, NodeRepetitionMin); ok {
+		minVal = extractIntContent(minNode)
+	}
+
+	if maxNode, ok := nodeContains(repetitionSettings, NodeRepetitionMax); ok {
+		maxVal = extractIntContent(maxNode)
+	}
+
+	return childPattern.Repeat(minVal, maxVal)
+}
+
+func (c *compiler) groupToPattern(
+	node *Node,
+	variables map[string]pattern.RegulaAST[rune],
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+	if len(children) != 1 {
+		panic("engine error: group node must have exactly 1 child")
+	}
+
+	return c.compilePatternExpression(children[0], variables)
+}
+
+func (c *compiler) negationToPattern(
+	node *Node,
+) pattern.RegulaAST[rune] {
+	children := node.Children()
+	if len(children) != 1 {
+		panic("engine error: negation node must have exactly 1 child")
+	}
+
+	var ranges []pattern.CharRange[rune]
+	c.extractNegationRanges(children[0], &ranges)
+
+	return c.factory.NegatedClass(ranges...)
+}
+
+func (c *compiler) extractNegationRanges(node *Node, out *[]pattern.CharRange[rune]) {
+	kind := node.Kind()
+
+	switch kind {
+	case NodeCharLiteral:
+		*out = append(*out, c.extractCharRange(node))
+	case NodePatternRange:
+		*out = append(*out, c.extractPatternRange(node))
+	case NodePatternGroup:
+		c.extractGroupRanges(node, out)
+	case NodePatternAlternation:
+		c.extractAlternationRanges(node, out)
+	default:
+		// The semantic enforcer. Kills the compilation if a user writes !("string") or !($Var).
+		panic(fmt.Sprintf("semantic error: negation (!) applied to invalid node kind '%s'", kind))
+	}
+}
+
+func (c *compiler) extractGroupRanges(node *Node, out *[]pattern.CharRange[rune]) {
+	children := node.Children()
+	if len(children) != 1 {
+		panic("engine error: group node in negation must have exactly 1 child")
+	}
+	c.extractNegationRanges(children[0], out)
+}
+
+func (c *compiler) extractAlternationRanges(node *Node, out *[]pattern.CharRange[rune]) {
+	for _, child := range node.Children() {
+		c.extractNegationRanges(child, out)
+	}
+}
+
+func (c *compiler) extractCharRange(node *Node) pattern.CharRange[rune] {
+	content := nodeFormattedContent(node, ATTRIBUTE_CHAR_LITERAL_VALUE)
+	runes := []rune(content)
+
+	if len(runes) != 1 {
+		panic("semantic error: character literal in negation must resolve to exactly 1 rune")
+	}
+
+	return c.factory.Range(runes[0], runes[0])
+}
+
+func (c *compiler) extractPatternRange(node *Node) pattern.CharRange[rune] {
+	children := node.Children()
+	if len(children) != 2 {
+		panic("engine error: range node must have exactly 2 children")
+	}
+
+	loContent := nodeFormattedContent(children[0], ATTRIBUTE_CHAR_LITERAL_VALUE)
+	hiContent := nodeFormattedContent(children[1], ATTRIBUTE_CHAR_LITERAL_VALUE)
+
+	loRunes := []rune(loContent)
+	hiRunes := []rune(hiContent)
+
+	if len(loRunes) != 1 || len(hiRunes) != 1 {
+		panic("semantic error: bounds in pattern range must resolve to exactly 1 rune each")
+	}
+
+	return c.factory.Range(loRunes[0], hiRunes[0])
+}
+
+// --- ATOMS
+
+func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
+	content := nodeFormattedContent(node, ATTRIBUTE_CHAR_LITERAL_VALUE)
+	return c.factory.Literal([]rune(content)...)
+}
+
+func (c *compiler) stringLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
+	content := nodeFormattedContent(node, ATTRIBUTE_LITERAL_STRING_VALUE)
+	return c.factory.Literal([]rune(content)...)
+}
+
+func (c *compiler) varRefToPattern(node *Node, variables map[string]pattern.RegulaAST[rune]) pattern.RegulaAST[rune] {
+	targetName := resolveVarRefTargetName(node)
+	targetPattern, ok := variables[targetName]
+	if !ok {
+		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
+	}
+
+	return targetPattern
+}
+
+// -------------------------------------------------------- HELPERS
+
+func extractIntContent(node *Node) int {
+	rawContent := lexemeRawContent(node.Tokens()[0])
+	num, err := strconv.Atoi(rawContent)
+
+	if err != nil {
+		panic(fmt.Errorf("engine error: number is not an integer: '%s': %w", rawContent, err))
+	}
+
+	return num
+}
+
+func nodeContains(node *Node, target LangSpecParserNodeKind) (*Node, bool) {
+	got := node.FindFirstKind(target)
+	return got, got != nil
+}
+
+func nodeHasMetaByPred(node *Node, pred func(metaKVPNode *Node) bool) bool {
+	meta, ok := nodeContains(node, NodeMetaSection)
+	if !ok {
+		return false // No meta section, definitely does not have the value
+	}
+
+	kvps := meta.FindAllKind(NodeMetaKeyValuePair)
+	for _, kvp := range kvps {
+		if pred(kvp) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func nodeSingleTokenContent(node *Node) string {
+	tks := node.Tokens()
+	if len(tks) != 1 {
+		panic("engine error: single token content extraction requires node to have exactly 1 token")
+	}
+
+	return lexemeRawContent(tks[0])
+}
+
+func nodeFormattedContent(node *Node, formatAttribute string) string {
+	formatted, ok := AttributeAs[string](node, formatAttribute)
+	if !ok {
+		panic(fmt.Errorf("engine error encountered: %v not stored for node %v", formatAttribute, node))
+	}
+
+	return formatted
+}
+
+func resolveVarRefTargetName(varRef *Node) string {
+	tokens := varRef.Tokens()
+	if len(tokens) >= 2 {
+		return strings.TrimSpace(string(tokens[1].Raw))
+	}
+	return ""
+}
+
+func checkForEOFLexeme(lexerSection *Node) string {
+	lexRules := lexerSection.FindAllKind(NodeLexRule)
+	for _, rule := range lexRules {
+		metaKeyValuePairs := rule.FindAllKind(NodeMetaKeyValuePair)
+		for _, keyValuePair := range metaKeyValuePairs {
+			key := keyValuePair.FindFirstKind(NodeMetaKey)
+			if !lexemeRawContentEqualTo(key.Tokens()[0], "EOF") {
+				continue
+			}
+
+			valueNode := keyValuePair.FindFirstKind(NodeMetaValue)
+			value := valueNode.Tokens()[0]
+
+			if lexemeKindEqualTo(value, TokKWTrue) {
+				identifier := rule.FindFirstKind(NodeLexRuleTokenName).Tokens()[0]
+				return lexemeRawContent(identifier)
+			}
+		}
+	}
+
+	return ""
+}
+
+func lexemeRawContent(
+	lexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+) string {
+	return string(lexeme.Raw)
+}
+
+func lexemeKindEqualTo(
+	lexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	target LangSpecLexerTokenType,
+) bool {
+	return lexeme.Token == target
+}
+
+func lexemeRawContentEqualTo(
+	lexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	target string,
+) bool {
+	return strings.EqualFold(string(lexeme.Raw), target)
+}

@@ -16,16 +16,20 @@ type ValidationCode string
 const (
 	VALIDATION_DUPLICATE_TOKEN ValidationCode = "V_R001"
 
-	VALIDATION_DUPLICATE_PATTERN_NAME   ValidationCode = "V_PAT001"
-	VALIDATION_UNRESOLVED_PATTERN_REF   ValidationCode = "V_PAT002"
-	VALIDATION_EMPTY_PATTERN_EXPRESSION ValidationCode = "V_PAT003"
+	VALIDATION_DUPLICATE_PATTERN_NAME    ValidationCode = "V_PAT001"
+	VALIDATION_UNRESOLVED_PATTERN_REF    ValidationCode = "V_PAT002"
+	VALIDATION_EMPTY_PATTERN_EXPRESSION  ValidationCode = "V_PAT003"
 	VALIDATION_LOCAL_REF_OUTSIDE_SECTION ValidationCode = "V_PAT004"
-	VALIDATION_CYCLIC_PATTERN_REF       ValidationCode = "V_PAT005"
+	VALIDATION_CYCLIC_PATTERN_REF        ValidationCode = "V_PAT005"
 
 	VALIDATION_UNREACHABLE_PATTERN     ValidationCode = "V_PAT006"
 	VALIDATION_AMBIGUOUS_TOKEN_MATCH   ValidationCode = "V_LEX002"
 	VALIDATION_IDENTICAL_TOKEN_PATTERN ValidationCode = "V_LEX003"
 	VALIDATION_TOKEN_SHADOWED          ValidationCode = "V_LEX004"
+	VALIDATION_NO_EOF_IN_META          ValidationCode = "V_LEX005"
+	VALIDATION_MULTIPLE_EOF_IN_META    ValidationCode = "V_LEX006"
+
+	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
 )
 
 func (v ValidationCode) String() string {
@@ -42,6 +46,9 @@ func getValidationStages() []*ValidationStage {
 			Order:       0,
 			Processor: func(ctx *ValidationCtx) {
 				lexRuleSection := ctx.RootNode.FindFirstKind(NodeLexSection)
+				if lexRuleSection == nil {
+					return
+				}
 				tks := map[string]struct{}{}
 
 				lexRuleTokens := lexRuleSection.FindAllKind(NodeLexRuleTokenName)
@@ -53,6 +60,17 @@ func getValidationStages() []*ValidationStage {
 						ctx.ReportError(VALIDATION_DUPLICATE_TOKEN.String(), msg, lexRuleToken)
 					} else {
 						tks[value] = struct{}{}
+					}
+				}
+
+				eofMetaValueNodes := lexRuleSectionCollectEOFTrueMetaValues(lexRuleSection)
+				if len(eofMetaValueNodes) == 0 {
+					msg := "no lexeme has EOF=true in its meta section; the compiler will automatically inject an EOF token"
+					ctx.ReportInfo(VALIDATION_NO_EOF_IN_META.String(), msg, lexRuleSection)
+				} else if len(eofMetaValueNodes) > 1 {
+					for _, node := range eofMetaValueNodes {
+						msg := "multiple lexemes have EOF=true in their meta section; only one is allowed"
+						ctx.ReportError(VALIDATION_MULTIPLE_EOF_IN_META.String(), msg, node)
 					}
 				}
 			},
@@ -137,6 +155,18 @@ func getValidationStages() []*ValidationStage {
 						ctx.ReportError(VALIDATION_CYCLIC_PATTERN_REF.String(), msg, defNameNode)
 					}
 				}
+
+				for _, negNode := range ctx.RootNode.FindAllKind(NodePatternNegation) {
+					children := negNode.Children()
+					if len(children) == 0 {
+						continue
+					}
+					operand := children[0]
+					validateNegationSubtree(operand, func(offending *Node) {
+						msg := "negation (!) may only contain character, range, group, or alternation; other constructs are not allowed"
+						ctx.ReportError(VALIDATION_NEGATION_INVALID_CONTENT.String(), msg, offending)
+					})
+				}
 			},
 		},
 		{
@@ -205,13 +235,70 @@ func getValidationStages() []*ValidationStage {
 	return stages
 }
 
+// negationAllowedKind returns true if this node kind is allowed inside a negation (!) subtree.
+func negationAllowedKind(kind LangSpecParserNodeKind) bool {
+	switch kind {
+	case NodeCharLiteral, NodePatternRange, NodePatternGroup, NodePatternAlternation, NodePatternSegment:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateNegationSubtree traverses the negated operand subtree and calls report for any node that is not
+// a character, range, group, or alternation (or segment wrapper). Recurses into Group, Alternation, and Segment.
+func validateNegationSubtree(node *Node, report func(offending *Node)) {
+	kind := node.Kind()
+	if !negationAllowedKind(kind) {
+		report(node)
+	}
+	switch kind {
+	case NodeCharLiteral, NodePatternRange:
+		return
+	case NodePatternGroup, NodePatternAlternation, NodePatternSegment:
+		for _, ch := range node.Children() {
+			validateNegationSubtree(ch, report)
+		}
+	default:
+		for _, ch := range node.Children() {
+			validateNegationSubtree(ch, report)
+		}
+	}
+}
+
 func getStringValue(node *Node) string {
-	value, ok := AttributeAs[string](node, ATTRIBUTE_LITERAL_STRING_FORMATTED)
+	value, ok := AttributeAs[string](node, ATTRIBUTE_LITERAL_STRING_VALUE)
 	if !ok {
-		panic(fmt.Errorf("engine error encountered: %v not stored for node %v", ATTRIBUTE_LITERAL_STRING_FORMATTED, node))
+		panic(fmt.Errorf("engine error encountered: %v not stored for node %v", ATTRIBUTE_LITERAL_STRING_VALUE, node))
 	}
 
 	return value
+}
+
+// lexRuleSectionCollectEOFTrueMetaValues returns all NodeMetaValue nodes (keyword true) for meta key "EOF" under section.
+func lexRuleSectionCollectEOFTrueMetaValues(lexSection *Node) []*Node {
+	var out []*Node
+	for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
+		metaSection := ruleNode.FindFirstKind(NodeMetaSection)
+		if metaSection == nil {
+			continue
+		}
+		for _, pair := range metaSection.FindAllKind(NodeMetaKeyValuePair) {
+			keyNode := pair.FindFirstKind(NodeMetaKey)
+			valueNode := pair.FindFirstKind(NodeMetaValue)
+			if keyNode == nil || valueNode == nil || len(keyNode.Tokens()) == 0 || len(valueNode.Tokens()) == 0 {
+				continue
+			}
+			key := strings.TrimSpace(string(keyNode.Tokens()[0].Raw))
+			if !strings.EqualFold(key, "EOF") {
+				continue
+			}
+			if valueNode.Tokens()[0].Token == TokKWTrue {
+				out = append(out, valueNode)
+			}
+		}
+	}
+	return out
 }
 
 /*
@@ -343,9 +430,9 @@ func computeReachablePatterns(root *Node, deps map[string][]string) map[string]b
 }
 
 type lexRuleInfo struct {
-	tokenName    string
-	patternKey   string
-	priority     int
+	tokenName     string
+	patternKey    string
+	priority      int
 	tokenNameNode *Node
 	patternNode   *Node
 }
@@ -362,7 +449,7 @@ func collectLexRules(root *Node) []lexRuleInfo {
 		if tokenNameNode == nil {
 			continue
 		}
-		tokenName, ok := AttributeAs[string](tokenNameNode, ATTRIBUTE_LITERAL_STRING_FORMATTED)
+		tokenName, ok := AttributeAs[string](tokenNameNode, ATTRIBUTE_LITERAL_STRING_VALUE)
 		if !ok {
 			continue
 		}

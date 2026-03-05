@@ -139,7 +139,7 @@ const (
 	NodePatternNegation
 	NodePatternConcat
 	NodePatternAlternation
-	NodePatternStringLiteral
+	NodeStringLiteral
 	NodePatternGroup
 	NodePatternSegment
 	NodePatternOptional
@@ -445,7 +445,7 @@ func (b *dslGrammarBuilder) patternSegment() Rule {
 		b.varRefReference(),
 		rangeRule,
 		b.charLiteral(),
-		b.g.expectToken(NodePatternStringLiteral, TokStringLiteral),
+		b.g.expectToken(NodeStringLiteral, TokStringLiteral),
 		b.g.expectToken(NodePatternAny, TokDot),
 		b.g.NestByNode(NodePatternGroup, TokParenOpen, TokParenClose,
 			b.g.rb.Rule.Reference("PATTERN EXPR REF", VirtualGrammarIDToGrammarID(VirtualPatternExpression))),
@@ -532,7 +532,7 @@ func (b *dslGrammarBuilder) metaSectionBody() Rule {
 		b.g.sequence(NodeMetaKeyValuePair, "SEQUENCE").
 			expectToken(NodeMetaKey, TokIdentifier).
 			expectVirtual(VirtualMetaAssignment, TokEqualsOperator).
-			expectToken(NodeMetaValue, TokStringLiteral).
+			rule(b.g.expectOneOf(NodeMetaValue, TokStringLiteral, TokKWFalse, TokKWTrue)).
 			build())
 }
 

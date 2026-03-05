@@ -5,6 +5,8 @@ import (
 	"lexarch"
 )
 
+var runeFormatter = lexarch.RuneFormatterDefault()
+
 /*
 BuildLexerSpec creates the LexerSpec and LexingRuleset from the language spec.
 Iterates spec.Tokens and adds a rule for each token with Pattern != nil.
