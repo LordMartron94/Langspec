@@ -27,6 +27,8 @@ type compiler struct {
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	dslName, dslVersion := getInfoFromHeader(rootNode.FindFirstKind(NodeHeader))
 
+	env := BuildSemanticEnv(rootNode, nil)
+
 	eofToken := getEOFToken(rootNode)
 	domain := lexarch.LexarchRuneDomain()
 	spec := langspec.LexerSpecCreate[rune, string, string](
@@ -46,7 +48,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		factory: pattern.RegulaASTFactoryCreate(domain),
 	}
 
-	ruleset := lspecCompiler.compileRuleset(rootNode)
+	ruleset := lspecCompiler.compileRuleset(rootNode, env)
 	spec.WithRuleset("default", *ruleset)
 
 	return &CompiledLangSpec{
@@ -75,15 +77,15 @@ func getEOFToken(rootNode *Node) string {
 	return eofToken
 }
 
-func (c *compiler) compileRuleset(rootNode *Node) *LexerRuleset {
-	patternTable := c.compilePatterns(rootNode)
+func (c *compiler) compileRuleset(rootNode *Node, env *SemanticEnv) *LexerRuleset {
+	patternTable := c.compilePatterns(rootNode, env)
 
 	ruleset := lexarch.LexingRulesetCreate[rune, string, string](
 		lexarch.TokenResolutionStepLongestThenPriority[string],
 	)
 
 	lexSection := rootNode.FindFirstKind(NodeLexSection)
-	lexRules := c.gatherRules(lexSection, patternTable)
+	lexRules := c.gatherRules(lexSection, patternTable, env)
 
 	for _, rule := range lexRules {
 		ruleset.WithRulePriority(rule.tokenPattern, rule.tokenName, rule.tokenRole, rule.priority)
@@ -102,6 +104,7 @@ type lexRule struct {
 func (c *compiler) gatherRules(
 	sectionNode *Node,
 	patternTable map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) []lexRule {
 	rules := sectionNode.FindAllKind(NodeLexRule)
 	out := make([]lexRule, 0)
@@ -118,7 +121,7 @@ func (c *compiler) gatherRules(
 
 			return false
 		}) {
-			out = append(out, c.constructLexRule(rule, patternTable))
+			out = append(out, c.constructLexRule(rule, patternTable, env))
 		}
 	}
 
@@ -128,6 +131,7 @@ func (c *compiler) gatherRules(
 func (c *compiler) constructLexRule(
 	ruleNode *Node,
 	patternTable map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) lexRule {
 	priority := 0
 	if priorityNode, ok := nodeContains(ruleNode, NodeLexRulePriority); ok {
@@ -150,7 +154,10 @@ func (c *compiler) constructLexRule(
 
 	switch patternNode.Kind() {
 	case NodeVarRef:
-		target := resolveVarRefTargetName(patternNode)
+		target := VarRefTargetName(patternNode)
+		if env.Patterns[target] == nil {
+			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
+		}
 		p, ok := patternTable[target]
 		if !ok {
 			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
@@ -177,7 +184,7 @@ func (c *compiler) constructLexRule(
 	}
 }
 
-func (c *compiler) compilePatterns(rootNode *Node) map[string]pattern.RegulaAST[rune] {
+func (c *compiler) compilePatterns(rootNode *Node, env *SemanticEnv) map[string]pattern.RegulaAST[rune] {
 	out := make(map[string]pattern.RegulaAST[rune])
 	temp := make(map[string]pattern.RegulaAST[rune])
 	patternSection := rootNode.FindFirstKind(NodePatternSection)
@@ -201,10 +208,10 @@ func (c *compiler) compilePatterns(rootNode *Node) map[string]pattern.RegulaAST[
 		}
 
 		// 2. Delegate: Pass the pure expression node to the dispatcher
-		pattern := c.compilePatternExpression(exprNode, temp)
+		pattern := c.compilePatternExpression(exprNode, temp, env)
 
 		temp[defName] = pattern
-		if _, contains := nodeContains(definition, NodeLocalVariable); !contains {
+		if !env.LocalPatterns[defName] {
 			out[defName] = pattern
 		}
 	}
@@ -215,6 +222,7 @@ func (c *compiler) compilePatterns(rootNode *Node) map[string]pattern.RegulaAST[
 func (c *compiler) compilePatternExpression(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 
 	kind := node.Kind()
@@ -223,23 +231,23 @@ func (c *compiler) compilePatternExpression(
 	case NodeCharLiteral:
 		return c.charLiteralToPattern(node)
 	case NodeVarRef:
-		return c.varRefToPattern(node, variables)
+		return c.varRefToPattern(node, variables, env)
 	case NodePatternConcat:
-		return c.concatToPattern(node, variables)
+		return c.concatToPattern(node, variables, env)
 	case NodePatternAlternation:
-		return c.alternationToPattern(node, variables)
+		return c.alternationToPattern(node, variables, env)
 	case NodePatternRange:
 		return c.rangeToPattern(node)
 	case NodePatternStar:
-		return c.starToPattern(node, variables)
+		return c.starToPattern(node, variables, env)
 	case NodePatternPlus:
-		return c.plusToPattern(node, variables)
+		return c.plusToPattern(node, variables, env)
 	case NodePatternOptional:
-		return c.optionalToPattern(node, variables)
+		return c.optionalToPattern(node, variables, env)
 	case NodeRepetition:
-		return c.repetitionToPattern(node, variables)
+		return c.repetitionToPattern(node, variables, env)
 	case NodePatternGroup:
-		return c.groupToPattern(node, variables)
+		return c.groupToPattern(node, variables, env)
 	case NodePatternNegation:
 		return c.negationToPattern(node)
 	case NodePatternAny:
@@ -254,17 +262,18 @@ func (c *compiler) compilePatternExpression(
 func (c *compiler) concatToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 
-	concatPattern := c.compilePatternExpression(children[0], variables)
+	concatPattern := c.compilePatternExpression(children[0], variables, env)
 
 	for i, child := range children {
 		if i == 0 {
 			continue
 		}
 
-		pattern := c.compilePatternExpression(child, variables)
+		pattern := c.compilePatternExpression(child, variables, env)
 		concatPattern = concatPattern.Then(pattern)
 	}
 
@@ -274,17 +283,18 @@ func (c *compiler) concatToPattern(
 func (c *compiler) alternationToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 
-	alternationPattern := c.compilePatternExpression(children[0], variables)
+	alternationPattern := c.compilePatternExpression(children[0], variables, env)
 
 	for i, child := range children {
 		if i == 0 {
 			continue
 		}
 
-		pattern := c.compilePatternExpression(child, variables)
+		pattern := c.compilePatternExpression(child, variables, env)
 		alternationPattern = alternationPattern.Or(pattern)
 	}
 
@@ -301,6 +311,7 @@ func (c *compiler) rangeToPattern(
 func (c *compiler) starToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 
@@ -308,13 +319,14 @@ func (c *compiler) starToPattern(
 		panic("error: star pattern must have exactly 1 child")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables)
+	childPattern := c.compilePatternExpression(children[0], variables, env)
 	return childPattern.Star()
 }
 
 func (c *compiler) plusToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 
@@ -322,13 +334,14 @@ func (c *compiler) plusToPattern(
 		panic("error: plus pattern must have exactly 1 child")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables)
+	childPattern := c.compilePatternExpression(children[0], variables, env)
 	return childPattern.Plus()
 }
 
 func (c *compiler) optionalToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 
@@ -336,13 +349,14 @@ func (c *compiler) optionalToPattern(
 		panic("error: optional pattern must have exactly 1 child")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables)
+	childPattern := c.compilePatternExpression(children[0], variables, env)
 	return childPattern.Optional()
 }
 
 func (c *compiler) repetitionToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 
@@ -350,7 +364,7 @@ func (c *compiler) repetitionToPattern(
 		panic("compiler error: repetition node must have exactly 2 children (pattern and settings)")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables)
+	childPattern := c.compilePatternExpression(children[0], variables, env)
 	repetitionSettings := children[1]
 
 	minVal := 0
@@ -370,13 +384,14 @@ func (c *compiler) repetitionToPattern(
 func (c *compiler) groupToPattern(
 	node *Node,
 	variables map[string]pattern.RegulaAST[rune],
+	env *SemanticEnv,
 ) pattern.RegulaAST[rune] {
 	children := node.Children()
 	if len(children) != 1 {
 		panic("engine error: group node must have exactly 1 child")
 	}
 
-	return c.compilePatternExpression(children[0], variables)
+	return c.compilePatternExpression(children[0], variables, env)
 }
 
 func (c *compiler) negationToPattern(
@@ -462,8 +477,11 @@ func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 	return c.factory.Literal([]rune(content)...)
 }
 
-func (c *compiler) varRefToPattern(node *Node, variables map[string]pattern.RegulaAST[rune]) pattern.RegulaAST[rune] {
-	targetName := resolveVarRefTargetName(node)
+func (c *compiler) varRefToPattern(node *Node, variables map[string]pattern.RegulaAST[rune], env *SemanticEnv) pattern.RegulaAST[rune] {
+	targetName := VarRefTargetName(node)
+	if env.Patterns[targetName] == nil {
+		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
+	}
 	targetPattern, ok := variables[targetName]
 	if !ok {
 		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
@@ -522,14 +540,6 @@ func nodeFormattedContent(node *Node, formatAttribute string) string {
 	}
 
 	return formatted
-}
-
-func resolveVarRefTargetName(varRef *Node) string {
-	tokens := varRef.Tokens()
-	if len(tokens) >= 2 {
-		return strings.TrimSpace(string(tokens[1].Raw))
-	}
-	return ""
 }
 
 func checkForEOFLexeme(lexerSection *Node) string {

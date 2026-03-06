@@ -93,121 +93,31 @@ func getValidationStages() []*ValidationStage {
 	}
 }
 
-// ------------------------------------------------------------- SEMANTIC ENVIRONMENT
-
-type SemanticEnv struct {
-	Tokens   map[string]*Node
-	Patterns map[string]*Node
-	Rules    map[string]*Node
-	Pratt    map[string]*Node
-
-	LocalPatterns map[string]bool
-	LocalPratt    map[string]bool
-}
-
-func buildEnvironment(ctx *ValidationCtx, reportDuplicates bool) *SemanticEnv {
-	env := &SemanticEnv{
-		Tokens:        make(map[string]*Node),
-		Patterns:      make(map[string]*Node),
-		Rules:         make(map[string]*Node),
-		Pratt:         make(map[string]*Node),
-		LocalPatterns: make(map[string]bool),
-		LocalPratt:    make(map[string]bool),
-	}
-
-	buildEnvTokens(ctx, env, reportDuplicates)
-	buildEnvPatterns(ctx, env, reportDuplicates)
-	buildEnvRules(ctx, env, reportDuplicates)
-	buildEnvPratt(ctx, env, reportDuplicates)
-
-	return env
-}
-
-func buildEnvTokens(ctx *ValidationCtx, env *SemanticEnv, report bool) {
-	lex := ctx.RootNode.FindFirstKind(NodeLexSection)
-	if lex == nil {
-		return
-	}
-	for _, tokenNode := range lex.FindAllKind(NodeLexRuleTokenName) {
-		name := getIdentifierValue(tokenNode)
-		if _, exists := env.Tokens[name]; exists {
-			if report {
-				ctx.ReportError(VALIDATION_DUPLICATE_TOKEN.String(), fmt.Sprintf("token '%s' already declared", name), tokenNode)
-			}
-		} else {
-			env.Tokens[name] = tokenNode
-		}
-	}
-}
-
-func buildEnvPatterns(ctx *ValidationCtx, env *SemanticEnv, report bool) {
-	for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
-		name, nameNode := extractPatternDefName(def)
-		if name == "" {
-			continue
-		}
-		if _, exists := env.Patterns[name]; exists {
-			if report {
-				ctx.ReportError(VALIDATION_DUPLICATE_PATTERN_NAME.String(), fmt.Sprintf("pattern '%s' already declared", name), nameNode)
-			}
-		} else {
-			env.Patterns[name] = def
-			if def.FindFirstKind(NodeLocalVariable) != nil {
-				env.LocalPatterns[name] = true
-			}
-		}
-	}
-}
-
-func buildEnvRules(ctx *ValidationCtx, env *SemanticEnv, report bool) {
-	parse := ctx.RootNode.FindFirstKind(NodeParseSection)
-	if parse == nil {
-		return
-	}
-	for _, rule := range parse.FindAllKind(NodeParseRule) {
-		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		name := getParseRuleName(nameNode)
-		if name == "" {
-			continue
-		}
-		if _, exists := env.Rules[name]; exists {
-			if report {
-				ctx.ReportError(VALIDATION_DUPLICATE_PARSE_RULE_NAME.String(), fmt.Sprintf("parse rule '%s' already declared", name), nameNode)
-			}
-		} else {
-			env.Rules[name] = rule
-		}
-	}
-}
-
-func buildEnvPratt(ctx *ValidationCtx, env *SemanticEnv, report bool) {
-	pratt := ctx.RootNode.FindFirstKind(NodePrattSection)
-	if pratt == nil {
-		return
-	}
-	for _, expr := range pratt.FindAllKind(NodePrattExprDef) {
-		nameNode := expr.FindFirstKind(NodePrattExprName)
-		name := getIdentifierValue(nameNode)
-		if name == "" {
-			continue
-		}
-		if _, exists := env.Pratt[name]; exists {
-			if report {
-				ctx.ReportError(VALIDATION_DUPLICATE_PRATT_EXPR.String(), fmt.Sprintf("pratt expression '%s' already declared", name), nameNode)
-			}
-		} else {
-			env.Pratt[name] = expr
-			if expr.FindFirstKind(NodeLocalVariable) != nil {
-				env.LocalPratt[name] = true
-			}
-		}
-	}
-}
-
 // ------------------------------------------------------------- SYMBOL BINDING (STAGE 0)
 
 func processSymbolBinding(ctx *ValidationCtx) {
-	env := buildEnvironment(ctx, true)
+	env := BuildSemanticEnv(ctx.RootNode, func(kind SemanticSymbolKind, name string, node *Node) {
+		var code ValidationCode
+		var msg string
+		switch kind {
+		case SymbolKindToken:
+			code = VALIDATION_DUPLICATE_TOKEN
+			msg = fmt.Sprintf("token '%s' already declared", name)
+		case SymbolKindPattern:
+			code = VALIDATION_DUPLICATE_PATTERN_NAME
+			msg = fmt.Sprintf("pattern '%s' already declared", name)
+		case SymbolKindRule:
+			code = VALIDATION_DUPLICATE_PARSE_RULE_NAME
+			msg = fmt.Sprintf("parse rule '%s' already declared", name)
+		case SymbolKindPratt:
+			code = VALIDATION_DUPLICATE_PRATT_EXPR
+			msg = fmt.Sprintf("pratt expression '%s' already declared", name)
+		default:
+			code = VALIDATION_DUPLICATE_TOKEN
+			msg = fmt.Sprintf("symbol '%s' already declared", name)
+		}
+		ctx.ReportError(code.String(), msg, node)
+	})
 
 	validateTokenReferences(ctx, env)
 	validatePatternReferences(ctx, env)
@@ -314,7 +224,7 @@ func getTokenRole(tokenNameNode *Node) string {
 
 func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	for _, ref := range ctx.RootNode.FindAllKind(NodeVarRef) {
-		name := getVarRefTargetName(ref)
+		name := VarRefTargetName(ref)
 		if name == "" {
 			continue
 		}
@@ -365,7 +275,7 @@ func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
 // ------------------------------------------------------------- REACHABILITY (STAGE 1)
 
 func processReachability(ctx *ValidationCtx) {
-	env := buildEnvironment(ctx, false)
+	env := BuildSemanticEnv(ctx.RootNode, nil)
 
 	patternDeps := buildPatternDependencyMap(ctx.RootNode, env)
 	checkPatternCycles(ctx, env, patternDeps)
@@ -582,16 +492,6 @@ func extractPatternDefName(def *Node) (string, *Node) {
 	return string(nameNode.Tokens()[0].Raw), nameNode
 }
 
-func getVarRefTargetName(varRef *Node) string {
-	if targetNode := varRef.FindFirstKind(NodeVarRefTarget); targetNode != nil && len(targetNode.Tokens()) > 0 {
-		return strings.TrimSpace(string(targetNode.Tokens()[0].Raw))
-	}
-	if tokens := varRef.Tokens(); len(tokens) >= 2 {
-		return strings.TrimSpace(string(tokens[1].Raw))
-	}
-	return ""
-}
-
 func getParseRuleName(nameNode *Node) string {
 	if nameNode == nil || len(nameNode.Tokens()) == 0 {
 		return ""
@@ -634,7 +534,7 @@ func buildPatternDependencyMap(root *Node, env *SemanticEnv) map[string][]string
 
 		var refs []string
 		for _, varRef := range def.FindAllKind(NodeVarRef) {
-			refName := getVarRefTargetName(varRef)
+			refName := VarRefTargetName(varRef)
 			if refName != "" && env.Patterns[refName] != nil {
 				refs = append(refs, refName)
 			}
@@ -686,7 +586,7 @@ func computeReachablePatterns(root *Node, deps map[string][]string) map[string]b
 	if lexSection := root.FindFirstKind(NodeLexSection); lexSection != nil {
 		for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
 			if varRef := ruleNode.FindFirstKind(NodeVarRef); varRef != nil {
-				if name := getVarRefTargetName(varRef); name != "" {
+				if name := VarRefTargetName(varRef); name != "" {
 					entryPoints[name] = true
 				}
 			}
@@ -859,7 +759,7 @@ func parsePriority(priNode *Node) int {
 
 func extractLexPattern(ruleNode *Node) (string, *Node) {
 	if varRef := ruleNode.FindFirstKind(NodeVarRef); varRef != nil {
-		if name := getVarRefTargetName(varRef); name != "" {
+		if name := VarRefTargetName(varRef); name != "" {
 			return "ref:" + name, varRef
 		}
 	}
