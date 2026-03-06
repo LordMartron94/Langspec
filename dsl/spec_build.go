@@ -599,7 +599,7 @@ func (b *dslGrammarBuilder) parseRule() Rule {
 			NodeParseRuleBody,
 			TokBraceOpen,
 			TokBraceClose,
-			b.parseRuleExpr(),
+			b.g.rb.Rule.Required(b.parseRuleExpr(), "rule expression needs at least one expression"),
 		)).
 		optionalRule(b.g.expectVirtualInRule(NodeParseRule, TokSemicolon)).
 		build()
@@ -684,7 +684,10 @@ func (b *dslGrammarBuilder) nestMapping() Rule {
 			NodeParseNestBody,
 			TokBraceOpen,
 			TokBraceClose,
-			b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+			b.g.rb.Rule.Required(
+				b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+				"rule expression needs at least one expression",
+			),
 		)).
 		build()
 }
