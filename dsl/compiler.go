@@ -236,7 +236,7 @@ func (c *compiler) compilePatternExpression(
 		return c.plusToPattern(node, variables)
 	case NodePatternOptional:
 		return c.optionalToPattern(node, variables)
-	case NodePatternRepetition:
+	case NodeRepetition:
 		return c.repetitionToPattern(node, variables)
 	case NodePatternGroup:
 		return c.groupToPattern(node, variables)

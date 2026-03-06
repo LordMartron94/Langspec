@@ -145,7 +145,7 @@ const (
 	NodePatternGroup
 	NodePatternSegment
 	NodePatternOptional
-	NodePatternRepetition
+	NodeRepetition
 	NodeRepetitionMin
 	NodeRepetitionMax
 	NodeIdentifier
@@ -438,7 +438,7 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 
 		// POSTFIX RULES: Composite postfix bindings that require full sub-rule execution
 		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-			b.g.PostfixRuleOp(TokBraceOpen, 30, NodePatternRepetition, b.patternRepetition()),
+			b.g.PostfixRuleOp(TokBraceOpen, 30, NodeRepetition, b.patternRepetition()),
 		},
 
 		// INFIX: Bindings BETWEEN expressions
@@ -487,7 +487,7 @@ func (b *dslGrammarBuilder) patternRange() Rule {
 
 func (b *dslGrammarBuilder) patternRepetition() Rule {
 	return b.g.NestByNode(
-		NodePatternRepetition,
+		NodeRepetition,
 		TokBraceOpen,
 		TokBraceClose,
 		b.repetitionBounds(),
@@ -496,14 +496,14 @@ func (b *dslGrammarBuilder) patternRepetition() Rule {
 
 func (b *dslGrammarBuilder) repetitionBounds() Rule {
 	return b.g.ChoiceByNode(
-		NodePatternRepetition,
+		NodeRepetition,
 		b.rangedRepetition(),
 		b.exactRepetition(),
 	)
 }
 
 func (b *dslGrammarBuilder) rangedRepetition() Rule {
-	return b.g.sequence(NodePatternRepetition, "RANGED").
+	return b.g.sequence(NodeRepetition, "RANGED").
 		optionalToken(NodeRepetitionMin, TokInteger).
 		expectVirtualInRule(TokComma).
 		optionalToken(NodeRepetitionMax, TokInteger).
@@ -598,6 +598,10 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 
 		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokOptional, 30, NodeParseOptional),
+		},
+
+		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+			b.g.PostfixRuleOp(TokBraceOpen, 30, NodeRepetition, b.patternRepetition()),
 		},
 
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
