@@ -72,6 +72,14 @@ const (
 	TokKWLocal
 	TokKWVirtual
 	TokKWNest
+	TokKWPratt
+
+	TokKWPrimary
+	TokKWPrefix
+	TokKWPostfix
+	TokKWInfix
+	TokKWImplicit
+	TokKWPrecedence
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -180,6 +188,31 @@ const (
 
 	NodeParseStar
 	NodeParsePlus
+
+	// -- Pratt Section --
+
+	NodePrattSection
+	NodePrattKeyword
+	NodePrattExprDef
+	NodePrattExprName
+	NodePrattExprBody
+	NodePrattCategoryList
+	NodePrattCategory
+	NodePrattPrimary
+	NodePrattPrimaryBody
+	NodePrattPrimaryRef
+	NodePrattOperatorBody
+	NodePrattOperatorList
+	NodePrattOperatorDef
+	NodePrattPrefix
+	NodePrattPostfix
+	NodePrattInfix
+	NodePrattImplicit
+	NodePrattImplicitBody
+	NodePrattImplicitDef
+	NodePrattPrecedenceValue
+	NodePrattOperatorTarget
+	NodeStringLiteral
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -224,6 +257,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWTool, "keyword.tool", "tool", 2},
 		{TokKWLex, "keyword.declaration.lex", "LEX", 2},
 		{TokKWPattern, "keyword.declaration.pattern", "PATTERN", 2},
+		{TokKWPratt, "keyword.declaration.pratt", "PRATT", 2},
 		{TokKWTrue, "constant.language.boolean", "true", 2},
 		{TokKWFalse, "constant.language.boolean", "false", 2},
 		{TokKWLocal, "keyword.modifier.local", "local", 2},
@@ -231,6 +265,12 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWRef, "keyword.control.reference", "ref", 2},
 		{TokKWVirtual, "keyword.operator.virtual", "virtual", 2},
 		{TokKWNest, "keyword.operator.nest", "nest", 2},
+		{TokKWPrimary, "keyword.pratt.primary", "primary", 2},
+		{TokKWPrefix, "keyword.pratt.prefix", "prefix", 2},
+		{TokKWPostfix, "keyword.pratt.postfix", "postfix", 2},
+		{TokKWInfix, "keyword.pratt.infix", "infix", 2},
+		{TokKWImplicit, "keyword.pratt.implicit", "implicit", 2},
+		{TokKWPrecedence, "keyword.pratt.precedence", "precedence", 2},
 	}
 
 	for _, st := range statics {
@@ -336,6 +376,7 @@ func (b *dslGrammarBuilder) program() Rule {
 		b.g.rb.Rule.OptionalPrefix(b.pragmaSection(), TokKWPragma),
 		b.g.rb.Rule.OptionalPrefix(b.patternSection(), TokKWPattern),
 		b.g.rb.Rule.Required(b.lexSection(), "must have lex ruleset"),
+		b.g.rb.Rule.OptionalPrefix(b.prattSection(), TokKWPratt),
 		b.g.rb.Rule.Required(b.parseSection(), "must have parse ruleset"),
 		b.g.expectVirtual(VirtualEOF, TokEOF),
 	)
@@ -572,6 +613,132 @@ func (b *dslGrammarBuilder) metaSectionBody() Rule {
 			expectVirtual(VirtualMetaAssignment, TokEqualsOperator).
 			rule(b.g.expectOneOf(NodeMetaValue, TokStringLiteral, TokKWFalse, TokKWTrue)).
 			build())
+}
+
+// ----------------------------------------------------------- PRATT SECTION
+
+func (b *dslGrammarBuilder) prattSection() Rule {
+	blockRule := b.g.block(
+		NodePrattSection,
+		NodePrattKeyword,
+		TokKWPratt,
+		b.prattExprDefList(),
+	)
+	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+}
+
+func (b *dslGrammarBuilder) prattExprDefList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodePrattExprDef, "LIST", b.prattExprDef())
+}
+
+func (b *dslGrammarBuilder) prattExprDef() Rule {
+	return b.g.sequence(NodePrattExprDef, "").
+		optionalToken(NodeLocalVariable, TokKWLocal).
+		expectToken(NodePrattExprName, TokIdentifier).
+		rule(b.g.NestByNode(
+			NodePrattExprBody,
+			TokBraceOpen,
+			TokBraceClose,
+			b.prattCategoryList(),
+		)).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattCategoryList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodePrattCategoryList, "", b.prattCategory())
+}
+
+func (b *dslGrammarBuilder) prattCategory() Rule {
+	return b.g.ChoiceByNode(NodePrattCategory,
+		b.prattPrimary(),
+		b.prattOperatorBlock(NodePrattPrefix, TokKWPrefix),
+		b.prattOperatorBlock(NodePrattPostfix, TokKWPostfix),
+		b.prattOperatorBlock(NodePrattInfix, TokKWInfix),
+		b.prattImplicitBlock(),
+	)
+}
+
+func (b *dslGrammarBuilder) prattPrimary() Rule {
+	return b.g.sequence(NodePrattPrimary, "").
+		expectToken(NodePrattKeyword, TokKWPrimary).
+		rule(b.g.NestByNode(
+			NodePrattPrimaryBody,
+			TokBraceOpen,
+			TokBraceClose,
+			b.prattPrimaryRef(),
+		)).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattPrimaryRef() Rule {
+	return b.g.sequence(NodePrattPrimaryRef, "").
+		expectVirtualInRule(TokKWRef).
+		expectToken(NodeParseRuleReference, TokIdentifier).
+		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattOperatorBlock(nodeKind LangSpecParserNodeKind, keyword LangSpecLexerTokenType) Rule {
+	return b.g.sequence(nodeKind, "").
+		expectToken(NodePrattKeyword, keyword).
+		rule(b.g.NestByNode(
+			NodePrattOperatorBody,
+			TokBraceOpen,
+			TokBraceClose,
+			b.prattOperatorList(),
+		)).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattOperatorList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodePrattOperatorList, "", b.prattOperatorDef())
+}
+
+func (b *dslGrammarBuilder) prattOperatorDef() Rule {
+	return b.g.sequence(NodePrattOperatorDef, "").
+		rule(b.prattOperatorTarget()).
+		expectVirtualInRule(TokChainSeparator).
+		expectToken(NodeParseNodeName, TokIdentifier).
+		expectVirtualInRule(TokKWPrecedence).
+		expectToken(NodePrattPrecedenceValue, TokInteger).
+		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattOperatorTarget() Rule {
+	return b.g.ChoiceByNode(NodePrattOperatorTarget,
+		b.g.expectToken(NodeParseTokenReference, TokIdentifier),
+		b.prattOperatorRuleRef(),
+	)
+}
+
+func (b *dslGrammarBuilder) prattOperatorRuleRef() Rule {
+	return b.g.sequence(NodePrattOperatorTarget, "REF").
+		expectVirtualInRule(TokKWRef).
+		expectToken(NodeParseRuleReference, TokIdentifier).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattImplicitBlock() Rule {
+	return b.g.sequence(NodePrattImplicit, "").
+		expectToken(NodePrattKeyword, TokKWImplicit).
+		rule(b.g.NestByNode(
+			NodePrattImplicitBody,
+			TokBraceOpen,
+			TokBraceClose,
+			b.prattImplicitDef(),
+		)).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattImplicitDef() Rule {
+	return b.g.sequence(NodePrattImplicitDef, "").
+		expectVirtualInRule(TokChainSeparator).
+		expectToken(NodeParseNodeName, TokIdentifier).
+		expectVirtualInRule(TokKWPrecedence).
+		expectToken(NodePrattPrecedenceValue, TokInteger).
+		expectVirtualInRule(TokSemicolon).
+		build()
 }
 
 // ----------------------------------------------------------- PARSE SECTION

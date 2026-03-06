@@ -80,11 +80,33 @@ func _() {
 	_ = x[NodeParseNestBody-70]
 	_ = x[NodeParseStar-71]
 	_ = x[NodeParsePlus-72]
+	_ = x[NodePrattSection-73]
+	_ = x[NodePrattKeyword-74]
+	_ = x[NodePrattExprDef-75]
+	_ = x[NodePrattExprName-76]
+	_ = x[NodePrattExprBody-77]
+	_ = x[NodePrattCategoryList-78]
+	_ = x[NodePrattCategory-79]
+	_ = x[NodePrattPrimary-80]
+	_ = x[NodePrattPrimaryBody-81]
+	_ = x[NodePrattPrimaryRef-82]
+	_ = x[NodePrattOperatorBody-83]
+	_ = x[NodePrattOperatorList-84]
+	_ = x[NodePrattOperatorDef-85]
+	_ = x[NodePrattPrefix-86]
+	_ = x[NodePrattPostfix-87]
+	_ = x[NodePrattInfix-88]
+	_ = x[NodePrattImplicit-89]
+	_ = x[NodePrattImplicitBody-90]
+	_ = x[NodePrattImplicitDef-91]
+	_ = x[NodePrattPrecedenceValue-92]
+	_ = x[NodePrattOperatorTarget-93]
+	_ = x[NodeStringLiteral-94]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternGroupNodePatternSegmentNodePatternOptionalNodeRepetitionNodeRepetitionBoundsNodeRepetitionMinNodeRepetitionMaxNodeIdentifierNodeLocalVariableNodeParseSectionNodeParseKeywordNodeParseRuleNodeParseRuleNameNodeParseNodeNameNodeParseRuleBodyNodeParseOpSuppressNodeParseOpEmitNodeParseOpRefNodeParseAlternationNodeParseConcatNodeParseOptionalNodeParseSegmentNodeParseGroupNodeParseTokenReferenceNodeParseRuleReferenceNodeParseOpNestNodeParseNestOpenTokenNodeParseNestCloseTokenNodeParseNestBodyNodeParseStarNodeParsePlus"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternGroupNodePatternSegmentNodePatternOptionalNodeRepetitionNodeRepetitionBoundsNodeRepetitionMinNodeRepetitionMaxNodeIdentifierNodeLocalVariableNodeParseSectionNodeParseKeywordNodeParseRuleNodeParseRuleNameNodeParseNodeNameNodeParseRuleBodyNodeParseOpSuppressNodeParseOpEmitNodeParseOpRefNodeParseAlternationNodeParseConcatNodeParseOptionalNodeParseSegmentNodeParseGroupNodeParseTokenReferenceNodeParseRuleReferenceNodeParseOpNestNodeParseNestOpenTokenNodeParseNestCloseTokenNodeParseNestBodyNodeParseStarNodeParsePlusNodePrattSectionNodePrattKeywordNodePrattExprDefNodePrattExprNameNodePrattExprBodyNodePrattCategoryListNodePrattCategoryNodePrattPrimaryNodePrattPrimaryBodyNodePrattPrimaryRefNodePrattOperatorBodyNodePrattOperatorListNodePrattOperatorDefNodePrattPrefixNodePrattPostfixNodePrattInfixNodePrattImplicitNodePrattImplicitBodyNodePrattImplicitDefNodePrattPrecedenceValueNodePrattOperatorTargetNodeStringLiteral"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 667, 685, 704, 718, 738, 755, 772, 786, 803, 819, 835, 848, 865, 882, 899, 918, 933, 947, 967, 982, 999, 1015, 1029, 1052, 1074, 1089, 1111, 1134, 1151, 1164, 1177}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 667, 685, 704, 718, 738, 755, 772, 786, 803, 819, 835, 848, 865, 882, 899, 918, 933, 947, 967, 982, 999, 1015, 1029, 1052, 1074, 1089, 1111, 1134, 1151, 1164, 1177, 1193, 1209, 1225, 1242, 1259, 1280, 1297, 1313, 1333, 1352, 1373, 1394, 1414, 1429, 1445, 1459, 1476, 1497, 1517, 1541, 1564, 1581}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

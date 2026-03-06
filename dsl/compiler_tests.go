@@ -38,13 +38,13 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
 
-	// LangSpecCompilerDebugGrammar(compiler)
+	LangSpecCompilerDebugGrammar(compiler)
 
 	result, err := LangSpecCompilerCompile(compiler, TestFile)
 
 	LangSpecCompilerDebugResult(compiler, result, &CompilerDebugConfig{
 		DebugParseTrace: false,
-		DebugLST:        false,
+		DebugLST:        true,
 	})
 
 	if err != nil {
