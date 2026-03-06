@@ -71,6 +71,7 @@ const (
 	TokKWFalse
 	TokKWLocal
 	TokKWVirtual
+	TokKWNest
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -171,6 +172,14 @@ const (
 	NodeParseGroup
 	NodeParseTokenReference
 	NodeParseRuleReference
+
+	NodeParseOpNest
+	NodeParseNestOpenToken
+	NodeParseNestCloseToken
+	NodeParseNestBody
+
+	NodeParseStar
+	NodeParsePlus
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -221,6 +230,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWParse, "keyword.declaration.parse", "PARSE", 2},
 		{TokKWRef, "keyword.control.reference", "ref", 2},
 		{TokKWVirtual, "keyword.operator.virtual", "virtual", 2},
+		{TokKWNest, "keyword.operator.nest", "nest", 2},
 	}
 
 	for _, st := range statics {
@@ -601,6 +611,8 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 
 		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokOptional, 30, NodeParseOptional),
+			b.g.PostfixOp(TokStar, 30, NodeParseStar),
+			b.g.PostfixOp(TokPlus, 30, NodeParsePlus),
 		},
 
 		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
@@ -624,38 +636,57 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 }
 
 func (b *dslGrammarBuilder) parseSegment() Rule {
-	emitMapping := b.g.sequence(NodeParseOpEmit, "").
+	return b.g.ChoiceByNode(NodeParseSegment,
+		b.emitMapping(),
+		b.refMapping(),
+		b.virtualMapping(),
+		b.nestMapping(),
+		b.g.expectToken(NodeIdentifier, TokIdentifier),
+		b.parseGroup(),
+	)
+}
+
+func (b *dslGrammarBuilder) emitMapping() Rule {
+	emit := b.g.sequence(NodeParseOpEmit, "").
 		expectToken(NodeParseNodeName, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
 		expectToken(NodeParseTokenReference, TokIdentifier).
 		build()
 
-	predictEmit := b.g.rb.Rule.Predict(
-		emitMapping,
+	return b.g.rb.Rule.Predict(
+		emit,
 		func(ctx *syntaxa.SelectRuleContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]) bool {
 			return ctx.Peek(0).Token == TokIdentifier && ctx.Peek(1).Token == TokAssignment
 		},
 	)
+}
 
-	refMapping := b.g.sequence(NodeParseOpRef, "").
+func (b *dslGrammarBuilder) refMapping() Rule {
+	return b.g.sequence(NodeParseOpRef, "").
 		expectVirtualInRule(TokKWRef).
 		expectToken(NodeParseRuleReference, TokIdentifier).
 		build()
+}
 
-	virtualMapping := b.g.sequence(NodeParseOpSuppress, "").
+func (b *dslGrammarBuilder) virtualMapping() Rule {
+	return b.g.sequence(NodeParseOpSuppress, "").
 		expectVirtualInRule(TokKWVirtual).
 		expectToken(NodeParseTokenReference, TokIdentifier).
 		build()
+}
 
-	standaloneString := b.g.expectToken(NodeIdentifier, TokIdentifier)
-
-	return b.g.ChoiceByNode(NodeParseSegment,
-		predictEmit,
-		refMapping,
-		virtualMapping,
-		standaloneString,
-		b.parseGroup(),
-	)
+func (b *dslGrammarBuilder) nestMapping() Rule {
+	return b.g.sequence(NodeParseOpNest, "").
+		expectVirtualInRule(TokKWNest).
+		expectToken(NodeParseNestOpenToken, TokIdentifier).
+		expectToken(NodeParseNestCloseToken, TokIdentifier).
+		rule(b.g.NestByNode(
+			NodeParseNestBody,
+			TokBraceOpen,
+			TokBraceClose,
+			b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+		)).
+		build()
 }
 
 func (b *dslGrammarBuilder) parseGroup() Rule {

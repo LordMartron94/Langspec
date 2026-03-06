@@ -96,6 +96,12 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 	dsl.NodeParseRuleReference: {
 		Scopes: []string{"entity.name.function.rule-reference"},
 	},
+	dsl.NodeParseNestOpenToken: {
+		Scopes: []string{"constant.language.token-reference"},
+	},
+	dsl.NodeParseNestCloseToken: {
+		Scopes: []string{"constant.language.token-reference"},
+	},
 }
 
 // ------------------------------------------------------------- PATTERN BUILDING
