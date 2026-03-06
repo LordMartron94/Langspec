@@ -22,25 +22,24 @@ const (
 	VALIDATION_LOCAL_REF_OUTSIDE_SECTION ValidationCode = "V_PAT004"
 	VALIDATION_CYCLIC_PATTERN_REF        ValidationCode = "V_PAT005"
 
-	VALIDATION_UNREACHABLE_PATTERN     ValidationCode = "V_PAT006"
-	VALIDATION_AMBIGUOUS_TOKEN_MATCH   ValidationCode = "V_LEX002"
-	VALIDATION_IDENTICAL_TOKEN_PATTERN ValidationCode = "V_LEX003"
-	VALIDATION_TOKEN_SHADOWED          ValidationCode = "V_LEX004"
-	VALIDATION_NO_EOF_IN_META          ValidationCode = "V_LEX005"
-	VALIDATION_MULTIPLE_EOF_IN_META    ValidationCode = "V_LEX006"
+	VALIDATION_UNREACHABLE_PATTERN         ValidationCode = "V_PAT006"
+	VALIDATION_AMBIGUOUS_TOKEN_MATCH       ValidationCode = "V_LEX002"
+	VALIDATION_IDENTICAL_TOKEN_PATTERN     ValidationCode = "V_LEX003"
+	VALIDATION_TOKEN_SHADOWED              ValidationCode = "V_LEX004"
+	VALIDATION_NO_EOF_IN_META              ValidationCode = "V_LEX005"
+	VALIDATION_MULTIPLE_EOF_IN_META        ValidationCode = "V_LEX006"
 	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX007"
 
-	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
+	VALIDATION_NEGATION_INVALID_CONTENT  ValidationCode = "V_PAT007"
 	VALIDATION_REPETITION_MIN_GT_MAX     ValidationCode = "V_PAT008"
 	VALIDATION_REPETITION_NEGATIVE_BOUND ValidationCode = "V_PAT009"
 
 	VALIDATION_DUPLICATE_PARSE_RULE_NAME ValidationCode = "V_PAR001"
 	VALIDATION_UNRESOLVED_PARSE_RULE_REF ValidationCode = "V_PAR002"
 	VALIDATION_UNREFERENCED_PARSE_RULE   ValidationCode = "V_PAR003"
-	VALIDATION_PROGRAM_RULE_REQUIRED    ValidationCode = "V_PAR004"
+	VALIDATION_PROGRAM_RULE_REQUIRED     ValidationCode = "V_PAR004"
 
-	// Parse rule safety: infinite loops and unbounded optional repetition
-	VALIDATION_PARSE_LEFT_RECURSION              ValidationCode = "V_PAR005"
+	VALIDATION_PARSE_LEFT_RECURSION                ValidationCode = "V_PAR005"
 	VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION ValidationCode = "V_PAR006"
 )
 
@@ -48,356 +47,499 @@ func (v ValidationCode) String() string {
 	return string(v)
 }
 
-// ------------------------------------------------------------- STAGES
+const programRuleName = "PROGRAM"
+
+// ------------------------------------------------------------- STAGES REGISTRATION
 
 func getValidationStages() []*ValidationStage {
-	stages := []*ValidationStage{
+	return []*ValidationStage{
 		{
 			Name:        "Lex Rule Validation",
-			Description: "Validates the lex rule section.",
+			Description: "Validates the lex rule section for duplicates and EOF metadata.",
 			Order:       0,
-			Processor: func(ctx *ValidationCtx) {
-				lexRuleSection := ctx.RootNode.FindFirstKind(NodeLexSection)
-				if lexRuleSection == nil {
-					return
-				}
-				tks := map[string]struct{}{}
-
-				lexRuleTokens := lexRuleSection.FindAllKind(NodeLexRuleTokenName)
-				for _, lexRuleToken := range lexRuleTokens {
-					value := getIdentifierValue(lexRuleToken)
-
-					if _, seen := tks[value]; seen {
-						msg := fmt.Sprintf("token '%s' already declared (duplicate entry)", value)
-						ctx.ReportError(VALIDATION_DUPLICATE_TOKEN.String(), msg, lexRuleToken)
-					} else {
-						tks[value] = struct{}{}
-					}
-				}
-
-				eofMetaValueNodes := lexRuleSectionCollectEOFTrueMetaValues(lexRuleSection)
-				if len(eofMetaValueNodes) == 0 {
-					msg := "no lexeme has EOF=true in its meta section; the compiler will automatically inject an EOF token"
-					ctx.ReportInfo(VALIDATION_NO_EOF_IN_META.String(), msg, lexRuleSection)
-				} else if len(eofMetaValueNodes) > 1 {
-					for _, node := range eofMetaValueNodes {
-						msg := "multiple lexemes have EOF=true in their meta section; only one is allowed"
-						ctx.ReportError(VALIDATION_MULTIPLE_EOF_IN_META.String(), msg, node)
-					}
-				}
-			},
+			Processor:   processLexRuleValidation,
 		},
 		{
 			Name:        "Pattern Validation",
-			Description: "Validates pattern section: duplicate declarations, unresolved variable references, local variables used outside the pattern section, and repetition bounds (min ≤ max, non-negative). Variables must be declared before use; locals may be used in any pattern definition but not outside the pattern section.",
+			Description: "Validates pattern section logic, bounds, scoping, and references.",
 			Order:       1,
-			Processor: func(ctx *ValidationCtx) {
-				allDeclared := make(map[string]struct{})
-				localNameToDef := make(map[string]*Node)
-				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
-					defNameNode := def.FindFirstKind(NodePatternDefName)
-					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
-						continue
-					}
-					name := string(defNameNode.Tokens()[0].Raw)
-					allDeclared[name] = struct{}{}
-					if def.FindFirstKind(NodeLocalVariable) != nil {
-						localNameToDef[name] = def
-					}
-				}
-
-				declaredSoFar := make(map[string]struct{})
-				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
-					defNameNode := def.FindFirstKind(NodePatternDefName)
-					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
-						continue
-					}
-
-					name := string(defNameNode.Tokens()[0].Raw)
-					if _, already := declaredSoFar[name]; already {
-						msg := fmt.Sprintf("pattern name '%s' already declared (duplicate)", name)
-						ctx.ReportError(VALIDATION_DUPLICATE_PATTERN_NAME.String(), msg, defNameNode)
-					} else {
-						declaredSoFar[name] = struct{}{}
-					}
-
-					for _, varRef := range def.FindAllKind(NodeVarRef) {
-						tokens := varRef.Tokens()
-						if len(tokens) < 2 {
-							continue
-						}
-						refName := string(tokens[1].Raw)
-						if _, ok := declaredSoFar[refName]; !ok {
-							var msg string
-							if _, declaredLater := allDeclared[refName]; declaredLater {
-								msg = fmt.Sprintf("pattern reference '%s' used before declaration", refName)
-							} else {
-								msg = fmt.Sprintf("unresolved pattern reference '%s'", refName)
-							}
-							ctx.ReportError(VALIDATION_UNRESOLVED_PATTERN_REF.String(), msg, varRef)
-						}
-					}
-				}
-
-				for _, varRef := range ctx.RootNode.FindAllKind(NodeVarRef) {
-					if enclosingPatternDef(varRef) != nil {
-						continue
-					}
-					tokens := varRef.Tokens()
-					if len(tokens) < 2 {
-						continue
-					}
-					refName := string(tokens[1].Raw)
-					if _, isLocal := localNameToDef[refName]; isLocal {
-						msg := fmt.Sprintf("local variable '%s' referenced outside pattern section (e.g. in lex section)", refName)
-						ctx.ReportError(VALIDATION_LOCAL_REF_OUTSIDE_SECTION.String(), msg, varRef)
-					}
-				}
-
-				patternDeps := buildPatternDependencyMap(ctx.RootNode, declaredSoFar)
-				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
-					defNameNode := def.FindFirstKind(NodePatternDefName)
-					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
-						continue
-					}
-					name := string(defNameNode.Tokens()[0].Raw)
-					cycle := findCycleInPatternDeps(name, patternDeps)
-					if cycle != nil {
-						msg := fmt.Sprintf("pattern '%s' has cyclic reference (e.g. %s)", name, formatCycle(cycle))
-						ctx.ReportError(VALIDATION_CYCLIC_PATTERN_REF.String(), msg, defNameNode)
-					}
-				}
-
-				for _, negNode := range ctx.RootNode.FindAllKind(NodePatternNegation) {
-					children := negNode.Children()
-					if len(children) == 0 {
-						continue
-					}
-					operand := children[0]
-					validateNegationSubtree(operand, func(offending *Node) {
-						msg := "negation (!) may only contain character, range, group, or alternation; other constructs are not allowed"
-						ctx.ReportError(VALIDATION_NEGATION_INVALID_CONTENT.String(), msg, offending)
-					})
-				}
-
-				for _, repNode := range ctx.RootNode.FindAllKind(NodeRepetition) {
-					children := repNode.Children()
-					if len(children) < 2 {
-						continue
-					}
-					boundsNode := children[1]
-					minNode := boundsNode.FindFirstKind(NodeRepetitionMin)
-					maxNode := boundsNode.FindFirstKind(NodeRepetitionMax)
-					minVal, minOK := parseIntFromNode(minNode)
-					maxVal, maxOK := parseIntFromNode(maxNode)
-					if minNode != nil && !minOK {
-						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition min must be a valid non-negative integer", minNode)
-					}
-					if maxNode != nil && !maxOK {
-						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition max must be a valid non-negative integer", maxNode)
-					}
-					if minNode != nil && minOK && minVal < 0 {
-						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition min must be non-negative", minNode)
-					}
-					if maxNode != nil && maxOK && maxVal < 0 {
-						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition max must be non-negative", maxNode)
-					}
-					if minOK && maxOK && minNode != nil && maxNode != nil && minVal > maxVal {
-						msg := fmt.Sprintf("repetition min (%d) must not be greater than max (%d)", minVal, maxVal)
-						ctx.ReportError(VALIDATION_REPETITION_MIN_GT_MAX.String(), msg, boundsNode)
-					}
-				}
-			},
+			Processor:   processPatternValidation,
 		},
 		{
 			Name:        "Parse Rule Validation",
-			Description: "Validates parse section: PROGRAM rule required, duplicate rule names, rule references must refer to rules declared earlier in the section or to the same rule (recursion), unreferenced rules (excluding PROGRAM), and lex tokens not referenced in parse.",
+			Description: "Validates parse section references, duplication, and reachability.",
 			Order:       2,
-			Processor: func(ctx *ValidationCtx) {
-				parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
-				if parseSection == nil {
-					return
-				}
-				parseRules := parseSection.FindAllKind(NodeParseRule)
-				allDeclared := make(map[string]struct{})
-				for _, rule := range parseRules {
-					nameNode := rule.FindFirstKind(NodeParseRuleName)
-					if nameNode == nil || len(nameNode.Tokens()) == 0 {
-						continue
-					}
-					name := getParseRuleName(nameNode)
-					allDeclared[name] = struct{}{}
-				}
-
-				if _, hasProgram := allDeclared[programRuleName]; !hasProgram {
-					msg := fmt.Sprintf("parse section must define a rule named '%s' (entry point)", programRuleName)
-					ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), msg, parseSection)
-				}
-
-				declaredSoFar := make(map[string]struct{})
-				for _, rule := range parseRules {
-					nameNode := rule.FindFirstKind(NodeParseRuleName)
-					if nameNode == nil || len(nameNode.Tokens()) == 0 {
-						continue
-					}
-					name := getParseRuleName(nameNode)
-					if _, already := declaredSoFar[name]; already {
-						msg := fmt.Sprintf("parse rule '%s' already declared (duplicate)", name)
-						ctx.ReportError(VALIDATION_DUPLICATE_PARSE_RULE_NAME.String(), msg, nameNode)
-					} else {
-						declaredSoFar[name] = struct{}{}
-					}
-
-					body := rule.FindFirstKind(NodeParseRuleBody)
-					if body == nil {
-						continue
-					}
-					for _, refNode := range body.FindAllKind(NodeParseRuleReference) {
-						refName := getParseRuleRefName(refNode)
-						if refName == "" {
-							continue
-						}
-						if _, ok := declaredSoFar[refName]; !ok {
-							var msg string
-							if _, declaredLater := allDeclared[refName]; declaredLater {
-								msg = fmt.Sprintf("parse rule reference '%s' used before declaration", refName)
-							} else {
-								msg = fmt.Sprintf("unresolved parse rule reference '%s'", refName)
-							}
-							ctx.ReportError(VALIDATION_UNRESOLVED_PARSE_RULE_REF.String(), msg, refNode)
-						}
-					}
-				}
-
-				parseRuleDeps := buildParseRuleDependencyMap(parseSection)
-				reachableParse := computeReachableParseRules(parseSection, parseRuleDeps, programRuleName)
-				if reachableParse != nil {
-					for _, rule := range parseRules {
-						nameNode := rule.FindFirstKind(NodeParseRuleName)
-						if nameNode == nil || len(nameNode.Tokens()) == 0 {
-							continue
-						}
-						name := getParseRuleName(nameNode)
-						if !reachableParse[name] {
-							msg := fmt.Sprintf("parse rule '%s' is never referenced (unreachable)", name)
-							ctx.ReportInfo(VALIDATION_UNREFERENCED_PARSE_RULE.String(), msg, nameNode)
-						}
-					}
-				}
-
-				lexSection := ctx.RootNode.FindFirstKind(NodeLexSection)
-				if lexSection != nil {
-					referencedTokens := collectTokenNamesReferencedInParseSection(parseSection)
-					for _, lexRuleToken := range lexSection.FindAllKind(NodeLexRuleTokenName) {
-						if len(lexRuleToken.Tokens()) != 1 {
-							continue
-						}
-						tokenName := strings.TrimSpace(string(lexRuleToken.Tokens()[0].Raw))
-						if tokenName == "" {
-							continue
-						}
-						if _, referenced := referencedTokens[tokenName]; !referenced {
-							msg := fmt.Sprintf("token '%s' is defined in LEX but not referenced in the parse section", tokenName)
-							ctx.ReportInfo(VALIDATION_TOKEN_UNREFERENCED_IN_PARSE.String(), msg, lexRuleToken)
-						}
-					}
-				}
-			},
+			Processor:   processParseRuleValidation,
 		},
 		{
 			Name:        "Parse Rule Safety",
-			Description: "Detects infinite loops in the parse section: left recursion (rule can invoke itself without consuming input) and unbounded repetition of only optional rules (e.g. (X?)*).",
+			Description: "Detects infinite loops in the parse section.",
 			Order:       3,
-			Processor: func(ctx *ValidationCtx) {
-				parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
-				if parseSection == nil {
-					return
-				}
-				ruleBodies := buildParseRuleBodyMap(parseSection)
-				if len(ruleBodies) == 0 {
-					return
-				}
-				ruleNullable := computeParseRuleNullable(ruleBodies)
-				firstRefs := computeParseRuleFirstRefs(ruleBodies, ruleNullable)
-				cycles := findLeftRecursionCycles(firstRefs)
-				for _, ruleName := range cycles {
-					ruleNode := findParseRuleByName(parseSection, ruleName)
-					if ruleNode != nil {
-						body := ruleNode.FindFirstKind(NodeParseRuleBody)
-						msg := fmt.Sprintf("parse rule '%s' is left-recursive (can invoke itself without consuming input); parser may hang or stack overflow", ruleName)
-						ctx.ReportFatal(VALIDATION_PARSE_LEFT_RECURSION.String(), msg, body)
-					}
-				}
-				validateUnboundedOptionalRepetition(ctx, parseSection, ruleBodies, ruleNullable)
-			},
+			Processor:   processParseRuleSafety,
 		},
 		{
 			Name:        "Unreachable Patterns",
-			Description: "Emits info for patterns that are never referenced by any lex rule or by another pattern.",
+			Description: "Emits warnings for unused pattern declarations.",
 			Order:       4,
-			Processor: func(ctx *ValidationCtx) {
-				patternDeps := buildPatternDependencyMap(ctx.RootNode, nil)
-				reachable := computeReachablePatterns(ctx.RootNode, patternDeps)
-				for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
-					defNameNode := def.FindFirstKind(NodePatternDefName)
-					if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
-						continue
-					}
-					name := strings.TrimSpace(string(defNameNode.Tokens()[0].Raw))
-					if def.FindFirstKind(NodeLocalVariable) != nil {
-						continue
-					}
-					if !reachable[name] {
-						msg := fmt.Sprintf("pattern '%s' is never referenced (unreachable)", name)
-						ctx.ReportInfo(VALIDATION_UNREACHABLE_PATTERN.String(), msg, defNameNode)
-					}
-				}
-			},
+			Processor:   processUnreachablePatterns,
 		},
 		{
 			Name:        "Lex Pattern Analysis",
-			Description: "Detects ambiguous token matches, identical token patterns, and tokens shadowed by higher-priority rules.",
+			Description: "Detects ambiguous token matches and shadowing.",
 			Order:       5,
-			Processor: func(ctx *ValidationCtx) {
-				lexRules := collectLexRules(ctx.RootNode)
-				patternKeyToRules := make(map[string][]lexRuleInfo)
-				for _, r := range lexRules {
-					key := r.patternKey
-					patternKeyToRules[key] = append(patternKeyToRules[key], r)
-				}
-				for key, rules := range patternKeyToRules {
-					if len(rules) < 2 {
-						continue
-					}
-					for _, r := range rules {
-						msg := fmt.Sprintf("token '%s' produces the same pattern as other token(s) (pattern key: %s)", r.tokenName, key)
-						ctx.ReportWarning(VALIDATION_IDENTICAL_TOKEN_PATTERN.String(), msg, r.tokenNameNode)
-					}
-					for _, r := range rules {
-						msg := fmt.Sprintf("token '%s' can match the same input as other token(s) (ambiguous)", r.tokenName)
-						ctx.ReportWarning(VALIDATION_AMBIGUOUS_TOKEN_MATCH.String(), msg, r.patternNode)
-					}
-					maxPri := rules[0].priority
-					for _, r := range rules[1:] {
-						if r.priority > maxPri {
-							maxPri = r.priority
-						}
-					}
-					for _, r := range rules {
-						if r.priority < maxPri {
-							msg := fmt.Sprintf("token '%s' is shadowed by higher-priority token(s) with the same pattern", r.tokenName)
-							ctx.ReportWarning(VALIDATION_TOKEN_SHADOWED.String(), msg, r.tokenNameNode)
-						}
-					}
-				}
-			},
+			Processor:   processLexPatternAnalysis,
 		},
 	}
-
-	return stages
 }
 
-// negationAllowedKind returns true if this node kind is allowed inside a negation (!) subtree.
+// ------------------------------------------------------------- STAGE PROCESSORS
+
+func processLexRuleValidation(ctx *ValidationCtx) {
+	lexRuleSection := ctx.RootNode.FindFirstKind(NodeLexSection)
+	if lexRuleSection == nil {
+		return
+	}
+
+	validateDuplicateTokens(ctx, lexRuleSection)
+	validateEOFMetaValues(ctx, lexRuleSection)
+}
+
+func processPatternValidation(ctx *ValidationCtx) {
+	defs := ctx.RootNode.FindAllKind(NodePatternDefinition)
+
+	allDeclared, localNameToDef := buildPatternDeclarationMaps(defs)
+	declaredSoFar := validateDuplicatePatterns(ctx, defs)
+
+	validatePatternReferences(ctx, defs, declaredSoFar, allDeclared)
+	validateLocalVarScoping(ctx, localNameToDef)
+	validatePatternCycles(ctx, defs, declaredSoFar)
+	validateNegationNodes(ctx)
+	validateRepetitionBounds(ctx)
+}
+
+func processParseRuleValidation(ctx *ValidationCtx) {
+	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
+	if parseSection == nil {
+		return
+	}
+
+	parseRules := parseSection.FindAllKind(NodeParseRule)
+	allDeclared := collectDeclaredParseRules(parseRules)
+
+	validateProgramRulePresence(ctx, parseSection, allDeclared)
+	declaredSoFar := validateDuplicateParseRules(ctx, parseRules)
+	validateParseRuleReferences(ctx, parseRules, declaredSoFar, allDeclared)
+
+	parseRuleDeps := buildParseRuleDependencyMap(parseSection)
+	validateReachableParseRules(ctx, parseSection, parseRules, parseRuleDeps)
+	validateUnreferencedTokens(ctx, parseSection)
+}
+
+func processParseRuleSafety(ctx *ValidationCtx) {
+	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
+	if parseSection == nil {
+		return
+	}
+
+	ruleBodies := buildParseRuleBodyMap(parseSection)
+	if len(ruleBodies) == 0 {
+		return
+	}
+
+	ruleNullable := computeParseRuleNullable(ruleBodies)
+	firstRefs := computeParseRuleFirstRefs(ruleBodies, ruleNullable)
+
+	validateLeftRecursion(ctx, parseSection, firstRefs)
+	validateUnboundedOptionalRepetition(ctx, parseSection, ruleBodies, ruleNullable)
+}
+
+func processUnreachablePatterns(ctx *ValidationCtx) {
+	patternDeps := buildPatternDependencyMap(ctx.RootNode, nil)
+	reachable := computeReachablePatterns(ctx.RootNode, patternDeps)
+
+	for _, def := range ctx.RootNode.FindAllKind(NodePatternDefinition) {
+		name, nameNode := extractPatternDefName(def)
+		if nameNode == nil {
+			continue
+		}
+
+		if def.FindFirstKind(NodeLocalVariable) != nil {
+			continue
+		}
+
+		if !reachable[name] {
+			msg := fmt.Sprintf("pattern '%s' is never referenced (unreachable)", name)
+			// Escalated to Warning. Dead patterns pollute the syntax tree.
+			ctx.ReportWarning(VALIDATION_UNREACHABLE_PATTERN.String(), msg, nameNode)
+		}
+	}
+}
+
+func processLexPatternAnalysis(ctx *ValidationCtx) {
+	lexRules := collectLexRules(ctx.RootNode)
+	patternKeyToRules := groupLexRulesByPattern(lexRules)
+
+	for key, rules := range patternKeyToRules {
+		if len(rules) < 2 {
+			continue
+		}
+		reportIdenticalAndAmbiguousPatterns(ctx, key, rules)
+		reportShadowedTokens(ctx, rules)
+	}
+}
+
+// ------------------------------------------------------------- LOGIC EXTRACTS: LEX
+
+func validateDuplicateTokens(ctx *ValidationCtx, lexSection *Node) {
+	tks := make(map[string]struct{})
+	for _, lexRuleToken := range lexSection.FindAllKind(NodeLexRuleTokenName) {
+		value := getIdentifierValue(lexRuleToken)
+		if _, seen := tks[value]; seen {
+			msg := fmt.Sprintf("token '%s' already declared (duplicate entry)", value)
+			ctx.ReportError(VALIDATION_DUPLICATE_TOKEN.String(), msg, lexRuleToken)
+			continue
+		}
+		tks[value] = struct{}{}
+	}
+}
+
+func validateEOFMetaValues(ctx *ValidationCtx, lexSection *Node) {
+	eofMetaValueNodes := lexRuleSectionCollectEOFTrueMetaValues(lexSection)
+	if len(eofMetaValueNodes) == 0 {
+		msg := "no lexeme has EOF=true in its meta section; the compiler will automatically inject an EOF token"
+		ctx.ReportInfo(VALIDATION_NO_EOF_IN_META.String(), msg, lexSection)
+		return
+	}
+
+	if len(eofMetaValueNodes) > 1 {
+		for _, node := range eofMetaValueNodes {
+			msg := "multiple lexemes have EOF=true in their meta section; only one is allowed"
+			ctx.ReportError(VALIDATION_MULTIPLE_EOF_IN_META.String(), msg, node)
+		}
+	}
+}
+
+func groupLexRulesByPattern(rules []lexRuleInfo) map[string][]lexRuleInfo {
+	grouped := make(map[string][]lexRuleInfo)
+	for _, r := range rules {
+		grouped[r.patternKey] = append(grouped[r.patternKey], r)
+	}
+	return grouped
+}
+
+func reportIdenticalAndAmbiguousPatterns(ctx *ValidationCtx, key string, rules []lexRuleInfo) {
+	for _, r := range rules {
+		msgIden := fmt.Sprintf("token '%s' produces the same pattern as other token(s) (pattern key: %s)", r.tokenName, key)
+		ctx.ReportWarning(VALIDATION_IDENTICAL_TOKEN_PATTERN.String(), msgIden, r.tokenNameNode)
+
+		msgAmb := fmt.Sprintf("token '%s' can match the same input as other token(s) (ambiguous)", r.tokenName)
+		ctx.ReportWarning(VALIDATION_AMBIGUOUS_TOKEN_MATCH.String(), msgAmb, r.patternNode)
+	}
+}
+
+func reportShadowedTokens(ctx *ValidationCtx, rules []lexRuleInfo) {
+	maxPri := rules[0].priority
+	for _, r := range rules[1:] {
+		if r.priority > maxPri {
+			maxPri = r.priority
+		}
+	}
+	for _, r := range rules {
+		if r.priority < maxPri {
+			msg := fmt.Sprintf("token '%s' is shadowed by higher-priority token(s) with the same pattern", r.tokenName)
+			ctx.ReportWarning(VALIDATION_TOKEN_SHADOWED.String(), msg, r.tokenNameNode)
+		}
+	}
+}
+
+// ------------------------------------------------------------- LOGIC EXTRACTS: PATTERN
+
+func extractPatternDefName(def *Node) (string, *Node) {
+	nameNode := def.FindFirstKind(NodePatternDefName)
+	if nameNode == nil || len(nameNode.Tokens()) == 0 {
+		return "", nil
+	}
+	return string(nameNode.Tokens()[0].Raw), nameNode
+}
+
+func buildPatternDeclarationMaps(defs []*Node) (map[string]struct{}, map[string]*Node) {
+	allDeclared := make(map[string]struct{})
+	localNameToDef := make(map[string]*Node)
+
+	for _, def := range defs {
+		name, nameNode := extractPatternDefName(def)
+		if nameNode == nil {
+			continue
+		}
+		allDeclared[name] = struct{}{}
+		if def.FindFirstKind(NodeLocalVariable) != nil {
+			localNameToDef[name] = def
+		}
+	}
+	return allDeclared, localNameToDef
+}
+
+func validateDuplicatePatterns(ctx *ValidationCtx, defs []*Node) map[string]struct{} {
+	declaredSoFar := make(map[string]struct{})
+	for _, def := range defs {
+		name, nameNode := extractPatternDefName(def)
+		if nameNode == nil {
+			continue
+		}
+
+		if _, already := declaredSoFar[name]; already {
+			msg := fmt.Sprintf("pattern name '%s' already declared (duplicate)", name)
+			ctx.ReportError(VALIDATION_DUPLICATE_PATTERN_NAME.String(), msg, nameNode)
+		} else {
+			declaredSoFar[name] = struct{}{}
+		}
+	}
+	return declaredSoFar
+}
+
+func validatePatternReferences(ctx *ValidationCtx, defs []*Node, declaredSoFar, allDeclared map[string]struct{}) {
+	for _, def := range defs {
+		for _, varRef := range def.FindAllKind(NodeVarRef) {
+			tokens := varRef.Tokens()
+			if len(tokens) < 2 {
+				continue
+			}
+			refName := string(tokens[1].Raw)
+
+			if _, ok := declaredSoFar[refName]; ok {
+				continue
+			}
+
+			var msg string
+			if _, declaredLater := allDeclared[refName]; declaredLater {
+				msg = fmt.Sprintf("pattern reference '%s' used before declaration", refName)
+			} else {
+				msg = fmt.Sprintf("unresolved pattern reference '%s'", refName)
+			}
+			ctx.ReportError(VALIDATION_UNRESOLVED_PATTERN_REF.String(), msg, varRef)
+		}
+	}
+}
+
+func validateLocalVarScoping(ctx *ValidationCtx, localNameToDef map[string]*Node) {
+	for _, varRef := range ctx.RootNode.FindAllKind(NodeVarRef) {
+		if enclosingPatternDef(varRef) != nil {
+			continue
+		}
+
+		tokens := varRef.Tokens()
+		if len(tokens) < 2 {
+			continue
+		}
+
+		refName := string(tokens[1].Raw)
+		if _, isLocal := localNameToDef[refName]; isLocal {
+			msg := fmt.Sprintf("local variable '%s' referenced outside pattern section", refName)
+			ctx.ReportError(VALIDATION_LOCAL_REF_OUTSIDE_SECTION.String(), msg, varRef)
+		}
+	}
+}
+
+func validatePatternCycles(ctx *ValidationCtx, defs []*Node, declaredSoFar map[string]struct{}) {
+	patternDeps := buildPatternDependencyMap(ctx.RootNode, declaredSoFar)
+	for _, def := range defs {
+		name, nameNode := extractPatternDefName(def)
+		if nameNode == nil {
+			continue
+		}
+
+		cycle := findCycleInPatternDeps(name, patternDeps)
+		if cycle != nil {
+			msg := fmt.Sprintf("pattern '%s' has cyclic reference (e.g. %s)", name, formatCycle(cycle))
+			ctx.ReportError(VALIDATION_CYCLIC_PATTERN_REF.String(), msg, nameNode)
+		}
+	}
+}
+
+func validateNegationNodes(ctx *ValidationCtx) {
+	for _, negNode := range ctx.RootNode.FindAllKind(NodePatternNegation) {
+		children := negNode.Children()
+		if len(children) == 0 {
+			continue
+		}
+		validateNegationSubtree(children[0], func(offending *Node) {
+			msg := "negation (!) may only contain character, range, group, or alternation"
+			ctx.ReportError(VALIDATION_NEGATION_INVALID_CONTENT.String(), msg, offending)
+		})
+	}
+}
+
+func validateRepetitionBounds(ctx *ValidationCtx) {
+	for _, repNode := range ctx.RootNode.FindAllKind(NodeRepetition) {
+		children := repNode.Children()
+		if len(children) < 2 {
+			continue
+		}
+
+		boundsNode := children[1]
+		minNode := boundsNode.FindFirstKind(NodeRepetitionMin)
+		maxNode := boundsNode.FindFirstKind(NodeRepetitionMax)
+
+		minVal, minOK := parseIntFromNode(minNode)
+		maxVal, maxOK := parseIntFromNode(maxNode)
+
+		reportRepetitionErrors(ctx, boundsNode, minNode, maxNode, minVal, maxVal, minOK, maxOK)
+	}
+}
+
+func reportRepetitionErrors(ctx *ValidationCtx, boundsNode, minNode, maxNode *Node, minVal, maxVal int, minOK, maxOK bool) {
+	if minNode != nil && (!minOK || minVal < 0) {
+		ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition min must be a valid non-negative integer", minNode)
+	}
+	if maxNode != nil && (!maxOK || maxVal < 0) {
+		ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition max must be a valid non-negative integer", maxNode)
+	}
+	if minOK && maxOK && minNode != nil && maxNode != nil && minVal > maxVal {
+		msg := fmt.Sprintf("repetition min (%d) must not be greater than max (%d)", minVal, maxVal)
+		ctx.ReportError(VALIDATION_REPETITION_MIN_GT_MAX.String(), msg, boundsNode)
+	}
+}
+
+// ------------------------------------------------------------- LOGIC EXTRACTS: PARSE
+
+func collectDeclaredParseRules(parseRules []*Node) map[string]struct{} {
+	allDeclared := make(map[string]struct{})
+	for _, rule := range parseRules {
+		nameNode := rule.FindFirstKind(NodeParseRuleName)
+		if name := getParseRuleName(nameNode); name != "" {
+			allDeclared[name] = struct{}{}
+		}
+	}
+	return allDeclared
+}
+
+func validateProgramRulePresence(ctx *ValidationCtx, parseSection *Node, allDeclared map[string]struct{}) {
+	if _, hasProgram := allDeclared[programRuleName]; !hasProgram {
+		msg := fmt.Sprintf("parse section must define a rule named '%s' (entry point)", programRuleName)
+		ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), msg, parseSection)
+	}
+}
+
+func validateDuplicateParseRules(ctx *ValidationCtx, parseRules []*Node) map[string]struct{} {
+	declaredSoFar := make(map[string]struct{})
+	for _, rule := range parseRules {
+		nameNode := rule.FindFirstKind(NodeParseRuleName)
+		name := getParseRuleName(nameNode)
+		if name == "" {
+			continue
+		}
+
+		if _, already := declaredSoFar[name]; already {
+			msg := fmt.Sprintf("parse rule '%s' already declared (duplicate)", name)
+			ctx.ReportError(VALIDATION_DUPLICATE_PARSE_RULE_NAME.String(), msg, nameNode)
+		} else {
+			declaredSoFar[name] = struct{}{}
+		}
+	}
+	return declaredSoFar
+}
+
+func validateParseRuleReferences(ctx *ValidationCtx, parseRules []*Node, declaredSoFar, allDeclared map[string]struct{}) {
+	for _, rule := range parseRules {
+		body := rule.FindFirstKind(NodeParseRuleBody)
+		if body == nil {
+			continue
+		}
+
+		for _, refNode := range body.FindAllKind(NodeParseRuleReference) {
+			refName := getParseRuleRefName(refNode)
+			if refName == "" {
+				continue
+			}
+
+			if _, ok := declaredSoFar[refName]; ok {
+				continue
+			}
+
+			var msg string
+			if _, declaredLater := allDeclared[refName]; declaredLater {
+				msg = fmt.Sprintf("parse rule reference '%s' used before declaration", refName)
+			} else {
+				msg = fmt.Sprintf("unresolved parse rule reference '%s'", refName)
+			}
+			ctx.ReportError(VALIDATION_UNRESOLVED_PARSE_RULE_REF.String(), msg, refNode)
+		}
+	}
+}
+
+func validateReachableParseRules(ctx *ValidationCtx, parseSection *Node, parseRules []*Node, parseRuleDeps map[string][]string) {
+	reachableParse := computeReachableParseRules(parseSection, parseRuleDeps, programRuleName)
+	if reachableParse == nil {
+		return
+	}
+
+	for _, rule := range parseRules {
+		nameNode := rule.FindFirstKind(NodeParseRuleName)
+		name := getParseRuleName(nameNode)
+		if name != "" && !reachableParse[name] {
+			msg := fmt.Sprintf("parse rule '%s' is never referenced (unreachable)", name)
+			ctx.ReportInfo(VALIDATION_UNREFERENCED_PARSE_RULE.String(), msg, nameNode)
+		}
+	}
+}
+
+func validateUnreferencedTokens(ctx *ValidationCtx, parseSection *Node) {
+	lexSection := ctx.RootNode.FindFirstKind(NodeLexSection)
+	if lexSection == nil {
+		return
+	}
+
+	referencedTokens := collectTokenNamesReferencedInParseSection(parseSection)
+	for _, lexRuleToken := range lexSection.FindAllKind(NodeLexRuleTokenName) {
+		if len(lexRuleToken.Tokens()) != 1 {
+			continue
+		}
+
+		tokenName := strings.TrimSpace(string(lexRuleToken.Tokens()[0].Raw))
+		if tokenName == "" {
+			continue
+		}
+
+		if _, referenced := referencedTokens[tokenName]; !referenced {
+			msg := fmt.Sprintf("token '%s' is defined in LEX but not referenced in the parse section", tokenName)
+			// Escalated to Warning. Dead tokens clutter the lexer output.
+			ctx.ReportWarning(VALIDATION_TOKEN_UNREFERENCED_IN_PARSE.String(), msg, lexRuleToken)
+		}
+	}
+}
+
+func validateLeftRecursion(ctx *ValidationCtx, parseSection *Node, firstRefs map[string]map[string]struct{}) {
+	cycles := findLeftRecursionCycles(firstRefs)
+	for _, ruleName := range cycles {
+		ruleNode := findParseRuleByName(parseSection, ruleName)
+		if ruleNode != nil {
+			body := ruleNode.FindFirstKind(NodeParseRuleBody)
+			msg := fmt.Sprintf("parse rule '%s' is left-recursive; parser may hang or stack overflow", ruleName)
+			ctx.ReportFatal(VALIDATION_PARSE_LEFT_RECURSION.String(), msg, body)
+		}
+	}
+}
+
+func validateUnboundedOptionalRepetition(ctx *ValidationCtx, parseSection *Node, ruleBodies map[string]*Node, ruleNullable map[string]bool) {
+	msg := "unbounded repetition of an optional or nullable expression causes an infinite parser loop"
+
+	for _, node := range parseSection.FindAllKind(NodeParseStar) {
+		if children := node.Children(); len(children) > 0 && parseExprNullable(children[0], ruleNullable, ruleBodies) {
+			// Escalated to Error. This guarantees a runtime failure.
+			ctx.ReportError(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
+		}
+	}
+
+	for _, node := range parseSection.FindAllKind(NodeParsePlus) {
+		if children := node.Children(); len(children) > 0 && parseExprNullable(children[0], ruleNullable, ruleBodies) {
+			// Escalated to Error.
+			ctx.ReportError(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
+		}
+	}
+}
+
+// ------------------------------------------------------------- UTILITIES / EXISTING HELPER FUNCS
+
 func negationAllowedKind(kind LangSpecParserNodeKind) bool {
 	switch kind {
 	case NodeCharLiteral, NodePatternRange, NodePatternGroup, NodePatternAlternation, NodePatternSegment:
@@ -407,8 +549,6 @@ func negationAllowedKind(kind LangSpecParserNodeKind) bool {
 	}
 }
 
-// validateNegationSubtree traverses the negated operand subtree and calls report for any node that is not
-// a character, range, group, or alternation (or segment wrapper). Recurses into Group, Alternation, and Segment.
 func validateNegationSubtree(node *Node, report func(offending *Node)) {
 	kind := node.Kind()
 	if !negationAllowedKind(kind) {
@@ -417,10 +557,6 @@ func validateNegationSubtree(node *Node, report func(offending *Node)) {
 	switch kind {
 	case NodeCharLiteral, NodePatternRange:
 		return
-	case NodePatternGroup, NodePatternAlternation, NodePatternSegment:
-		for _, ch := range node.Children() {
-			validateNegationSubtree(ch, report)
-		}
 	default:
 		for _, ch := range node.Children() {
 			validateNegationSubtree(ch, report)
@@ -433,10 +569,7 @@ func getIdentifierValue(node *Node) string {
 	if len(tks) != 1 {
 		panic("engine error: identifier node must have exactly 1 child")
 	}
-
-	value := string(tks[0].Raw)
-
-	return value
+	return string(tks[0].Raw)
 }
 
 func getParseRuleName(nameNode *Node) string {
@@ -457,19 +590,20 @@ func buildParseRuleDependencyMap(parseSection *Node) map[string][]string {
 	out := make(map[string][]string)
 	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
 		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		if nameNode == nil || len(nameNode.Tokens()) == 0 {
+		name := getParseRuleName(nameNode)
+		if name == "" {
 			continue
 		}
-		name := getParseRuleName(nameNode)
+
 		body := rule.FindFirstKind(NodeParseRuleBody)
 		if body == nil {
 			out[name] = nil
 			continue
 		}
+
 		var refs []string
 		for _, refNode := range body.FindAllKind(NodeParseRuleReference) {
-			refName := getParseRuleRefName(refNode)
-			if refName != "" {
+			if refName := getParseRuleRefName(refNode); refName != "" {
 				refs = append(refs, refName)
 			}
 		}
@@ -477,9 +611,6 @@ func buildParseRuleDependencyMap(parseSection *Node) map[string][]string {
 	}
 	return out
 }
-
-// programRuleName is the required entry-point parse rule name; it is excluded from unreferenced diagnostics.
-const programRuleName = "PROGRAM"
 
 func computeReachableParseRules(parseSection *Node, deps map[string][]string, entryRuleName string) map[string]bool {
 	if _, ok := deps[entryRuleName]; !ok {
@@ -500,7 +631,6 @@ func computeReachableParseRules(parseSection *Node, deps map[string][]string, en
 	return reachable
 }
 
-// getParseRuleBodyRoot returns the first child of body that is a parse expression root (Alternation, Concat, Optional, Star, Plus, Segment, Group).
 func getParseRuleBodyRoot(body *Node) *Node {
 	if body == nil {
 		return nil
@@ -518,28 +648,25 @@ func getParseRuleBodyRoot(body *Node) *Node {
 	return nil
 }
 
-// buildParseRuleBodyMap returns a map from parse rule name to the root node of its body expression.
 func buildParseRuleBodyMap(parseSection *Node) map[string]*Node {
 	out := make(map[string]*Node)
 	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
 		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		if nameNode == nil || len(nameNode.Tokens()) == 0 {
-			continue
-		}
 		name := getParseRuleName(nameNode)
-		body := rule.FindFirstKind(NodeParseRuleBody)
-		if body == nil {
+		if name == "" {
 			continue
 		}
-		root := getParseRuleBodyRoot(body)
-		if root != nil {
-			out[name] = root
+
+		body := rule.FindFirstKind(NodeParseRuleBody)
+		if body != nil {
+			if root := getParseRuleBodyRoot(body); root != nil {
+				out[name] = root
+			}
 		}
 	}
 	return out
 }
 
-// parseExprNullable returns true if the parse expression node can match without consuming any token.
 func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node) bool {
 	if node == nil {
 		return false
@@ -547,7 +674,7 @@ func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[
 	switch node.Kind() {
 	case NodeParseOptional, NodeParseStar:
 		return true
-	case NodeParsePlus:
+	case NodeParsePlus, NodeParseGroup:
 		children := node.Children()
 		if len(children) == 0 {
 			return false
@@ -567,43 +694,26 @@ func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[
 			}
 		}
 		return true
-	case NodeParseGroup:
-		children := node.Children()
-		if len(children) == 0 {
-			return false
-		}
-		return parseExprNullable(children[0], ruleNullable, ruleBodies)
 	case NodeParseRuleReference:
-		refName := getParseRuleRefName(node)
-		if refName == "" {
-			return false
-		}
-		return ruleNullable[refName]
+		return ruleNullable[getParseRuleRefName(node)]
 	case NodeParseSegment:
-		children := node.Children()
-		if len(children) == 0 {
-			return false
+		if children := node.Children(); len(children) > 0 {
+			ch := children[0]
+			if ch.Kind() == NodeParseOpRef || ch.Kind() == NodeParseGroup {
+				return parseExprNullable(ch, ruleNullable, ruleBodies)
+			}
 		}
-		ch := children[0]
-		switch ch.Kind() {
-		case NodeParseOpRef, NodeParseGroup:
-			return parseExprNullable(ch, ruleNullable, ruleBodies)
-		default:
-			return false
-		}
+		return false
 	case NodeParseOpRef:
-		refNode := node.FindFirstKind(NodeParseRuleReference)
-		if refNode == nil {
-			return false
+		if refNode := node.FindFirstKind(NodeParseRuleReference); refNode != nil {
+			return ruleNullable[getParseRuleRefName(refNode)]
 		}
-		refName := getParseRuleRefName(refNode)
-		return refName != "" && ruleNullable[refName]
+		return false
 	default:
 		return false
 	}
 }
 
-// parseExprFirstRuleRefs returns the set of rule names that can be invoked at the start of this expression without consuming any token.
 func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node) map[string]struct{} {
 	out := make(map[string]struct{})
 	if node == nil {
@@ -614,65 +724,44 @@ func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies
 		if name := getParseRuleRefName(node); name != "" {
 			out[name] = struct{}{}
 		}
-		return out
-	case NodeParseOptional, NodeParseStar, NodeParsePlus:
-		children := node.Children()
-		if len(children) > 0 {
+	case NodeParseOptional, NodeParseStar, NodeParsePlus, NodeParseGroup:
+		if children := node.Children(); len(children) > 0 {
 			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies) {
 				out[k] = struct{}{}
 			}
 		}
-		return out
 	case NodeParseAlternation:
 		for _, ch := range node.Children() {
 			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies) {
 				out[k] = struct{}{}
 			}
 		}
-		return out
 	case NodeParseConcat:
 		for _, ch := range node.Children() {
-			refs := parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies)
-			for k := range refs {
+			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies) {
 				out[k] = struct{}{}
 			}
 			if !parseExprNullable(ch, ruleNullable, ruleBodies) {
 				break
 			}
 		}
-		return out
-	case NodeParseGroup:
-		children := node.Children()
-		if len(children) > 0 {
-			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies) {
-				out[k] = struct{}{}
+	case NodeParseSegment:
+		if children := node.Children(); len(children) > 0 {
+			ch := children[0]
+			if ch.Kind() == NodeParseOpRef || ch.Kind() == NodeParseGroup {
+				return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies)
 			}
 		}
-		return out
-	case NodeParseSegment:
-		children := node.Children()
-		if len(children) == 0 {
-			return out
-		}
-		ch := children[0]
-		if ch.Kind() == NodeParseOpRef || ch.Kind() == NodeParseGroup {
-			return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies)
-		}
-		return out
 	case NodeParseOpRef:
-		refNode := node.FindFirstKind(NodeParseRuleReference)
-		if refNode != nil {
+		if refNode := node.FindFirstKind(NodeParseRuleReference); refNode != nil {
 			if name := getParseRuleRefName(refNode); name != "" {
 				out[name] = struct{}{}
 			}
 		}
-		return out
-	default:
-		return out
 	}
+	return out
 }
 
-// computeParseRuleNullable computes nullable for each rule by fixpoint iteration.
 func computeParseRuleNullable(ruleBodies map[string]*Node) map[string]bool {
 	nullable := make(map[string]bool)
 	for name := range ruleBodies {
@@ -694,7 +783,6 @@ func computeParseRuleNullable(ruleBodies map[string]*Node) map[string]bool {
 	return nullable
 }
 
-// computeParseRuleFirstRefs returns for each rule the set of rules it can invoke without consuming input.
 func computeParseRuleFirstRefs(ruleBodies map[string]*Node, ruleNullable map[string]bool) map[string]map[string]struct{} {
 	out := make(map[string]map[string]struct{})
 	for name, root := range ruleBodies {
@@ -703,11 +791,11 @@ func computeParseRuleFirstRefs(ruleBodies map[string]*Node, ruleNullable map[str
 	return out
 }
 
-// findLeftRecursionCycles returns rule names that participate in a cycle in the "first refs" graph (can reach self without consuming).
 func findLeftRecursionCycles(firstRefs map[string]map[string]struct{}) []string {
 	visited := make(map[string]bool)
 	inStack := make(map[string]bool)
 	cycleSet := make(map[string]struct{})
+
 	var dfs func(name string)
 	dfs = func(name string) {
 		visited[name] = true
@@ -721,12 +809,14 @@ func findLeftRecursionCycles(firstRefs map[string]map[string]struct{}) []string 
 		}
 		inStack[name] = false
 	}
+
 	for name := range firstRefs {
 		if !visited[name] {
 			dfs(name)
 		}
 	}
-	cycles := make([]string, 0, len(cycleSet))
+
+	var cycles []string
 	for name := range cycleSet {
 		cycles = append(cycles, name)
 	}
@@ -736,9 +826,6 @@ func findLeftRecursionCycles(firstRefs map[string]map[string]struct{}) []string 
 func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
 		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		if nameNode == nil {
-			continue
-		}
 		if getParseRuleName(nameNode) == ruleName {
 			return rule
 		}
@@ -746,59 +833,25 @@ func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 	return nil
 }
 
-// validateUnboundedOptionalRepetition reports a warning for every Star or Plus whose operand is nullable (unbounded repetition of optional).
-func validateUnboundedOptionalRepetition(
-	ctx *ValidationCtx,
-	parseSection *Node,
-	ruleBodies map[string]*Node,
-	ruleNullable map[string]bool,
-) {
-	for _, node := range parseSection.FindAllKind(NodeParseStar) {
-		children := node.Children()
-		if len(children) == 0 {
-			continue
-		}
-		if parseExprNullable(children[0], ruleNullable, ruleBodies) {
-			msg := "unbounded repetition (*) of an optional or nullable expression can cause the parser to loop without consuming input; consider a bounded repetition or ensure the operand consumes at least one token"
-			ctx.ReportWarning(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
-		}
-	}
-	for _, node := range parseSection.FindAllKind(NodeParsePlus) {
-		children := node.Children()
-		if len(children) == 0 {
-			continue
-		}
-		if parseExprNullable(children[0], ruleNullable, ruleBodies) {
-			msg := "unbounded repetition (+) of an optional or nullable expression can cause the parser to loop without consuming input; consider a bounded repetition or ensure the operand consumes at least one token"
-			ctx.ReportWarning(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
-		}
-	}
-}
-
-// collectTokenNamesReferencedInParseSection returns the set of lex token names used in the parse section
-// (NodeParseTokenReference and standalone NodeIdentifier in parse rule bodies).
 func collectTokenNamesReferencedInParseSection(parseSection *Node) map[string]struct{} {
 	out := make(map[string]struct{})
-	for _, n := range parseSection.FindAllKind(NodeParseTokenReference) {
-		if len(n.Tokens()) != 1 {
-			continue
-		}
-		if name := strings.TrimSpace(string(n.Tokens()[0].Raw)); name != "" {
-			out[name] = struct{}{}
+	extractName := func(n *Node) {
+		if len(n.Tokens()) == 1 {
+			if name := strings.TrimSpace(string(n.Tokens()[0].Raw)); name != "" {
+				out[name] = struct{}{}
+			}
 		}
 	}
+
+	for _, n := range parseSection.FindAllKind(NodeParseTokenReference) {
+		extractName(n)
+	}
 	for _, n := range parseSection.FindAllKind(NodeIdentifier) {
-		if len(n.Tokens()) != 1 {
-			continue
-		}
-		if name := strings.TrimSpace(string(n.Tokens()[0].Raw)); name != "" {
-			out[name] = struct{}{}
-		}
+		extractName(n)
 	}
 	return out
 }
 
-// lexRuleSectionCollectEOFTrueMetaValues returns all NodeMetaValue nodes (keyword true) for meta key "EOF" under section.
 func lexRuleSectionCollectEOFTrueMetaValues(lexSection *Node) []*Node {
 	var out []*Node
 	for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
@@ -806,17 +859,16 @@ func lexRuleSectionCollectEOFTrueMetaValues(lexSection *Node) []*Node {
 		if metaSection == nil {
 			continue
 		}
+
 		for _, pair := range metaSection.FindAllKind(NodeMetaKeyValuePair) {
 			keyNode := pair.FindFirstKind(NodeMetaKey)
 			valueNode := pair.FindFirstKind(NodeMetaValue)
 			if keyNode == nil || valueNode == nil || len(keyNode.Tokens()) == 0 || len(valueNode.Tokens()) == 0 {
 				continue
 			}
+
 			key := strings.TrimSpace(string(keyNode.Tokens()[0].Raw))
-			if !strings.EqualFold(key, "EOF") {
-				continue
-			}
-			if valueNode.Tokens()[0].Token == TokKWTrue {
+			if strings.EqualFold(key, "EOF") && valueNode.Tokens()[0].Token == TokKWTrue {
 				out = append(out, valueNode)
 			}
 		}
@@ -824,9 +876,6 @@ func lexRuleSectionCollectEOFTrueMetaValues(lexSection *Node) []*Node {
 	return out
 }
 
-/*
-enclosingPatternDef returns the innermost NodePatternDefinition that contains node, or nil if node is not inside any pattern definition. Walks Parent() upward.
-*/
 func enclosingPatternDef(node *Node) *Node {
 	for n := node; n != nil; n = n.Parent() {
 		if n.Kind() == NodePatternDefinition {
@@ -836,38 +885,29 @@ func enclosingPatternDef(node *Node) *Node {
 	return nil
 }
 
-// getVarRefTargetName returns the pattern name referenced by a NodeVarRef (from second token or NodeVarRefTarget child). Trimmed.
 func getVarRefTargetName(varRef *Node) string {
 	if targetNode := varRef.FindFirstKind(NodeVarRefTarget); targetNode != nil && len(targetNode.Tokens()) > 0 {
 		return strings.TrimSpace(string(targetNode.Tokens()[0].Raw))
 	}
-	tokens := varRef.Tokens()
-	if len(tokens) >= 2 {
+	if tokens := varRef.Tokens(); len(tokens) >= 2 {
 		return strings.TrimSpace(string(tokens[1].Raw))
 	}
 	return ""
 }
 
-// buildPatternDependencyMap returns a map from pattern name to the list of pattern names it references (via VarRef).
-// If declaredOnly is non-nil, only refs that are keys in declaredOnly are included.
 func buildPatternDependencyMap(root *Node, declaredOnly map[string]struct{}) map[string][]string {
 	out := make(map[string][]string)
 	for _, def := range root.FindAllKind(NodePatternDefinition) {
-		defNameNode := def.FindFirstKind(NodePatternDefName)
-		if defNameNode == nil || len(defNameNode.Tokens()) == 0 {
+		name, _ := extractPatternDefName(def)
+		if name == "" {
 			continue
 		}
-		name := strings.TrimSpace(string(defNameNode.Tokens()[0].Raw))
+
 		var refs []string
 		for _, varRef := range def.FindAllKind(NodeVarRef) {
 			refName := getVarRefTargetName(varRef)
-			if refName == "" {
+			if refName == "" || (declaredOnly != nil && !mapContains(declaredOnly, refName)) {
 				continue
-			}
-			if declaredOnly != nil {
-				if _, ok := declaredOnly[refName]; !ok {
-					continue
-				}
 			}
 			refs = append(refs, refName)
 		}
@@ -876,23 +916,29 @@ func buildPatternDependencyMap(root *Node, declaredOnly map[string]struct{}) map
 	return out
 }
 
+func mapContains(m map[string]struct{}, k string) bool {
+	_, ok := m[k]
+	return ok
+}
+
 func findCycleInPatternDeps(start string, deps map[string][]string) []string {
 	path := make(map[string]bool)
-	stack := make([]string, 0, 8)
+	var stack []string
 	var cycle []string
+
 	var dfs func(name string) bool
 	dfs = func(name string) bool {
 		if path[name] {
 			for i := range stack {
 				if stack[i] == name {
-					cycle = make([]string, 0, len(stack)-i+1)
-					cycle = append(cycle, stack[i:]...)
+					cycle = append([]string{}, stack[i:]...)
 					cycle = append(cycle, name)
 					return true
 				}
 			}
 			return true
 		}
+
 		path[name] = true
 		stack = append(stack, name)
 		for _, ref := range deps[name] {
@@ -904,6 +950,7 @@ func findCycleInPatternDeps(start string, deps map[string][]string) []string {
 		path[name] = false
 		return false
 	}
+
 	if dfs(start) && cycle != nil {
 		return cycle
 	}
@@ -914,27 +961,21 @@ func formatCycle(cycle []string) string {
 	if len(cycle) == 0 {
 		return ""
 	}
-	s := cycle[0]
-	for i := 1; i < len(cycle); i++ {
-		s += " -> " + cycle[i]
-	}
-	return s
+	return strings.Join(cycle, " -> ")
 }
 
 func computeReachablePatterns(root *Node, deps map[string][]string) map[string]bool {
 	entryPoints := make(map[string]bool)
-	lexSection := root.FindFirstKind(NodeLexSection)
-	if lexSection != nil {
+	if lexSection := root.FindFirstKind(NodeLexSection); lexSection != nil {
 		for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
-			varRef := ruleNode.FindFirstKind(NodeVarRef)
-			if varRef != nil {
-				name := getVarRefTargetName(varRef)
-				if name != "" {
+			if varRef := ruleNode.FindFirstKind(NodeVarRef); varRef != nil {
+				if name := getVarRefTargetName(varRef); name != "" {
 					entryPoints[name] = true
 				}
 			}
 		}
 	}
+
 	reachable := make(map[string]bool)
 	var bfs func(name string)
 	bfs = func(name string) {
@@ -946,6 +987,7 @@ func computeReachablePatterns(root *Node, deps map[string][]string) map[string]b
 			bfs(ref)
 		}
 	}
+
 	for name := range entryPoints {
 		bfs(name)
 	}
@@ -966,9 +1008,9 @@ func collectLexRules(root *Node) []lexRuleInfo {
 	if lexSection == nil {
 		return out
 	}
+
 	for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
 		tokenNameNode := ruleNode.FindFirstKind(NodeLexRuleTokenName)
-		priNode := ruleNode.FindFirstKind(NodeLexRulePriority)
 		if tokenNameNode == nil {
 			continue
 		}
@@ -976,56 +1018,55 @@ func collectLexRules(root *Node) []lexRuleInfo {
 		if !ok {
 			continue
 		}
-		priority := 0
-		if priNode != nil {
-			raw := priNode.GetContent("")
-			if raw != "" {
-				if n, err := parseIntFromContent(raw); err == nil {
-					priority = n
-				}
-			}
+
+		priority := parsePriority(ruleNode.FindFirstKind(NodeLexRulePriority))
+		patternKey, patternNode := extractLexPattern(ruleNode)
+
+		if patternKey != "" && patternNode != nil {
+			out = append(out, lexRuleInfo{
+				tokenName:     tokenName,
+				patternKey:    patternKey,
+				priority:      priority,
+				tokenNameNode: tokenNameNode,
+				patternNode:   patternNode,
+			})
 		}
-		var patternKey string
-		var patternNode *Node
-		if varRef := ruleNode.FindFirstKind(NodeVarRef); varRef != nil {
-			if name := getVarRefTargetName(varRef); name != "" {
-				patternKey = "ref:" + name
-				patternNode = varRef
-			}
-		}
-		if patternKey == "" {
-			if regexNode := ruleNode.FindFirstKind(NodeLexRulePattern); regexNode != nil {
-				patternKey = "regex:" + regexNode.GetContent("")
-				patternNode = regexNode
-			}
-		}
-		if patternKey == "" || patternNode == nil {
-			continue
-		}
-		out = append(out, lexRuleInfo{
-			tokenName:     tokenName,
-			patternKey:    patternKey,
-			priority:      priority,
-			tokenNameNode: tokenNameNode,
-			patternNode:   patternNode,
-		})
 	}
 	return out
+}
+
+func parsePriority(priNode *Node) int {
+	if priNode != nil {
+		if raw := priNode.GetContent(""); raw != "" {
+			if n, err := parseIntFromContent(raw); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func extractLexPattern(ruleNode *Node) (string, *Node) {
+	if varRef := ruleNode.FindFirstKind(NodeVarRef); varRef != nil {
+		if name := getVarRefTargetName(varRef); name != "" {
+			return "ref:" + name, varRef
+		}
+	}
+	if regexNode := ruleNode.FindFirstKind(NodeLexRulePattern); regexNode != nil {
+		return "regex:" + regexNode.GetContent(""), regexNode
+	}
+	return "", nil
 }
 
 func parseIntFromContent(s string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(s))
 }
 
-// parseIntFromNode parses the single-token content of node as an integer. Returns (0, false) if node is nil, has no tokens, or content is not a valid integer.
 func parseIntFromNode(node *Node) (int, bool) {
 	if node == nil || len(node.Tokens()) != 1 {
 		return 0, false
 	}
 	raw := strings.TrimSpace(string(node.Tokens()[0].Raw))
 	n, err := parseIntFromContent(raw)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+	return n, err == nil
 }
