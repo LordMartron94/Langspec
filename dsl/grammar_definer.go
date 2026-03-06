@@ -207,17 +207,14 @@ PostfixRuleOp returns a Pratt postfix rule operator descriptor.
 It binds a trigger token to an executable sub-rule (e.g., for composite bounds like {min,max}).
 */
 func (g *GrammarDefiner) PostfixRuleOp(
-	tok LangSpecLexerTokenType,
 	leftBP int,
 	node LangSpecParserNodeKind,
 	r Rule,
 ) rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind] {
 	return rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-		TriggerToken:      tok,
-		LeftBP:            leftBP,
-		NodeKind:          node,
-		Rule:              r,
-		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
+		LeftBP:   leftBP,
+		NodeKind: node,
+		Rule:     r,
 	}
 }
 

@@ -493,10 +493,14 @@ func extractPatternDefName(def *Node) (string, *Node) {
 }
 
 func getParseRuleName(nameNode *Node) string {
-	if nameNode == nil || len(nameNode.Tokens()) == 0 {
+	return getTrimmedIdentifierNodeContent(nameNode)
+}
+
+func getTrimmedIdentifierNodeContent(node *Node) string {
+	if node == nil || len(node.Tokens()) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(getIdentifierValue(nameNode))
+	return strings.TrimSpace(getIdentifierValue(node))
 }
 
 func getParseRuleRefName(refNode *Node) string {

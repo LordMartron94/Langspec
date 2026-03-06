@@ -498,7 +498,7 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 
 		// POSTFIX RULES: Composite postfix bindings that require full sub-rule execution
 		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-			b.g.PostfixRuleOp(TokBraceOpen, 30, NodeRepetition, b.patternRepetition()),
+			b.g.PostfixRuleOp(30, NodeRepetition, b.patternRepetition()),
 		},
 
 		// INFIX: Bindings BETWEEN expressions
@@ -820,7 +820,7 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 		},
 
 		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-			b.g.PostfixRuleOp(TokBraceOpen, 30, NodeRepetition, b.patternRepetition()),
+			b.g.PostfixRuleOp(30, NodeRepetition, b.patternRepetition()),
 		},
 
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{

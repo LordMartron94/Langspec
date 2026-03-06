@@ -84,8 +84,12 @@ type LangSpecCompileResult struct {
 	LanguageName    string
 	LanguageVersion string
 
-	CompiledLexerSpec *LexerSpec
-	EOFToken          string
+	CompiledLexerSpec  *LexerSpec
+	CompiledParserSpec *ParserSpec
+
+	CompiledGrammarPackage GrammarPackage
+
+	EOFToken string
 }
 
 /*
@@ -213,7 +217,11 @@ func LangSpecCompilerCompile(
 	compiled := compileTree(compiler, result.RootNode)
 	result.LanguageName = compiled.dslName
 	result.LanguageVersion = compiled.dslVersion
+
 	result.CompiledLexerSpec = compiled.lexerSpec
+	result.CompiledParserSpec = compiled.parserSpec
+	result.CompiledGrammarPackage = compiled.grammarPackage
+
 	result.EOFToken = compiled.eofToken
 
 	return result, err

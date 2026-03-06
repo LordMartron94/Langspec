@@ -3,13 +3,12 @@ package dsl
 import (
 	"fmt"
 	"foundation/system"
-	"io"
 	"langspec"
 	"lexarch"
 	"memarch"
 	"memcore"
 	"memforge"
-	"os"
+	"syntaxa"
 	"testing"
 )
 
@@ -30,10 +29,13 @@ func TestDSLCompiler(t *testing.T) {
 	scratchAllocFn := func(sizeBytes, alignment uint64) memcore.MarkRaw {
 		return memforge.DynamicLinearAllocatorMallocUnsafe(scratchAllocator, sizeBytes, alignment)
 	}
+
+	sink := DefaultLangSpecDiagnosticSink()
+
 	compilerConfig := LangSpecCompilerConfigurationCreate(
 		scratchAllocFn,
 		nil,
-	).WithDiagnosticSink(DefaultLangSpecDiagnosticSink())
+	).WithDiagnosticSink(sink)
 
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
@@ -51,52 +53,119 @@ func TestDSLCompiler(t *testing.T) {
 		t.Fatalf("Compilation failed with error: %s", err.Error())
 	}
 
-	// testLex(t, result, scratchAllocFn, TestFile)
+	testResult(t, result, scratchAllocFn, TestFile, sink)
 }
 
-func testLex(
+func testResult(
 	t *testing.T,
 	result *LangSpecCompileResult,
 	scratchAllocationFn memarch.AllocationFn,
 	sourceFile string,
+	sink *LangSpecDiagnosticSink,
 ) {
-	lexer := langspec.LangParserLexerCreateFromSpec(
-		scratchAllocationFn,
-		memcore.GigaByte,
+	grammarPackage := result.CompiledGrammarPackage
+	programRule := grammarPackage.Grammars[grammarPackage.EntryRule]
+
+	grammarDump := programRule.DebugDump(
+		syntaxa.GrammarDebugFormatter[string]{
+			FormatKind: syntaxa.GrammarKind.String,
+			FormatToken: func(s string) string {
+				return s
+			},
+			FormatRange: func(min int, max *int) string {
+				if max == nil {
+					return fmt.Sprintf("[%d..∞]", min)
+				}
+				return fmt.Sprintf("[%d..%d]", min, *max)
+			},
+			FormatGrammarLabel: func(label syntaxa.GrammarLabel) string {
+				return "(" + string(label) + ")"
+			},
+		},
+	)
+
+	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, string, string, string, string]{
+		FormatToken: func(s string) string {
+			return s
+		},
+	})
+
+	renderGrammarDumps(sink.Writer, grammarDump, grammarPackageDump)
+
+	spec := langspec.LangSpecCreate(
 		result.CompiledLexerSpec,
+		result.CompiledParserSpec,
 	)
-	defer lexarch.LexerClose(lexer)
 
-	runes, err := system.FileReadAllRunes(sourceFile)
+	langParserConfiguration := langspec.LangParserConfigurationCreate(spec, scratchAllocationFn)
+	langParser := langspec.LangParserCreate(langParserConfiguration)
+	defer langspec.LangParserDestroy(langParser)
+
+	session := langspec.LangParserSessionCreate[rune](sourceFile, nil, false)
+
+	_, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
+		langParser,
+		session,
+	)
+
+	// renderParseTrace(sink.Writer, trace, func(t string) string { return t })
+
 	if err != nil {
-		t.Fatalf("read source file: %v", err)
+		t.Fatalf("testing compiled artifact failed with error: %s", err.Error())
 	}
 
-	session := lexarch.LexerSessionCreate[rune, string, string](
-		"default",
-		runes,
-		lexarch.NewlineDetectorRune(),
-		lexarch.ColumnAdvanceRune(4),
+	contentRune, _ := system.FileReadAllRunes(sourceFile)
+
+	if syntaxErrors.HasErrors() {
+		renderSyntaxErrorsWithContext(sink.Writer, contentRune, syntaxErrors)
+
+		t.Fatalf("file parse failed with %d syntax errors",
+			len(syntaxErrors.Errors))
+	}
+
+	lstDump := rootNode.DebugDump(
+		syntaxa.LSTDebugFormatter[
+			rune,
+			string,
+			string,
+			string,
+		]{
+			FormatKind: func(k string) string {
+				return k
+			},
+
+			FormatToken: func(l lexarch.Lexeme[
+				rune,
+				string,
+				string,
+			]) string {
+				return string(l.Raw)
+			},
+
+			FormatAttribute: func(k string, v any) string {
+				return fmt.Sprintf("%s=%v", k, v)
+			},
+
+			/* ───── visual toggles ───── */
+
+			ShowTokens:     true,
+			ShowAttributes: true,
+
+			ShowByteSpan: true,
+			ShowLineSpan: true,
+
+			ShowNodeID:   true,
+			ShowRevision: false,
+
+			SlotPrefix: "@",
+
+			/* colors disabled for now */
+			ColorKind:      nil,
+			ColorToken:     nil,
+			ColorSpan:      nil,
+			ColorAttribute: nil,
+		},
 	)
 
-	lexemes := make([]lexarch.Lexeme[rune, string, string], 0)
-	for {
-		lex := lexarch.LexerConsume(lexer, session)
-		lexemes = append(lexemes, lex)
-		if lex.Token == result.EOFToken {
-			break
-		}
-	}
-
-	renderCompiledSpecLexemes(os.Stdout, lexemes)
-}
-
-func renderCompiledSpecLexemes(w io.Writer, lexemes []lexarch.Lexeme[rune, string, string]) {
-	if w == nil || len(lexemes) == 0 {
-		return
-	}
-	for i, lexeme := range lexemes {
-		debug := lexeme.DebugString(func(t string) string { return t }, func(r string) string { return r })
-		fmt.Fprintf(w, "%05d) %s\n", i, debug)
-	}
+	renderLSTDump(sink.Writer, lstDump)
 }

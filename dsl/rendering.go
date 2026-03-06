@@ -280,7 +280,7 @@ func renderParseTrace[TToken any](
 
 	for i, ev := range trace.Events {
 		fmt.Fprintf(w,
-			"%04d | cur=%d | raw=%s | logical=%s | ok=%v | cons=%v | node=%v \n",
+			"%04d | cur=%d | raw=%s | logical=%s | ok=%v | cons=%v | node=%v | rule=%s\n",
 			i,
 			ev.Cursor,
 			formatToken(ev.RawToken),
@@ -288,6 +288,7 @@ func renderParseTrace[TToken any](
 			ev.RuleSucceeded,
 			ev.Consumed,
 			ev.NodeReturned,
+			string(ev.RuleName),
 		)
 	}
 
