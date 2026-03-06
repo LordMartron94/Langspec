@@ -146,6 +146,7 @@ const (
 	NodePatternSegment
 	NodePatternOptional
 	NodeRepetition
+	NodeRepetitionBounds
 	NodeRepetitionMin
 	NodeRepetitionMax
 	NodeIdentifier
@@ -486,8 +487,8 @@ func (b *dslGrammarBuilder) patternRange() Rule {
 }
 
 func (b *dslGrammarBuilder) patternRepetition() Rule {
-	return b.g.NestByNode(
-		NodeRepetition,
+	return b.g.TransparentNestByNode(
+		NodeRepetitionBounds, "NEST",
 		TokBraceOpen,
 		TokBraceClose,
 		b.repetitionBounds(),
@@ -496,14 +497,14 @@ func (b *dslGrammarBuilder) patternRepetition() Rule {
 
 func (b *dslGrammarBuilder) repetitionBounds() Rule {
 	return b.g.ChoiceByNode(
-		NodeRepetition,
+		NodeRepetitionBounds,
 		b.rangedRepetition(),
 		b.exactRepetition(),
 	)
 }
 
 func (b *dslGrammarBuilder) rangedRepetition() Rule {
-	return b.g.sequence(NodeRepetition, "RANGED").
+	return b.g.sequence(NodeRepetitionBounds, "RANGED").
 		optionalToken(NodeRepetitionMin, TokInteger).
 		expectVirtualInRule(TokComma).
 		optionalToken(NodeRepetitionMax, TokInteger).
@@ -511,7 +512,9 @@ func (b *dslGrammarBuilder) rangedRepetition() Rule {
 }
 
 func (b *dslGrammarBuilder) exactRepetition() Rule {
-	return b.g.expectToken(NodeRepetitionMin, TokInteger)
+	return b.g.sequence(NodeRepetitionBounds, "EXACT").
+		expectToken(NodeRepetitionMin, TokInteger).
+		build()
 }
 
 // ----------------------------------------------------------- LEX SECTION
