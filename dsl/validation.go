@@ -38,6 +38,10 @@ const (
 	VALIDATION_UNRESOLVED_PARSE_RULE_REF ValidationCode = "V_PAR002"
 	VALIDATION_UNREFERENCED_PARSE_RULE   ValidationCode = "V_PAR003"
 	VALIDATION_PROGRAM_RULE_REQUIRED    ValidationCode = "V_PAR004"
+
+	// Parse rule safety: infinite loops and unbounded optional repetition
+	VALIDATION_PARSE_LEFT_RECURSION              ValidationCode = "V_PAR005"
+	VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION ValidationCode = "V_PAR006"
 )
 
 func (v ValidationCode) String() string {
@@ -301,9 +305,36 @@ func getValidationStages() []*ValidationStage {
 			},
 		},
 		{
+			Name:        "Parse Rule Safety",
+			Description: "Detects infinite loops in the parse section: left recursion (rule can invoke itself without consuming input) and unbounded repetition of only optional rules (e.g. (X?)*).",
+			Order:       3,
+			Processor: func(ctx *ValidationCtx) {
+				parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
+				if parseSection == nil {
+					return
+				}
+				ruleBodies := buildParseRuleBodyMap(parseSection)
+				if len(ruleBodies) == 0 {
+					return
+				}
+				ruleNullable := computeParseRuleNullable(ruleBodies)
+				firstRefs := computeParseRuleFirstRefs(ruleBodies, ruleNullable)
+				cycles := findLeftRecursionCycles(firstRefs)
+				for _, ruleName := range cycles {
+					ruleNode := findParseRuleByName(parseSection, ruleName)
+					if ruleNode != nil {
+						body := ruleNode.FindFirstKind(NodeParseRuleBody)
+						msg := fmt.Sprintf("parse rule '%s' is left-recursive (can invoke itself without consuming input); parser may hang or stack overflow", ruleName)
+						ctx.ReportFatal(VALIDATION_PARSE_LEFT_RECURSION.String(), msg, body)
+					}
+				}
+				validateUnboundedOptionalRepetition(ctx, parseSection, ruleBodies, ruleNullable)
+			},
+		},
+		{
 			Name:        "Unreachable Patterns",
 			Description: "Emits info for patterns that are never referenced by any lex rule or by another pattern.",
-			Order:       3,
+			Order:       4,
 			Processor: func(ctx *ValidationCtx) {
 				patternDeps := buildPatternDependencyMap(ctx.RootNode, nil)
 				reachable := computeReachablePatterns(ctx.RootNode, patternDeps)
@@ -326,7 +357,7 @@ func getValidationStages() []*ValidationStage {
 		{
 			Name:        "Lex Pattern Analysis",
 			Description: "Detects ambiguous token matches, identical token patterns, and tokens shadowed by higher-priority rules.",
-			Order:       4,
+			Order:       5,
 			Processor: func(ctx *ValidationCtx) {
 				lexRules := collectLexRules(ctx.RootNode)
 				patternKeyToRules := make(map[string][]lexRuleInfo)
@@ -467,6 +498,281 @@ func computeReachableParseRules(parseSection *Node, deps map[string][]string, en
 	}
 	bfs(entryRuleName)
 	return reachable
+}
+
+// getParseRuleBodyRoot returns the first child of body that is a parse expression root (Alternation, Concat, Optional, Star, Plus, Segment, Group).
+func getParseRuleBodyRoot(body *Node) *Node {
+	if body == nil {
+		return nil
+	}
+	for _, ch := range body.Children() {
+		if ch == nil {
+			continue
+		}
+		k := ch.Kind()
+		if k == NodeParseAlternation || k == NodeParseConcat || k == NodeParseOptional ||
+			k == NodeParseStar || k == NodeParsePlus || k == NodeParseSegment || k == NodeParseGroup {
+			return ch
+		}
+	}
+	return nil
+}
+
+// buildParseRuleBodyMap returns a map from parse rule name to the root node of its body expression.
+func buildParseRuleBodyMap(parseSection *Node) map[string]*Node {
+	out := make(map[string]*Node)
+	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
+		nameNode := rule.FindFirstKind(NodeParseRuleName)
+		if nameNode == nil || len(nameNode.Tokens()) == 0 {
+			continue
+		}
+		name := getParseRuleName(nameNode)
+		body := rule.FindFirstKind(NodeParseRuleBody)
+		if body == nil {
+			continue
+		}
+		root := getParseRuleBodyRoot(body)
+		if root != nil {
+			out[name] = root
+		}
+	}
+	return out
+}
+
+// parseExprNullable returns true if the parse expression node can match without consuming any token.
+func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.Kind() {
+	case NodeParseOptional, NodeParseStar:
+		return true
+	case NodeParsePlus:
+		children := node.Children()
+		if len(children) == 0 {
+			return false
+		}
+		return parseExprNullable(children[0], ruleNullable, ruleBodies)
+	case NodeParseAlternation:
+		for _, ch := range node.Children() {
+			if parseExprNullable(ch, ruleNullable, ruleBodies) {
+				return true
+			}
+		}
+		return false
+	case NodeParseConcat:
+		for _, ch := range node.Children() {
+			if !parseExprNullable(ch, ruleNullable, ruleBodies) {
+				return false
+			}
+		}
+		return true
+	case NodeParseGroup:
+		children := node.Children()
+		if len(children) == 0 {
+			return false
+		}
+		return parseExprNullable(children[0], ruleNullable, ruleBodies)
+	case NodeParseRuleReference:
+		refName := getParseRuleRefName(node)
+		if refName == "" {
+			return false
+		}
+		return ruleNullable[refName]
+	case NodeParseSegment:
+		children := node.Children()
+		if len(children) == 0 {
+			return false
+		}
+		ch := children[0]
+		switch ch.Kind() {
+		case NodeParseOpRef, NodeParseGroup:
+			return parseExprNullable(ch, ruleNullable, ruleBodies)
+		default:
+			return false
+		}
+	case NodeParseOpRef:
+		refNode := node.FindFirstKind(NodeParseRuleReference)
+		if refNode == nil {
+			return false
+		}
+		refName := getParseRuleRefName(refNode)
+		return refName != "" && ruleNullable[refName]
+	default:
+		return false
+	}
+}
+
+// parseExprFirstRuleRefs returns the set of rule names that can be invoked at the start of this expression without consuming any token.
+func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node) map[string]struct{} {
+	out := make(map[string]struct{})
+	if node == nil {
+		return out
+	}
+	switch node.Kind() {
+	case NodeParseRuleReference:
+		if name := getParseRuleRefName(node); name != "" {
+			out[name] = struct{}{}
+		}
+		return out
+	case NodeParseOptional, NodeParseStar, NodeParsePlus:
+		children := node.Children()
+		if len(children) > 0 {
+			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies) {
+				out[k] = struct{}{}
+			}
+		}
+		return out
+	case NodeParseAlternation:
+		for _, ch := range node.Children() {
+			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies) {
+				out[k] = struct{}{}
+			}
+		}
+		return out
+	case NodeParseConcat:
+		for _, ch := range node.Children() {
+			refs := parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies)
+			for k := range refs {
+				out[k] = struct{}{}
+			}
+			if !parseExprNullable(ch, ruleNullable, ruleBodies) {
+				break
+			}
+		}
+		return out
+	case NodeParseGroup:
+		children := node.Children()
+		if len(children) > 0 {
+			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies) {
+				out[k] = struct{}{}
+			}
+		}
+		return out
+	case NodeParseSegment:
+		children := node.Children()
+		if len(children) == 0 {
+			return out
+		}
+		ch := children[0]
+		if ch.Kind() == NodeParseOpRef || ch.Kind() == NodeParseGroup {
+			return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies)
+		}
+		return out
+	case NodeParseOpRef:
+		refNode := node.FindFirstKind(NodeParseRuleReference)
+		if refNode != nil {
+			if name := getParseRuleRefName(refNode); name != "" {
+				out[name] = struct{}{}
+			}
+		}
+		return out
+	default:
+		return out
+	}
+}
+
+// computeParseRuleNullable computes nullable for each rule by fixpoint iteration.
+func computeParseRuleNullable(ruleBodies map[string]*Node) map[string]bool {
+	nullable := make(map[string]bool)
+	for name := range ruleBodies {
+		nullable[name] = false
+	}
+	for {
+		changed := false
+		for name, root := range ruleBodies {
+			prev := nullable[name]
+			nullable[name] = parseExprNullable(root, nullable, ruleBodies)
+			if nullable[name] != prev {
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return nullable
+}
+
+// computeParseRuleFirstRefs returns for each rule the set of rules it can invoke without consuming input.
+func computeParseRuleFirstRefs(ruleBodies map[string]*Node, ruleNullable map[string]bool) map[string]map[string]struct{} {
+	out := make(map[string]map[string]struct{})
+	for name, root := range ruleBodies {
+		out[name] = parseExprFirstRuleRefs(root, ruleNullable, ruleBodies)
+	}
+	return out
+}
+
+// findLeftRecursionCycles returns rule names that participate in a cycle in the "first refs" graph (can reach self without consuming).
+func findLeftRecursionCycles(firstRefs map[string]map[string]struct{}) []string {
+	visited := make(map[string]bool)
+	inStack := make(map[string]bool)
+	cycleSet := make(map[string]struct{})
+	var dfs func(name string)
+	dfs = func(name string) {
+		visited[name] = true
+		inStack[name] = true
+		for ref := range firstRefs[name] {
+			if !visited[ref] {
+				dfs(ref)
+			} else if inStack[ref] {
+				cycleSet[ref] = struct{}{}
+			}
+		}
+		inStack[name] = false
+	}
+	for name := range firstRefs {
+		if !visited[name] {
+			dfs(name)
+		}
+	}
+	cycles := make([]string, 0, len(cycleSet))
+	for name := range cycleSet {
+		cycles = append(cycles, name)
+	}
+	return cycles
+}
+
+func findParseRuleByName(parseSection *Node, ruleName string) *Node {
+	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
+		nameNode := rule.FindFirstKind(NodeParseRuleName)
+		if nameNode == nil {
+			continue
+		}
+		if getParseRuleName(nameNode) == ruleName {
+			return rule
+		}
+	}
+	return nil
+}
+
+// validateUnboundedOptionalRepetition reports a warning for every Star or Plus whose operand is nullable (unbounded repetition of optional).
+func validateUnboundedOptionalRepetition(
+	ctx *ValidationCtx,
+	parseSection *Node,
+	ruleBodies map[string]*Node,
+	ruleNullable map[string]bool,
+) {
+	for _, node := range parseSection.FindAllKind(NodeParseStar) {
+		children := node.Children()
+		if len(children) == 0 {
+			continue
+		}
+		if parseExprNullable(children[0], ruleNullable, ruleBodies) {
+			msg := "unbounded repetition (*) of an optional or nullable expression can cause the parser to loop without consuming input; consider a bounded repetition or ensure the operand consumes at least one token"
+			ctx.ReportWarning(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
+		}
+	}
+	for _, node := range parseSection.FindAllKind(NodeParsePlus) {
+		children := node.Children()
+		if len(children) == 0 {
+			continue
+		}
+		if parseExprNullable(children[0], ruleNullable, ruleBodies) {
+			msg := "unbounded repetition (+) of an optional or nullable expression can cause the parser to loop without consuming input; consider a bounded repetition or ensure the operand consumes at least one token"
+			ctx.ReportWarning(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
+		}
+	}
 }
 
 // collectTokenNamesReferencedInParseSection returns the set of lex token names used in the parse section

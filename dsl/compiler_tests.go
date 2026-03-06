@@ -44,7 +44,7 @@ func TestDSLCompiler(t *testing.T) {
 
 	LangSpecCompilerDebugResult(compiler, result, &CompilerDebugConfig{
 		DebugParseTrace: false,
-		DebugLST:        true,
+		DebugLST:        false,
 	})
 
 	if err != nil {
