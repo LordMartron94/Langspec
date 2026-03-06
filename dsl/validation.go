@@ -31,6 +31,8 @@ const (
 	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX007"
 
 	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
+	VALIDATION_REPETITION_MIN_GT_MAX     ValidationCode = "V_PAT008"
+	VALIDATION_REPETITION_NEGATIVE_BOUND ValidationCode = "V_PAT009"
 
 	VALIDATION_DUPLICATE_PARSE_RULE_NAME ValidationCode = "V_PAR001"
 	VALIDATION_UNRESOLVED_PARSE_RULE_REF ValidationCode = "V_PAR002"
@@ -83,7 +85,7 @@ func getValidationStages() []*ValidationStage {
 		},
 		{
 			Name:        "Pattern Validation",
-			Description: "Validates pattern section: duplicate declarations, unresolved variable references, and local variables used outside the pattern section. Variables must be declared before use; locals may be used in any pattern definition but not outside the pattern section.",
+			Description: "Validates pattern section: duplicate declarations, unresolved variable references, local variables used outside the pattern section, and repetition bounds (min ≤ max, non-negative). Variables must be declared before use; locals may be used in any pattern definition but not outside the pattern section.",
 			Order:       1,
 			Processor: func(ctx *ValidationCtx) {
 				allDeclared := make(map[string]struct{})
@@ -172,6 +174,34 @@ func getValidationStages() []*ValidationStage {
 						msg := "negation (!) may only contain character, range, group, or alternation; other constructs are not allowed"
 						ctx.ReportError(VALIDATION_NEGATION_INVALID_CONTENT.String(), msg, offending)
 					})
+				}
+
+				for _, repNode := range ctx.RootNode.FindAllKind(NodeRepetition) {
+					children := repNode.Children()
+					if len(children) < 2 {
+						continue
+					}
+					boundsNode := children[1]
+					minNode := boundsNode.FindFirstKind(NodeRepetitionMin)
+					maxNode := boundsNode.FindFirstKind(NodeRepetitionMax)
+					minVal, minOK := parseIntFromNode(minNode)
+					maxVal, maxOK := parseIntFromNode(maxNode)
+					if minNode != nil && !minOK {
+						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition min must be a valid non-negative integer", minNode)
+					}
+					if maxNode != nil && !maxOK {
+						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition max must be a valid non-negative integer", maxNode)
+					}
+					if minNode != nil && minOK && minVal < 0 {
+						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition min must be non-negative", minNode)
+					}
+					if maxNode != nil && maxOK && maxVal < 0 {
+						ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition max must be non-negative", maxNode)
+					}
+					if minOK && maxOK && minNode != nil && maxNode != nil && minVal > maxVal {
+						msg := fmt.Sprintf("repetition min (%d) must not be greater than max (%d)", minVal, maxVal)
+						ctx.ReportError(VALIDATION_REPETITION_MIN_GT_MAX.String(), msg, boundsNode)
+					}
 				}
 			},
 		},
@@ -679,4 +709,17 @@ func collectLexRules(root *Node) []lexRuleInfo {
 
 func parseIntFromContent(s string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(s))
+}
+
+// parseIntFromNode parses the single-token content of node as an integer. Returns (0, false) if node is nil, has no tokens, or content is not a valid integer.
+func parseIntFromNode(node *Node) (int, bool) {
+	if node == nil || len(node.Tokens()) != 1 {
+		return 0, false
+	}
+	raw := strings.TrimSpace(string(node.Tokens()[0].Raw))
+	n, err := parseIntFromContent(raw)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

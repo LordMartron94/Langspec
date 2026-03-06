@@ -46,8 +46,6 @@ In this file I will outline the things I still need/want to do for LSPEC.
 		- DONE ON 03 March 2026 @ 07.02pm
 	- [x] Fix issue in EditorIR where token lexing priorities aren't taken into account.
 		- FIXED ON 03 March 2026 @ 07.26pm
-- [ ] Editor IR: Add support to override nodes depending on token/node context (previous and subsequent nodes/tokens)
-	- This can help with for example scoping a private variable differently based on the fact that a local keyword appears before.
 
 ### Priority 4
 
