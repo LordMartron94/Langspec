@@ -223,8 +223,8 @@ func (g *GrammarDefiner) PostfixRuleOp(
 
 /*
 block creates a standard delimited section:
-Keyword -> { -> Body -> } -> ;
-GrammarID is derived from node. The bodyRule is typically a TransparentNest or a list of sub-rules.
+Keyword -> { -> Body -> } -> [;]
+Semicolon after the closing brace is optional (consumed if present). GrammarID is derived from node.
 */
 func (g *GrammarDefiner) block(
 	node LangSpecParserNodeKind,
@@ -243,14 +243,14 @@ func (g *GrammarDefiner) block(
 			TokBraceClose,
 			bodyRule,
 		),
-		g.expectVirtualInRule(node, TokSemicolon),
+		g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
 	)
 }
 
 /*
-block creates a standard delimited section:
-keywordRule -> { -> Body -> } -> ;
-GrammarID is derived from node. The bodyRule is typically a TransparentNest or a list of sub-rules.
+blockByRule creates a standard delimited section:
+keywordRule -> { -> Body -> } -> [;]
+Semicolon after the closing brace is optional (consumed if present). GrammarID is derived from node.
 */
 func (g *GrammarDefiner) blockByRule(
 	node LangSpecParserNodeKind,
@@ -268,7 +268,7 @@ func (g *GrammarDefiner) blockByRule(
 			TokBraceClose,
 			bodyRule,
 		),
-		g.expectVirtualInRule(node, TokSemicolon),
+		g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
 	)
 }
 

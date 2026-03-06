@@ -222,8 +222,6 @@ func (c *compiler) compilePatternExpression(
 	switch kind {
 	case NodeCharLiteral:
 		return c.charLiteralToPattern(node)
-	case NodeStringLiteral:
-		return c.stringLiteralToPattern(node)
 	case NodeVarRef:
 		return c.varRefToPattern(node, variables)
 	case NodePatternConcat:
@@ -461,11 +459,6 @@ func (c *compiler) extractPatternRange(node *Node) pattern.CharRange[rune] {
 
 func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 	content := nodeFormattedContent(node, ATTRIBUTE_CHAR_LITERAL_VALUE)
-	return c.factory.Literal([]rune(content)...)
-}
-
-func (c *compiler) stringLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
-	content := nodeFormattedContent(node, ATTRIBUTE_LITERAL_STRING_VALUE)
 	return c.factory.Literal([]rune(content)...)
 }
 

@@ -143,7 +143,6 @@ const (
 	NodePatternNegation
 	NodePatternConcat
 	NodePatternAlternation
-	NodeStringLiteral
 	NodePatternGroup
 	NodePatternSegment
 	NodePatternOptional
@@ -475,7 +474,6 @@ func (b *dslGrammarBuilder) patternSegment() Rule {
 		b.varRefReference(),
 		rangeRule,
 		b.charLiteral(),
-		b.g.expectToken(NodeStringLiteral, TokStringLiteral),
 		b.g.expectToken(NodePatternAny, TokDot),
 		b.g.NestByNode(NodePatternGroup, TokParenOpen, TokParenClose,
 			b.g.rb.Rule.Reference("PATTERN EXPR REF", VirtualGrammarIDToGrammarID(VirtualPatternExpression))),
@@ -538,9 +536,9 @@ func (b *dslGrammarBuilder) lexRuleList() Rule {
 func (b *dslGrammarBuilder) lexRule() Rule {
 	return b.g.sequence(NodeLexRule, "").
 		optionalToken(NodeLexRulePriority, TokInteger).
-		expectToken(NodeLexRuleTokenName, TokStringLiteral).
+		expectToken(NodeLexRuleTokenName, TokIdentifier).
 		expectVirtualInRule(TokChainSeparator).
-		expectToken(NodeLexRuleRole, TokStringLiteral).
+		expectToken(NodeLexRuleRole, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
 		rule(b.g.ChoiceByNode(NodeLexRulePattern,
 			b.varRefReference(),
@@ -584,16 +582,16 @@ func (b *dslGrammarBuilder) parseRuleList() Rule {
 
 func (b *dslGrammarBuilder) parseRule() Rule {
 	return b.g.sequence(NodeParseRule, "").
-		expectToken(NodeParseRuleName, TokStringLiteral).
+		expectToken(NodeParseRuleName, TokIdentifier).
 		expectVirtualInRule(TokChainSeparator).
-		expectToken(NodeParseNodeName, TokStringLiteral).
+		expectToken(NodeParseNodeName, TokIdentifier).
 		rule(b.g.NestByNode(
 			NodeParseRuleBody,
 			TokBraceOpen,
 			TokBraceClose,
 			b.parseRuleExpr(),
 		)).
-		expectVirtualInRule(TokSemicolon).
+		optionalRule(b.g.expectVirtualInRule(NodeParseRule, TokSemicolon)).
 		build()
 }
 
@@ -623,29 +621,29 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 
 func (b *dslGrammarBuilder) parseSegment() Rule {
 	emitMapping := b.g.sequence(NodeParseOpEmit, "").
-		expectToken(NodeParseNodeName, TokStringLiteral).
+		expectToken(NodeParseNodeName, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
-		expectToken(NodeParseTokenReference, TokStringLiteral).
+		expectToken(NodeParseTokenReference, TokIdentifier).
 		build()
 
 	predictEmit := b.g.rb.Rule.Predict(
 		emitMapping,
 		func(ctx *syntaxa.SelectRuleContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]) bool {
-			return ctx.Peek(0).Token == TokStringLiteral && ctx.Peek(1).Token == TokAssignment
+			return ctx.Peek(0).Token == TokIdentifier && ctx.Peek(1).Token == TokAssignment
 		},
 	)
 
 	refMapping := b.g.sequence(NodeParseOpRef, "").
 		expectVirtualInRule(TokKWRef).
-		expectToken(NodeParseRuleReference, TokStringLiteral).
+		expectToken(NodeParseRuleReference, TokIdentifier).
 		build()
 
 	virtualMapping := b.g.sequence(NodeParseOpSuppress, "").
 		expectVirtualInRule(TokKWVirtual).
-		expectToken(NodeParseTokenReference, TokStringLiteral).
+		expectToken(NodeParseTokenReference, TokIdentifier).
 		build()
 
-	standaloneString := b.g.expectToken(NodeStringLiteral, TokStringLiteral)
+	standaloneString := b.g.expectToken(NodeIdentifier, TokIdentifier)
 
 	return b.g.ChoiceByNode(NodeParseSegment,
 		predictEmit,

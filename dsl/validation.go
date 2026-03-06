@@ -57,7 +57,7 @@ func getValidationStages() []*ValidationStage {
 
 				lexRuleTokens := lexRuleSection.FindAllKind(NodeLexRuleTokenName)
 				for _, lexRuleToken := range lexRuleTokens {
-					value := getStringValue(lexRuleToken)
+					value := getIdentifierValue(lexRuleToken)
 
 					if _, seen := tks[value]; seen {
 						msg := fmt.Sprintf("token '%s' already declared (duplicate entry)", value)
@@ -340,11 +340,13 @@ func validateNegationSubtree(node *Node, report func(offending *Node)) {
 	}
 }
 
-func getStringValue(node *Node) string {
-	value, ok := AttributeAs[string](node, ATTRIBUTE_LITERAL_STRING_VALUE)
-	if !ok {
-		panic(fmt.Errorf("engine error encountered: %v not stored for node %v", ATTRIBUTE_LITERAL_STRING_VALUE, node))
+func getIdentifierValue(node *Node) string {
+	tks := node.Tokens()
+	if len(tks) != 1 {
+		panic("engine error: identifier node must have exactly 1 child")
 	}
+
+	value := string(tks[0].Raw)
 
 	return value
 }
@@ -353,14 +355,14 @@ func getParseRuleName(nameNode *Node) string {
 	if nameNode == nil || len(nameNode.Tokens()) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(getStringValue(nameNode))
+	return strings.TrimSpace(getIdentifierValue(nameNode))
 }
 
 func getParseRuleRefName(refNode *Node) string {
 	if refNode == nil || len(refNode.Tokens()) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(getStringValue(refNode))
+	return strings.TrimSpace(getIdentifierValue(refNode))
 }
 
 func buildParseRuleDependencyMap(parseSection *Node) map[string][]string {

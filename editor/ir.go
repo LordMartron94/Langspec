@@ -941,8 +941,23 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	return buildIntermediateSegmentRules(chainCtx, child, index, action, nextID, includes)
 }
 
-func isTerminalStep(index, stepCount int) bool {
-	return index+1 >= stepCount
+func buildIntermediateSegmentRules[TToken, TTokenRole comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole],
+	child *syntaxa.Grammar[TToken],
+	index int,
+	action RuleAction,
+	nextID StateID,
+	includes []StateID,
+) ([]StateRule, []StateID) {
+	rules := buildLookaheadRules(chainCtx, index, action, nextID)
+
+	if child != nil && child.Kind == syntaxa.GOptional {
+		for i := range rules {
+			rules[i].Priority = PriorityAfterIncludes
+		}
+	}
+
+	return rules, includes
 }
 
 func buildTerminalSegmentRules[TToken, TTokenRole comparable](
@@ -954,24 +969,29 @@ func buildTerminalSegmentRules[TToken, TTokenRole comparable](
 	laSuffix string,
 ) []StateRule {
 	env := chainCtx.Env
-	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action, laSuffix)
+	rules := generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action, laSuffix)
+
+	if child != nil && child.Kind == syntaxa.GOptional {
+		rules = appendOptionalBypassRule(rules, lbl, action, nextID)
+	}
+
+	return rules
 }
 
-func buildIntermediateSegmentRules[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
-	child *syntaxa.Grammar[TToken],
-	index int,
-	action RuleAction,
-	nextID StateID,
-	includes []StateID,
-) ([]StateRule, []StateID) {
-	rules := buildLookaheadRules(chainCtx, index, action, nextID)
-	if child != nil && child.Kind == syntaxa.GOptional {
-		for i := range rules {
-			rules[i].Priority = PriorityAfterIncludes
-		}
+func appendOptionalBypassRule(rules []StateRule, stateLabel string, action RuleAction, targetID StateID) []StateRule {
+	bypassRule := StateRule{
+		ID:           StateRuleID(produceStateID(stateLabel + "_optional_bypass")),
+		Label:        "optional_bypass",
+		RegEx:        `(?=\S)`,
+		Action:       action,
+		ActionTarget: targetID,
+		Priority:     PriorityAfterIncludes,
 	}
-	return rules, includes
+	return append(rules, bypassRule)
+}
+
+func isTerminalStep(index, stepCount int) bool {
+	return index+1 >= stepCount
 }
 
 func buildLookaheadRules[TToken, TTokenRole comparable](
