@@ -38,6 +38,34 @@ type compiler struct {
 	factory *pattern.RegulaASTFactory[rune]
 }
 
+/*
+patternCompileCtx holds shared state for compiling the pattern section (regex/varrefs)
+into Regula ASTs. Passed through instead of (c *compiler, patternTable, env) on every call.
+variables is the running map during pattern compilation; patternTable is the exported result.
+*/
+type patternCompileCtx struct {
+	c            *compiler
+	rootNode     *Node
+	patternTable map[string]pattern.RegulaAST[rune]
+	env          *SemanticEnv
+	variables    map[string]pattern.RegulaAST[rune]
+}
+
+/*
+parseCompileCtx holds shared state for compiling parse rules into grammar rules.
+Passed through instead of (builder, env, grammarID, nodeKind, ruleName, counts, rootLevel, transparent).
+*/
+type parseCompileCtx struct {
+	builder     *CompilerRuleBuilder
+	env         *SemanticEnv
+	grammarID   syntaxa.GrammarLabel
+	nodeKind    string
+	ruleName    string
+	counts      map[string]int
+	rootLevel   bool
+	transparent bool
+}
+
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	dslName, dslVersion := getInfoFromHeader(rootNode.FindFirstKind(NodeHeader))
 
@@ -61,8 +89,14 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	lspecCompiler := compiler{
 		factory: pattern.RegulaASTFactoryCreate(domain),
 	}
+	patternCtx := &patternCompileCtx{
+		c:        &lspecCompiler,
+		rootNode: rootNode,
+		env:      env,
+	}
+	lspecCompiler.compilePatterns(patternCtx)
 
-	ruleset := lspecCompiler.compileRuleset(rootNode, env)
+	ruleset := lspecCompiler.compileRuleset(patternCtx)
 	lexerSpec.WithRuleset("default", *ruleset)
 
 	grammarPackage, ruleRegistry, rootNodeKind, skipRoles := getParserSpecInfo(rootNode, env, dslName, dslVersion)
@@ -111,15 +145,13 @@ func getEOFToken(rootNode *Node) string {
 
 // ------------------------------- LEX -------------------------------
 
-func (c *compiler) compileRuleset(rootNode *Node, env *SemanticEnv) *LexerRuleset {
-	patternTable := c.compilePatterns(rootNode, env)
-
+func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {
 	ruleset := lexarch.LexingRulesetCreate[rune, string, string](
 		lexarch.TokenResolutionStepLongestThenPriority[string],
 	)
 
-	lexSection := rootNode.FindFirstKind(NodeLexSection)
-	lexRules := c.gatherRules(lexSection, patternTable, env)
+	lexSection := ctx.rootNode.FindFirstKind(NodeLexSection)
+	lexRules := c.gatherRules(lexSection, ctx)
 
 	for _, rule := range lexRules {
 		ruleset.WithRulePriority(rule.tokenPattern, rule.tokenName, rule.tokenRole, rule.priority)
@@ -135,28 +167,20 @@ type lexRule struct {
 	tokenPattern pattern.RegulaAST[rune]
 }
 
-func (c *compiler) gatherRules(
-	sectionNode *Node,
-	patternTable map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) []lexRule {
+func (c *compiler) gatherRules(sectionNode *Node, ctx *patternCompileCtx) []lexRule {
 	rules := sectionNode.FindAllKind(NodeLexRule)
 	out := make([]lexRule, 0, len(rules))
 
 	for _, rule := range rules {
 		if !nodeHasMetaByPred(rule, isEOFTrueMetaKVP) {
-			out = append(out, c.constructLexRule(rule, patternTable, env))
+			out = append(out, c.constructLexRule(rule, ctx))
 		}
 	}
 
 	return out
 }
 
-func (c *compiler) constructLexRule(
-	ruleNode *Node,
-	patternTable map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) lexRule {
+func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexRule {
 	priority := 0
 	if priorityNode, ok := nodeContains(ruleNode, NodeLexRulePriority); ok {
 		priority = extractIntContent(priorityNode)
@@ -179,10 +203,10 @@ func (c *compiler) constructLexRule(
 	switch patternNode.Kind() {
 	case NodeVarRef:
 		target := VarRefTargetName(patternNode)
-		if env.Patterns[target] == nil {
+		if ctx.env.Patterns[target] == nil {
 			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
 		}
-		p, ok := patternTable[target]
+		p, ok := ctx.patternTable[target]
 		if !ok {
 			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
 		}
@@ -208,10 +232,13 @@ func (c *compiler) constructLexRule(
 	}
 }
 
-func (c *compiler) compilePatterns(rootNode *Node, env *SemanticEnv) map[string]pattern.RegulaAST[rune] {
+func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
 	out := make(map[string]pattern.RegulaAST[rune])
 	temp := make(map[string]pattern.RegulaAST[rune])
-	patternSection := rootNode.FindFirstKind(NodePatternSection)
+	ctx.patternTable = out
+	ctx.variables = temp
+
+	patternSection := ctx.rootNode.FindFirstKind(NodePatternSection)
 	definitions := patternSection.FindAllKind(NodePatternDefinition)
 
 	for _, definition := range definitions {
@@ -230,48 +257,44 @@ func (c *compiler) compilePatterns(rootNode *Node, env *SemanticEnv) map[string]
 			panic(fmt.Sprintf("invariant violated: definition '%s' has no expression", defName))
 		}
 
-		pattern := c.compilePatternExpression(exprNode, temp, env)
+		pat := compilePatternExpression(ctx, exprNode)
 
-		temp[defName] = pattern
-		if !env.LocalPatterns[defName] {
-			out[defName] = pattern
+		temp[defName] = pat
+		if !ctx.env.LocalPatterns[defName] {
+			out[defName] = pat
 		}
 	}
 
-	return out
+	ctx.variables = nil
 }
 
-func (c *compiler) compilePatternExpression(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
-
+func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
+	c := ctx.c
 	kind := node.Kind()
 
 	switch kind {
 	case NodeCharLiteral:
 		return c.charLiteralToPattern(node)
 	case NodeVarRef:
-		return c.varRefToPattern(node, variables, env)
+		return varRefToPattern(ctx, node)
 	case NodePatternConcat:
-		return c.concatToPattern(node, variables, env)
+		return concatToPattern(ctx, node)
 	case NodePatternAlternation:
-		return c.alternationToPattern(node, variables, env)
+		return alternationToPattern(ctx, node)
 	case NodePatternRange:
-		return c.rangeToPattern(node)
+		return ctx.c.rangeToPattern(node)
 	case NodePatternStar:
-		return c.starToPattern(node, variables, env)
+		return starToPattern(ctx, node)
 	case NodePatternPlus:
-		return c.plusToPattern(node, variables, env)
+		return plusToPattern(ctx, node)
 	case NodePatternOptional:
-		return c.optionalToPattern(node, variables, env)
+		return optionalToPattern(ctx, node)
 	case NodeRepetition:
-		return c.repetitionToPattern(node, variables, env)
+		return repetitionToPattern(ctx, node)
 	case NodePatternGroup:
-		return c.groupToPattern(node, variables, env)
+		return groupToPattern(ctx, node)
 	case NodePatternNegation:
-		return c.negationToPattern(node)
+		return ctx.c.negationToPattern(node)
 	case NodePatternAny:
 		return c.factory.NegatedClass()
 	default:
@@ -281,43 +304,35 @@ func (c *compiler) compilePatternExpression(
 
 // --- PATTERNS
 
-func (c *compiler) concatToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func concatToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 
-	concatPattern := c.compilePatternExpression(children[0], variables, env)
+	concatPattern := compilePatternExpression(ctx, children[0])
 
 	for i, child := range children {
 		if i == 0 {
 			continue
 		}
 
-		pattern := c.compilePatternExpression(child, variables, env)
-		concatPattern = concatPattern.Then(pattern)
+		pat := compilePatternExpression(ctx, child)
+		concatPattern = concatPattern.Then(pat)
 	}
 
 	return concatPattern
 }
 
-func (c *compiler) alternationToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func alternationToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 
-	alternationPattern := c.compilePatternExpression(children[0], variables, env)
+	alternationPattern := compilePatternExpression(ctx, children[0])
 
 	for i, child := range children {
 		if i == 0 {
 			continue
 		}
 
-		pattern := c.compilePatternExpression(child, variables, env)
-		alternationPattern = alternationPattern.Or(pattern)
+		pat := compilePatternExpression(ctx, child)
+		alternationPattern = alternationPattern.Or(pat)
 	}
 
 	return alternationPattern
@@ -330,63 +345,47 @@ func (c *compiler) rangeToPattern(
 	return c.factory.Class(charRange)
 }
 
-func (c *compiler) starToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func starToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 
 	if len(children) != 1 {
 		panic("error: star pattern must have exactly 1 child")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables, env)
+	childPattern := compilePatternExpression(ctx, children[0])
 	return childPattern.Star()
 }
 
-func (c *compiler) plusToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func plusToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 
 	if len(children) != 1 {
 		panic("error: plus pattern must have exactly 1 child")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables, env)
+	childPattern := compilePatternExpression(ctx, children[0])
 	return childPattern.Plus()
 }
 
-func (c *compiler) optionalToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func optionalToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 
 	if len(children) != 1 {
 		panic("error: optional pattern must have exactly 1 child")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables, env)
+	childPattern := compilePatternExpression(ctx, children[0])
 	return childPattern.Optional()
 }
 
-func (c *compiler) repetitionToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func repetitionToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 
 	if len(children) != 2 {
 		panic("compiler error: repetition node must have exactly 2 children (pattern and settings)")
 	}
 
-	childPattern := c.compilePatternExpression(children[0], variables, env)
+	childPattern := compilePatternExpression(ctx, children[0])
 	repetitionSettings := children[1]
 
 	minVal := 0
@@ -403,17 +402,13 @@ func (c *compiler) repetitionToPattern(
 	return childPattern.Repeat(minVal, maxVal)
 }
 
-func (c *compiler) groupToPattern(
-	node *Node,
-	variables map[string]pattern.RegulaAST[rune],
-	env *SemanticEnv,
-) pattern.RegulaAST[rune] {
+func groupToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
 	if len(children) != 1 {
 		panic("engine error: group node must have exactly 1 child")
 	}
 
-	return c.compilePatternExpression(children[0], variables, env)
+	return compilePatternExpression(ctx, children[0])
 }
 
 func (c *compiler) negationToPattern(
@@ -498,12 +493,12 @@ func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 	return c.factory.Literal([]rune(content)...)
 }
 
-func (c *compiler) varRefToPattern(node *Node, variables map[string]pattern.RegulaAST[rune], env *SemanticEnv) pattern.RegulaAST[rune] {
+func varRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	targetName := VarRefTargetName(node)
-	if env.Patterns[targetName] == nil {
+	if ctx.env.Patterns[targetName] == nil {
 		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
 	}
-	targetPattern, ok := variables[targetName]
+	targetPattern, ok := ctx.variables[targetName]
 	if !ok {
 		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
 	}
@@ -556,7 +551,17 @@ func getParserSpecInfo(
 	var entryOverride syntaxa.GrammarLabel
 
 	for ruleName, ruleNode := range env.Rules {
-		compiled, override := compileParseRuleDefinition(ruleBuilder, env, ruleName, ruleNode)
+		ctx := &parseCompileCtx{
+			builder:     ruleBuilder,
+			env:         env,
+			grammarID:   syntaxa.GrammarLabel(ruleName),
+			nodeKind:    nodeSingleTokenContent(ruleNode.FindFirstKind(NodeParseNodeName)),
+			ruleName:    ruleName,
+			counts:      make(map[string]int),
+			rootLevel:   true,
+			transparent: ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil,
+		}
+		compiled, override := compileParseRuleDefinition(ctx, ruleNode)
 		if ruleName == programRuleName {
 			entryRule = compiled
 			if override != "" {
@@ -587,17 +592,7 @@ func getParserSpecInfo(
 	return grammarPackage, registry, rootNodeKind, skipRoles
 }
 
-func compileParseRuleDefinition(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	ruleName string,
-	ruleNode *Node,
-) (CompiledRule, syntaxa.GrammarLabel) {
-	grammarID := syntaxa.GrammarLabel(ruleName)
-	nodeNameNode := ruleNode.FindFirstKind(NodeParseNodeName)
-
-	nodeKind := nodeSingleTokenContent(nodeNameNode)
-
+func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledRule, syntaxa.GrammarLabel) {
 	bodyNode := ruleNode.FindFirstKind(NodeParseRuleBody)
 	if bodyNode == nil {
 		panic("compiler error: parse rule missing body")
@@ -610,10 +605,8 @@ func compileParseRuleDefinition(
 		}
 		rootExpr = bodyNode.Children()[0]
 	}
-	counts := make(map[string]int)
 
-	transparent := ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil
-	compiledExpr := compileParseExpression(builder, env, grammarID, nodeKind, rootExpr, ruleName, counts, true, transparent)
+	compiledExpr := compileParseExpression(ctx, rootExpr)
 
 	// Inject Sync modifier wrapping logic
 	syncNode := ruleNode.FindFirstKind(NodeRuleModifierSync)
@@ -623,51 +616,41 @@ func compileParseRuleDefinition(
 			syncTokens = append(syncTokens, nodeSingleTokenContent(tNode))
 		}
 		if len(syncTokens) > 0 {
-			compiledExpr = builder.Rule.RecoverSync(compiledExpr, syncTokens...)
+			compiledExpr = ctx.builder.Rule.RecoverSync(compiledExpr, syncTokens...)
 		}
 	}
 
-	return builder.Rule.Define(compiledExpr), ""
+	return ctx.builder.Rule.Define(compiledExpr), ""
 }
 
-func compileParseExpression(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 	kind := node.Kind()
 
 	switch kind {
 	case NodeParseConcat:
-		return compileConcat(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileConcat(ctx, node)
 	case NodeParseAlternation:
-		return compileAlternation(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileAlternation(ctx, node)
 	case NodeParseModifierPredict:
-		return compilePredict(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compilePredict(ctx, node)
 	case NodeParseOptional:
-		return compileOptional(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileOptional(ctx, node)
 	case NodeParseOpRef:
-		return compileReference(builder, grammarID, node, ruleName, counts, rootLevel)
+		return compileReference(ctx, node)
 	case NodeIdentifier:
-		return compileTokenMatch(builder, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileTokenMatch(ctx, node)
 	case NodeParsePlus:
-		return compilePlus(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compilePlus(ctx, node)
 	case NodeParseStar:
-		return compileStar(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileStar(ctx, node)
 	case NodeParseOpEmit:
-		return compileEmit(builder, grammarID, node, ruleName, counts, rootLevel)
+		return compileEmit(ctx, node)
 	case NodeParseOpSuppress:
-		return compileVirtual(builder, grammarID, node, ruleName, counts, rootLevel)
+		return compileVirtual(ctx, node)
 	case NodeParseOpNest:
-		return compileNest(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileNest(ctx, node)
 	case NodeParseGroup:
-		return compileGroup(builder, env, grammarID, nodeKind, node, ruleName, counts, rootLevel, transparent)
+		return compileGroup(ctx, node)
 	default:
 		panic(fmt.Errorf("compiler error: unsupported parse expression kind: '%s'", kind))
 	}
@@ -687,75 +670,48 @@ func flattenNodesByKind(node *Node, kind LangSpecParserNodeKind) []*Node {
 	return flat
 }
 
-func compileConcat(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
 	flatNodes := flattenNodesByKind(node, NodeParseConcat)
 
 	rules := make([]CompiledRule, 0, len(flatNodes))
+	subCtx := *ctx
+	subCtx.rootLevel = false
 	for _, child := range flatNodes {
-		rules = append(rules, compileParseExpression(builder, env, grammarID, nodeKind, child, ruleName, counts, false, transparent))
+		rules = append(rules, compileParseExpression(&subCtx, child))
 	}
 
-	if rootLevel {
-		if transparent {
-			return builder.Rule.TransparentSequence(grammarID, rules...)
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentSequence(ctx.grammarID, rules...)
 		}
-		return builder.Rule.Sequence(grammarID, nodeKind, rules...)
+		return ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, rules...)
 	}
 
-	label := grammarSubLabel(ruleName, "SEQUENCE", counts)
-	return builder.Rule.TransparentSequence(label, rules...)
+	label := grammarSubLabel(ctx.ruleName, "SEQUENCE", ctx.counts)
+	return ctx.builder.Rule.TransparentSequence(label, rules...)
 }
 
-func compileAlternation(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
 	flatNodes := flattenNodesByKind(node, NodeParseAlternation)
 
 	rules := make([]CompiledRule, 0, len(flatNodes))
+	subCtx := *ctx
+	subCtx.rootLevel = false
 	for _, child := range flatNodes {
-		// Notice how clean this is now. No dynamic AST guessing needed.
-		compiled := compileParseExpression(builder, env, grammarID, nodeKind, child, ruleName, counts, false, transparent)
+		compiled := compileParseExpression(&subCtx, child)
 		rules = append(rules, compiled)
 	}
 
 	var label syntaxa.GrammarLabel
-	if rootLevel {
-		label = grammarID
+	if ctx.rootLevel {
+		label = ctx.grammarID
 	} else {
-		label = grammarSubLabel(ruleName, "CHOICE", counts)
+		label = grammarSubLabel(ctx.ruleName, "CHOICE", ctx.counts)
 	}
-	return builder.Rule.Choice(label, rules...)
+	return ctx.builder.Rule.Choice(label, rules...)
 }
 
-func compilePredict(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
 	children := node.Children()
 	if len(children) != 2 {
 		panic("compiler error: predict modifier must have a lookahead list and a target expression")
@@ -764,7 +720,7 @@ func compilePredict(
 	listNode := children[0]
 	targetNode := children[1]
 
-	innerRule := compileParseExpression(builder, env, grammarID, nodeKind, targetNode, ruleName, counts, rootLevel, transparent)
+	innerRule := compileParseExpression(ctx, targetNode)
 
 	lookaheads := listNode.FindAllKind(NodePredictLookahead)
 	type prediction struct {
@@ -778,9 +734,9 @@ func compilePredict(
 		preds = append(preds, prediction{offset, token})
 	}
 
-	return builder.Rule.Predict(innerRule, func(ctx *syntaxa.SelectRuleContext[rune, string, string]) bool {
+	return ctx.builder.Rule.Predict(innerRule, func(selectCtx *syntaxa.SelectRuleContext[rune, string, string]) bool {
 		for _, p := range preds {
-			if ctx.Peek(p.offset).Token != p.token {
+			if selectCtx.Peek(p.offset).Token != p.token {
 				return false
 			}
 		}
@@ -788,132 +744,93 @@ func compilePredict(
 	})
 }
 
-func compileOptional(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileOptional(ctx *parseCompileCtx, node *Node) CompiledRule {
 	child := extractSingleChild(node)
-	innerRule := compileParseExpression(builder, env, grammarID, nodeKind, child, ruleName, counts, false, transparent)
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	innerRule := compileParseExpression(&subCtx, child)
 
-	return builder.Rule.Optional(innerRule)
+	return ctx.builder.Rule.Optional(innerRule)
 }
 
-func compilePlus(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compilePlus(ctx *parseCompileCtx, node *Node) CompiledRule {
 	child := extractSingleChild(node)
-	innerRule := compileParseExpression(builder, env, grammarID, nodeKind, child, ruleName, counts, false, transparent)
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	innerRule := compileParseExpression(&subCtx, child)
 
-	if rootLevel {
-		if transparent {
-			return builder.Rule.TransparentNOrMore(grammarID, 1, innerRule)
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentNOrMore(ctx.grammarID, 1, innerRule)
 		}
-		return builder.Rule.OneOrMore(grammarID, nodeKind, innerRule)
+		return ctx.builder.Rule.OneOrMore(ctx.grammarID, ctx.nodeKind, innerRule)
 	}
 
-	label := grammarSubLabel(ruleName, "REPEAT_PLUS", counts)
-	return builder.Rule.TransparentNOrMore(label, 1, innerRule)
+	label := grammarSubLabel(ctx.ruleName, "REPEAT_PLUS", ctx.counts)
+	return ctx.builder.Rule.TransparentNOrMore(label, 1, innerRule)
 }
 
-func compileStar(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 	child := extractSingleChild(node)
-	innerRule := compileParseExpression(builder, env, grammarID, nodeKind, child, ruleName, counts, false, transparent)
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	innerRule := compileParseExpression(&subCtx, child)
 
-	if rootLevel {
-		if transparent {
-			return builder.Rule.TransparentZeroOrMore(grammarID, innerRule)
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentZeroOrMore(ctx.grammarID, innerRule)
 		}
-		return builder.Rule.ZeroOrMore(grammarID, nodeKind, innerRule)
+		return ctx.builder.Rule.ZeroOrMore(ctx.grammarID, ctx.nodeKind, innerRule)
 	}
 
-	label := grammarSubLabel(ruleName, "REPEAT_STAR", counts)
-	return builder.Rule.TransparentZeroOrMore(label, innerRule)
+	label := grammarSubLabel(ctx.ruleName, "REPEAT_STAR", ctx.counts)
+	return ctx.builder.Rule.TransparentZeroOrMore(label, innerRule)
 }
 
-func compileEmit(builder *CompilerRuleBuilder, grammarID syntaxa.GrammarLabel, node *Node, ruleName string, counts map[string]int, rootLevel bool) CompiledRule {
+func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 	outputNodeKind := nodeSingleTokenContent(node.FindFirstKind(NodeParseNodeName))
 	targetToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseTokenReference))
 	var label syntaxa.GrammarLabel
-	if rootLevel {
-		label = grammarID
+	if ctx.rootLevel {
+		label = ctx.grammarID
 	} else {
-		label = grammarSubLabel(ruleName, "EMIT", counts)
+		label = grammarSubLabel(ctx.ruleName, "EMIT", ctx.counts)
 	}
-	return builder.Token.Expect(label, outputNodeKind, targetToken)
+	return ctx.builder.Token.Expect(label, outputNodeKind, targetToken)
 }
 
-func compileVirtual(builder *CompilerRuleBuilder, grammarID syntaxa.GrammarLabel, node *Node, ruleName string, counts map[string]int, rootLevel bool) CompiledRule {
+func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
 	targetToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseTokenReference))
 	var label syntaxa.GrammarLabel
-	if rootLevel {
-		label = grammarID
+	if ctx.rootLevel {
+		label = ctx.grammarID
 	} else {
-		label = grammarSubLabel(ruleName, "VIRTUAL", counts)
+		label = grammarSubLabel(ctx.ruleName, "VIRTUAL", ctx.counts)
 	}
-	return builder.Token.ExpectVirtual(label, targetToken)
+	return ctx.builder.Token.ExpectVirtual(label, targetToken)
 }
 
-func compileNest(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 	openToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestOpenToken))
 	closeToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestCloseToken))
 
 	bodyNode := node.FindFirstKind(NodeParseNestBody)
-	innerRule := compileParseExpression(builder, env, grammarID, nodeKind, extractSingleChild(bodyNode), ruleName, counts, false, transparent)
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	innerRule := compileParseExpression(&subCtx, extractSingleChild(bodyNode))
 
-	if rootLevel {
-		if transparent {
-			return builder.Rule.TransparentNest(grammarID, openToken, closeToken, innerRule)
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentNest(ctx.grammarID, openToken, closeToken, innerRule)
 		}
-		return builder.Rule.Nest(grammarID, nodeKind, openToken, closeToken, innerRule)
+		return ctx.builder.Rule.Nest(ctx.grammarID, ctx.nodeKind, openToken, closeToken, innerRule)
 	}
 
-	label := grammarSubLabel(ruleName, "NEST", counts)
-	return builder.Rule.TransparentNest(label, openToken, closeToken, innerRule)
+	label := grammarSubLabel(ctx.ruleName, "NEST", ctx.counts)
+	return ctx.builder.Rule.TransparentNest(label, openToken, closeToken, innerRule)
 }
 
-func compileReference(
-	builder *CompilerRuleBuilder,
-	grammarID syntaxa.GrammarLabel,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-) CompiledRule {
+func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 	refNode := node.FindFirstKind(NodeParseRuleReference)
 	if refNode == nil {
 		panic("compiler error: NodeParseOpRef missing NodeParseRuleReference child")
@@ -923,50 +840,31 @@ func compileReference(
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 
 	var label syntaxa.GrammarLabel
-	if rootLevel {
-		label = grammarID
+	if ctx.rootLevel {
+		label = ctx.grammarID
 	} else {
-		label = grammarSubLabel(ruleName, "REF", counts)
+		label = grammarSubLabel(ctx.ruleName, "REF", ctx.counts)
 	}
-	return builder.Rule.Reference(label, targetGrammarID)
+	return ctx.builder.Rule.Reference(label, targetGrammarID)
 }
 
-func compileGroup(
-	builder *CompilerRuleBuilder,
-	env *SemanticEnv,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileGroup(ctx *parseCompileCtx, node *Node) CompiledRule {
 	child := extractSingleChild(node)
-	return compileParseExpression(builder, env, grammarID, nodeKind, child, ruleName, counts, rootLevel, transparent)
+	return compileParseExpression(ctx, child)
 }
 
-func compileTokenMatch(
-	builder *CompilerRuleBuilder,
-	grammarID syntaxa.GrammarLabel,
-	nodeKind string,
-	node *Node,
-	ruleName string,
-	counts map[string]int,
-	rootLevel bool,
-	transparent bool,
-) CompiledRule {
+func compileTokenMatch(ctx *parseCompileCtx, node *Node) CompiledRule {
 	targetToken := nodeSingleTokenContent(node)
 
-	if rootLevel {
-		if transparent {
-			return builder.Token.ExpectVirtual(grammarID, targetToken)
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Token.ExpectVirtual(ctx.grammarID, targetToken)
 		}
-		return builder.Token.Expect(grammarID, nodeKind, targetToken)
+		return ctx.builder.Token.Expect(ctx.grammarID, ctx.nodeKind, targetToken)
 	}
 
-	label := grammarSubLabel(ruleName, "TOKEN", counts)
-	return builder.Token.Expect(label, "", targetToken)
+	label := grammarSubLabel(ctx.ruleName, "TOKEN", ctx.counts)
+	return ctx.builder.Token.Expect(label, "", targetToken)
 }
 
 func extractSingleChild(node *Node) *Node {
