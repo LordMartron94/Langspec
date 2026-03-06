@@ -942,26 +942,26 @@ func compilePrattPrefixOps(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattPrefixOp[string, string], []rule.PrattPrefixRuleOp[rune, string, string, string, string]) {
-	bodyNode := node.FindFirstKind(NodePrattOperatorBody)
+	bodyNode := node.FindFirstKind(NodePrattPrefixBody)
 
 	tokOps := make([]rule.PrattPrefixOp[string, string], 0)
 	ruleOps := make([]rule.PrattPrefixRuleOp[rune, string, string, string, string], 0)
 
 	for _, def := range bodyNode.Children() {
-		data := extractOperatorData(def)
+		target, rightBP := extractPrefixData(def)
 
-		if data.IsRule {
+		if target.IsRule {
 			ruleOps = append(ruleOps, rule.PrattPrefixRuleOp[rune, string, string, string, string]{
-				RightBP:  data.Precedence,
-				NodeKind: data.NodeKind,
-				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(data.TokenOrRef)),
+				RightBP:  rightBP,
+				NodeKind: target.NodeKind,
+				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(target.Ref)),
 			})
 		} else {
 			tokOps = append(tokOps, rule.PrattPrefixOp[string, string]{
-				Token:             data.TokenOrRef,
-				RightBP:           data.Precedence,
-				NodeKind:          data.NodeKind,
-				TokenGrammarLabel: syntaxa.GrammarLabel(data.TokenOrRef),
+				Token:             target.Ref,
+				RightBP:           rightBP,
+				NodeKind:          target.NodeKind,
+				TokenGrammarLabel: syntaxa.GrammarLabel(target.Ref),
 			})
 		}
 	}
@@ -974,28 +974,28 @@ func compilePrattInfixOps(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattInfixOp[string, string], []rule.PrattInfixRuleOp[rune, string, string, string, string]) {
-	bodyNode := node.FindFirstKind(NodePrattOperatorBody)
+	bodyNode := node.FindFirstKind(NodePrattInfixBody)
 
 	tokOps := make([]rule.PrattInfixOp[string, string], 0)
 	ruleOps := make([]rule.PrattInfixRuleOp[rune, string, string, string, string], 0)
 
 	for _, def := range bodyNode.Children() {
-		data := extractOperatorData(def)
+		target, leftBP, rightBP := extractInfixData(def)
 
-		if data.IsRule {
+		if target.IsRule {
 			ruleOps = append(ruleOps, rule.PrattInfixRuleOp[rune, string, string, string, string]{
-				LeftBP:   data.Precedence,
-				RightBP:  data.Precedence - 1,
-				NodeKind: data.NodeKind,
-				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(data.TokenOrRef)),
+				LeftBP:   leftBP,
+				RightBP:  rightBP,
+				NodeKind: target.NodeKind,
+				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(target.Ref)),
 			})
 		} else {
 			tokOps = append(tokOps, rule.PrattInfixOp[string, string]{
-				Token:             data.TokenOrRef,
-				LeftBP:            data.Precedence,
-				RightBP:           data.Precedence - 1,
-				NodeKind:          data.NodeKind,
-				TokenGrammarLabel: syntaxa.GrammarLabel(data.TokenOrRef),
+				Token:             target.Ref,
+				LeftBP:            leftBP,
+				RightBP:           rightBP,
+				NodeKind:          target.NodeKind,
+				TokenGrammarLabel: syntaxa.GrammarLabel(target.Ref),
 			})
 		}
 	}
@@ -1008,26 +1008,26 @@ func compilePrattPostfixOps(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattPostfixOp[string, string], []rule.PrattPostfixRuleOp[rune, string, string, string, string]) {
-	bodyNode := node.FindFirstKind(NodePrattOperatorBody)
+	bodyNode := node.FindFirstKind(NodePrattPostfixBody)
 
 	tokOps := make([]rule.PrattPostfixOp[string, string], 0)
 	ruleOps := make([]rule.PrattPostfixRuleOp[rune, string, string, string, string], 0)
 
 	for _, def := range bodyNode.Children() {
-		data := extractOperatorData(def)
+		target, leftBP := extractPostfixData(def)
 
-		if data.IsRule {
+		if target.IsRule {
 			ruleOps = append(ruleOps, rule.PrattPostfixRuleOp[rune, string, string, string, string]{
-				LeftBP:   data.Precedence,
-				NodeKind: data.NodeKind,
-				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(data.TokenOrRef)),
+				LeftBP:   leftBP,
+				NodeKind: target.NodeKind,
+				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(target.Ref)),
 			})
 		} else {
 			tokOps = append(tokOps, rule.PrattPostfixOp[string, string]{
-				Token:             data.TokenOrRef,
-				LeftBP:            data.Precedence,
-				NodeKind:          data.NodeKind,
-				TokenGrammarLabel: syntaxa.GrammarLabel(data.TokenOrRef),
+				Token:             target.Ref,
+				LeftBP:            leftBP,
+				NodeKind:          target.NodeKind,
+				TokenGrammarLabel: syntaxa.GrammarLabel(target.Ref),
 			})
 		}
 	}
@@ -1040,47 +1040,63 @@ func compilePrattImplicitOp(node *Node) *rule.PrattImplicitInfix[string, string]
 	def := body.FindFirstKind(NodePrattImplicitDef)
 
 	nodeKind := nodeSingleTokenContent(def.FindFirstKind(NodeParseNodeName))
-	precedence := extractIntContent(def.FindFirstKind(NodePrattPrecedenceValue))
+	leftBP := extractIntContent(def.FindFirstKind(NodePrattLeftPrecedenceValue))
+	rightBP := extractIntContent(def.FindFirstKind(NodePrattRightPrecedenceValue))
 
 	return &rule.PrattImplicitInfix[string, string]{
-		LeftBP:   precedence,
-		RightBP:  precedence - 1,
+		LeftBP:   leftBP,
+		RightBP:  rightBP,
 		NodeKind: nodeKind,
 	}
 }
 
 // ------------------------------- PRATT OPERATOR BUILDERS -------------------------------
 
-type ExtractedOperator struct {
-	IsRule     bool
-	TokenOrRef string
-	NodeKind   string
-	Precedence int
+type OperatorTarget struct {
+	IsRule   bool
+	Ref      string
+	NodeKind string
 }
 
-func extractOperatorData(defNode *Node) ExtractedOperator {
+func extractOperatorTarget(defNode *Node) OperatorTarget {
 	nodeKind := nodeSingleTokenContent(defNode.FindFirstKind(NodeParseNodeName))
-	precedence := extractIntContent(defNode.FindFirstKind(NodePrattPrecedenceValue))
 
 	if tokenRef := defNode.FindFirstKind(NodeParseTokenReference); tokenRef != nil {
-		return ExtractedOperator{
-			IsRule:     false,
-			TokenOrRef: nodeSingleTokenContent(tokenRef),
-			NodeKind:   nodeKind,
-			Precedence: precedence,
+		return OperatorTarget{
+			IsRule:   false,
+			Ref:      nodeSingleTokenContent(tokenRef),
+			NodeKind: nodeKind,
 		}
 	}
 
 	if ruleRef := defNode.FindFirstKind(NodeParseRuleReference); ruleRef != nil {
-		return ExtractedOperator{
-			IsRule:     true,
-			TokenOrRef: nodeSingleTokenContent(ruleRef),
-			NodeKind:   nodeKind,
-			Precedence: precedence,
+		return OperatorTarget{
+			IsRule:   true,
+			Ref:      nodeSingleTokenContent(ruleRef),
+			NodeKind: nodeKind,
 		}
 	}
 
 	panic("compiler error: valid pratt operator target missing")
+}
+
+func extractPrefixData(defNode *Node) (OperatorTarget, int) {
+	target := extractOperatorTarget(defNode)
+	rightBP := extractIntContent(defNode.FindFirstKind(NodePrattRightPrecedenceValue))
+	return target, rightBP
+}
+
+func extractPostfixData(defNode *Node) (OperatorTarget, int) {
+	target := extractOperatorTarget(defNode)
+	leftBP := extractIntContent(defNode.FindFirstKind(NodePrattLeftPrecedenceValue))
+	return target, leftBP
+}
+
+func extractInfixData(defNode *Node) (OperatorTarget, int, int) {
+	target := extractOperatorTarget(defNode)
+	leftBP := extractIntContent(defNode.FindFirstKind(NodePrattLeftPrecedenceValue))
+	rightBP := extractIntContent(defNode.FindFirstKind(NodePrattRightPrecedenceValue))
+	return target, leftBP, rightBP
 }
 
 // -------------------------------------------------------- HELPERS

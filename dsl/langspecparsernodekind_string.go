@@ -102,23 +102,28 @@ func _() {
 	_ = x[NodePrattPrimary-92]
 	_ = x[NodePrattPrimaryBody-93]
 	_ = x[NodePrattPrimaryRef-94]
-	_ = x[NodePrattOperatorBody-95]
-	_ = x[NodePrattOperatorList-96]
-	_ = x[NodePrattOperatorDef-97]
-	_ = x[NodePrattPrefix-98]
-	_ = x[NodePrattPostfix-99]
-	_ = x[NodePrattInfix-100]
-	_ = x[NodePrattImplicit-101]
-	_ = x[NodePrattImplicitBody-102]
-	_ = x[NodePrattImplicitDef-103]
-	_ = x[NodePrattPrecedenceValue-104]
-	_ = x[NodePrattOperatorTarget-105]
-	_ = x[NodeStringLiteral-106]
+	_ = x[NodePrattImplicit-95]
+	_ = x[NodePrattImplicitBody-96]
+	_ = x[NodePrattImplicitDef-97]
+	_ = x[NodePrattOperatorTarget-98]
+	_ = x[NodeStringLiteral-99]
+	_ = x[NodePrattPrefix-100]
+	_ = x[NodePrattPrefixBody-101]
+	_ = x[NodePrattPrefixList-102]
+	_ = x[NodePrattPostfix-103]
+	_ = x[NodePrattPostfixBody-104]
+	_ = x[NodePrattPostfixList-105]
+	_ = x[NodePrattInfix-106]
+	_ = x[NodePrattInfixBody-107]
+	_ = x[NodePrattInfixList-108]
+	_ = x[NodePrattOperatorDef-109]
+	_ = x[NodePrattLeftPrecedenceValue-110]
+	_ = x[NodePrattRightPrecedenceValue-111]
 }
 
-const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternGroupNodePatternSegmentNodePatternOptionalNodeRepetitionNodeRepetitionBoundsNodeRepetitionMinNodeRepetitionMaxNodeIdentifierNodeLocalVariableNodeParseSectionNodeParseKeywordNodeParseRuleNodeParseRuleNameNodeParseNodeNameNodeParseRuleBodyNodeParseOpSuppressNodeParseOpEmitNodeParseOpRefNodeParseAlternationNodeParseConcatNodeParseOptionalNodeParseSegmentNodeParseGroupNodeParseTokenReferenceNodeParseRuleReferenceNodeParseOpNestNodeParseNestOpenTokenNodeParseNestCloseTokenNodeParseNestBodyNodeParseStarNodeParsePlusNodeParseSectionBodyNodeParseIgnoreSectionNodeParseIgnoreKeywordNodeParseIgnoreRoleNodeRuleModifierTransparentNodeRuleModifierSyncNodeSyncTokenNodeParseModifierPredictNodePredictLookaheadListNodePredictLookaheadNodePredictOffsetNodePredictTokenNodePrattSectionNodePrattKeywordNodePrattExprDefNodePrattExprNameNodePrattExprBodyNodePrattCategoryListNodePrattCategoryNodePrattPrimaryNodePrattPrimaryBodyNodePrattPrimaryRefNodePrattOperatorBodyNodePrattOperatorListNodePrattOperatorDefNodePrattPrefixNodePrattPostfixNodePrattInfixNodePrattImplicitNodePrattImplicitBodyNodePrattImplicitDefNodePrattPrecedenceValueNodePrattOperatorTargetNodeStringLiteral"
+const _LangSpecParserNodeKind_name = "NodeErrorNodeProgramNodeHeaderNodeLexSectionNodePragmaKeywordNodePragmaSectionNodePragmaBlockNodePragmaBlockKeyNodePragmaBlockKeyPrefixNodePragmaBlockKeySegmentNodePragmaConfigurationNodePragmaKeyNodePragmaValueNodeMetaSectionNodeMetaKeyValuePairNodeMetaKeyNodeMetaValueNodeDSLNameNodeVersionNodeLSPECNameNodeLexKeywordNodeLexRuleNodeLexRuleTokenNameNodeLexRuleRoleNodeLexRulePatternNodeLexRulePriorityNodePatternSectionNodePatternKeywordNodePatternDefinitionNodePatternAnyNodePatternDefNameNodeVarRefNodeVarRefTokenNodeVarRefTargetNodePatternRangeNodeCharLiteralNodePatternStarNodePatternPlusNodePatternNegationNodePatternConcatNodePatternAlternationNodePatternGroupNodePatternSegmentNodePatternOptionalNodeRepetitionNodeRepetitionBoundsNodeRepetitionMinNodeRepetitionMaxNodeIdentifierNodeLocalVariableNodeParseSectionNodeParseKeywordNodeParseRuleNodeParseRuleNameNodeParseNodeNameNodeParseRuleBodyNodeParseOpSuppressNodeParseOpEmitNodeParseOpRefNodeParseAlternationNodeParseConcatNodeParseOptionalNodeParseSegmentNodeParseGroupNodeParseTokenReferenceNodeParseRuleReferenceNodeParseOpNestNodeParseNestOpenTokenNodeParseNestCloseTokenNodeParseNestBodyNodeParseStarNodeParsePlusNodeParseSectionBodyNodeParseIgnoreSectionNodeParseIgnoreKeywordNodeParseIgnoreRoleNodeRuleModifierTransparentNodeRuleModifierSyncNodeSyncTokenNodeParseModifierPredictNodePredictLookaheadListNodePredictLookaheadNodePredictOffsetNodePredictTokenNodePrattSectionNodePrattKeywordNodePrattExprDefNodePrattExprNameNodePrattExprBodyNodePrattCategoryListNodePrattCategoryNodePrattPrimaryNodePrattPrimaryBodyNodePrattPrimaryRefNodePrattImplicitNodePrattImplicitBodyNodePrattImplicitDefNodePrattOperatorTargetNodeStringLiteralNodePrattPrefixNodePrattPrefixBodyNodePrattPrefixListNodePrattPostfixNodePrattPostfixBodyNodePrattPostfixListNodePrattInfixNodePrattInfixBodyNodePrattInfixListNodePrattOperatorDefNodePrattLeftPrecedenceValueNodePrattRightPrecedenceValue"
 
-var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 667, 685, 704, 718, 738, 755, 772, 786, 803, 819, 835, 848, 865, 882, 899, 918, 933, 947, 967, 982, 999, 1015, 1029, 1052, 1074, 1089, 1111, 1134, 1151, 1164, 1177, 1197, 1219, 1241, 1260, 1287, 1307, 1320, 1344, 1368, 1388, 1405, 1421, 1437, 1453, 1469, 1486, 1503, 1524, 1541, 1557, 1577, 1596, 1617, 1638, 1658, 1673, 1689, 1703, 1720, 1741, 1761, 1785, 1808, 1825}
+var _LangSpecParserNodeKind_index = [...]uint16{0, 9, 20, 30, 44, 61, 78, 93, 111, 135, 160, 183, 196, 211, 226, 246, 257, 270, 281, 292, 305, 319, 330, 350, 365, 383, 402, 420, 438, 459, 473, 491, 501, 516, 532, 548, 563, 578, 593, 612, 629, 651, 667, 685, 704, 718, 738, 755, 772, 786, 803, 819, 835, 848, 865, 882, 899, 918, 933, 947, 967, 982, 999, 1015, 1029, 1052, 1074, 1089, 1111, 1134, 1151, 1164, 1177, 1197, 1219, 1241, 1260, 1287, 1307, 1320, 1344, 1368, 1388, 1405, 1421, 1437, 1453, 1469, 1486, 1503, 1524, 1541, 1557, 1577, 1596, 1613, 1634, 1654, 1677, 1694, 1709, 1728, 1747, 1763, 1783, 1803, 1817, 1835, 1853, 1873, 1901, 1930}
 
 func (i LangSpecParserNodeKind) String() string {
 	idx := int(i) - 1

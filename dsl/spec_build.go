@@ -221,18 +221,30 @@ const (
 	NodePrattPrimary
 	NodePrattPrimaryBody
 	NodePrattPrimaryRef
-	NodePrattOperatorBody
-	NodePrattOperatorList
-	NodePrattOperatorDef
-	NodePrattPrefix
-	NodePrattPostfix
-	NodePrattInfix
+
 	NodePrattImplicit
 	NodePrattImplicitBody
 	NodePrattImplicitDef
-	NodePrattPrecedenceValue
+
 	NodePrattOperatorTarget
 	NodeStringLiteral
+
+	NodePrattPrefix
+	NodePrattPrefixBody
+	NodePrattPrefixList
+
+	NodePrattPostfix
+	NodePrattPostfixBody
+	NodePrattPostfixList
+
+	NodePrattInfix
+	NodePrattInfixBody
+	NodePrattInfixList
+
+	NodePrattOperatorDef
+
+	NodePrattLeftPrecedenceValue
+	NodePrattRightPrecedenceValue
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -675,9 +687,9 @@ func (b *dslGrammarBuilder) prattCategoryList() Rule {
 func (b *dslGrammarBuilder) prattCategory() Rule {
 	return b.g.ChoiceByNode(NodePrattCategory,
 		b.prattPrimary(),
-		b.prattOperatorBlock(NodePrattPrefix, TokKWPrefix),
-		b.prattOperatorBlock(NodePrattPostfix, TokKWPostfix),
-		b.prattOperatorBlock(NodePrattInfix, TokKWInfix),
+		b.prattOperatorBlock(NodePrattPrefix, NodePrattPrefixBody, NodePrattPrefixList, TokKWPrefix, b.prattPrefixDef()),
+		b.prattOperatorBlock(NodePrattPostfix, NodePrattPostfixBody, NodePrattPostfixList, TokKWPostfix, b.prattPostfixDef()),
+		b.prattOperatorBlock(NodePrattInfix, NodePrattInfixBody, NodePrattInfixList, TokKWInfix, b.prattInfixDef()),
 		b.prattImplicitBlock(),
 	)
 }
@@ -702,33 +714,58 @@ func (b *dslGrammarBuilder) prattPrimaryRef() Rule {
 		build()
 }
 
-func (b *dslGrammarBuilder) prattOperatorBlock(nodeKind LangSpecParserNodeKind, keyword LangSpecLexerTokenType) Rule {
+func (b *dslGrammarBuilder) prattOperatorBlock(
+	nodeKind LangSpecParserNodeKind,
+	bodyNodeKind LangSpecParserNodeKind,
+	listNodeKind LangSpecParserNodeKind,
+	keyword LangSpecLexerTokenType,
+	defRule Rule,
+) Rule {
 	return b.g.sequence(nodeKind, "").
 		expectToken(NodePrattKeyword, keyword).
 		rule(b.g.NestByNode(
-			NodePrattOperatorBody,
+			bodyNodeKind,
 			TokBraceOpen,
 			TokBraceClose,
-			b.prattOperatorList(),
+			b.g.TransparentZeroOrMoreByNode(listNodeKind, "", defRule),
 		)).
 		build()
 }
 
-func (b *dslGrammarBuilder) prattOperatorList() Rule {
-	return b.g.TransparentZeroOrMoreByNode(NodePrattOperatorList, "", b.prattOperatorDef())
-}
-
-func (b *dslGrammarBuilder) prattOperatorDef() Rule {
-	return b.g.sequence(NodePrattOperatorDef, "").
+func (b *dslGrammarBuilder) prattPrefixDef() Rule {
+	return b.g.sequence(NodePrattOperatorDef, "PREFIX").
 		rule(b.prattOperatorTarget()).
 		expectVirtualInRule(TokChainSeparator).
 		expectToken(NodeParseNodeName, TokIdentifier).
 		expectVirtualInRule(TokKWPrecedence).
-		expectToken(NodePrattPrecedenceValue, TokInteger).
+		expectToken(NodePrattRightPrecedenceValue, TokInteger).
 		expectVirtualInRule(TokSemicolon).
 		build()
-
 }
+
+func (b *dslGrammarBuilder) prattPostfixDef() Rule {
+	return b.g.sequence(NodePrattOperatorDef, "POSTFIX").
+		rule(b.prattOperatorTarget()).
+		expectVirtualInRule(TokChainSeparator).
+		expectToken(NodeParseNodeName, TokIdentifier).
+		expectVirtualInRule(TokKWPrecedence).
+		expectToken(NodePrattLeftPrecedenceValue, TokInteger).
+		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
+func (b *dslGrammarBuilder) prattInfixDef() Rule {
+	return b.g.sequence(NodePrattOperatorDef, "INFIX").
+		rule(b.prattOperatorTarget()).
+		expectVirtualInRule(TokChainSeparator).
+		expectToken(NodeParseNodeName, TokIdentifier).
+		expectVirtualInRule(TokKWPrecedence).
+		expectToken(NodePrattLeftPrecedenceValue, TokInteger).
+		expectToken(NodePrattRightPrecedenceValue, TokInteger).
+		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
 func (b *dslGrammarBuilder) prattOperatorTarget() Rule {
 	return b.g.ChoiceByNode(NodePrattOperatorTarget,
 		b.g.expectToken(NodeParseTokenReference, TokIdentifier),
@@ -760,7 +797,8 @@ func (b *dslGrammarBuilder) prattImplicitDef() Rule {
 		expectVirtualInRule(TokChainSeparator).
 		expectToken(NodeParseNodeName, TokIdentifier).
 		expectVirtualInRule(TokKWPrecedence).
-		expectToken(NodePrattPrecedenceValue, TokInteger).
+		expectToken(NodePrattLeftPrecedenceValue, TokInteger).
+		expectToken(NodePrattRightPrecedenceValue, TokInteger).
 		expectVirtualInRule(TokSemicolon).
 		build()
 }
