@@ -65,7 +65,6 @@ const (
 	TokKWPragma
 	TokKWTool
 	TokKWParse
-	TokKWChoice
 	TokKWRef
 
 	TokKWTrue
@@ -164,7 +163,6 @@ const (
 	NodeParseOpSuppress
 	NodeParseOpEmit
 	NodeParseOpRef
-	NodeParseOpChoice
 	NodeParseAlternation
 	NodeParseConcat
 	NodeParseOptional
@@ -221,7 +219,6 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWLocal, "keyword.modifier.local", "local", 2},
 		{TokKWParse, "keyword.declaration.parse", "PARSE", 2},
 		{TokKWRef, "keyword.control.reference", "ref", 2},
-		{TokKWChoice, "keyword.pattern.choice", "choice", 2},
 		{TokKWVirtual, "keyword.operator.virtual", "virtual", 2},
 	}
 
@@ -650,20 +647,17 @@ func (b *dslGrammarBuilder) parseSegment() Rule {
 		refMapping,
 		virtualMapping,
 		standaloneString,
-		b.parseChoiceGroup(),
+		b.parseGroup(),
 	)
 }
 
-func (b *dslGrammarBuilder) parseChoiceGroup() Rule {
-	return b.g.sequence(NodeParseOpChoice, "").
-		expectVirtualInRule(TokKWChoice).
-		rule(b.g.NestByNode(
-			NodeParseGroup,
-			TokParenOpen,
-			TokParenClose,
-			b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
-		)).
-		build()
+func (b *dslGrammarBuilder) parseGroup() Rule {
+	return b.g.NestByNode(
+		NodeParseGroup,
+		TokParenOpen,
+		TokParenClose,
+		b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+	)
 }
 
 // ----------------------------------------------------------- GENERAL

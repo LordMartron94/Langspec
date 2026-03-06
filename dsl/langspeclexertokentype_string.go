@@ -44,17 +44,16 @@ func _() {
 	_ = x[TokKWPragma-34]
 	_ = x[TokKWTool-35]
 	_ = x[TokKWParse-36]
-	_ = x[TokKWChoice-37]
-	_ = x[TokKWRef-38]
-	_ = x[TokKWTrue-39]
-	_ = x[TokKWFalse-40]
-	_ = x[TokKWLocal-41]
-	_ = x[TokKWVirtual-42]
+	_ = x[TokKWRef-37]
+	_ = x[TokKWTrue-38]
+	_ = x[TokKWFalse-39]
+	_ = x[TokKWLocal-40]
+	_ = x[TokKWVirtual-41]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokVarRefTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokSemicolonTokDotTokChainSeparatorTokAssignmentTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWChoiceTokKWRefTokKWTrueTokKWFalseTokKWLocalTokKWVirtual"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokVarRefTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokSemicolonTokDotTokChainSeparatorTokAssignmentTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWRefTokKWTrueTokKWFalseTokKWLocalTokKWVirtual"
 
-var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 66, 78, 91, 103, 116, 128, 134, 151, 164, 181, 195, 203, 210, 218, 225, 237, 248, 255, 266, 282, 297, 311, 321, 331, 344, 354, 362, 374, 385, 394, 404, 415, 423, 432, 442, 452, 464}
+var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 66, 78, 91, 103, 116, 128, 134, 151, 164, 181, 195, 203, 210, 218, 225, 237, 248, 255, 266, 282, 297, 311, 321, 331, 344, 354, 362, 374, 385, 394, 404, 412, 421, 431, 441, 453}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1
