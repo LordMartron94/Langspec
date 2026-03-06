@@ -969,13 +969,42 @@ func buildTerminalSegmentRules[TToken, TTokenRole comparable](
 	laSuffix string,
 ) []StateRule {
 	env := chainCtx.Env
-	rules := generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action, laSuffix)
 
-	if child != nil && child.Kind == syntaxa.GOptional {
+	inRepeat, isOptional := analyzeSegmentSemantics(child)
+	tokenAction := determineTokenAction(action, inRepeat)
+
+	rules := generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, tokenAction, laSuffix)
+
+	if isOptional {
 		rules = appendOptionalBypassRule(rules, lbl, action, nextID)
 	}
 
 	return rules
+}
+
+func analyzeSegmentSemantics[TToken comparable](node *syntaxa.Grammar[TToken]) (inRepeat, isOptional bool) {
+	if node == nil {
+		return false, false
+	}
+
+	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+		if n.Kind == syntaxa.GRepeat {
+			inRepeat = true
+			isOptional = true
+		} else if n.Kind == syntaxa.GOptional {
+			isOptional = true
+		}
+		return false, false
+	})
+
+	return inRepeat, isOptional
+}
+
+func determineTokenAction(defaultAction RuleAction, inRepeat bool) RuleAction {
+	if inRepeat {
+		return ACTION_MATCH
+	}
+	return defaultAction
 }
 
 func appendOptionalBypassRule(rules []StateRule, stateLabel string, action RuleAction, targetID StateID) []StateRule {

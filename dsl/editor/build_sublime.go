@@ -108,6 +108,12 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 	dsl.NodeParseIgnoreRole: {
 		Scopes: []string{"constant.language.token-role-reference"},
 	},
+	dsl.NodePredictToken: {
+		Scopes: []string{"constant.language.token-reference"},
+	},
+	dsl.NodeSyncToken: {
+		Scopes: []string{"constant.language.token-reference"},
+	},
 }
 
 // ------------------------------------------------------------- PATTERN BUILDING

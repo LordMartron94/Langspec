@@ -80,6 +80,9 @@ const (
 	TokKWInfix
 	TokKWImplicit
 	TokKWPrecedence
+	TokKWTransparent
+	TokKWSync
+	TokKWPredict
 
 	TokKWIgnore
 )
@@ -196,6 +199,16 @@ const (
 	NodeParseIgnoreKeyword
 	NodeParseIgnoreRole
 
+	NodeRuleModifierTransparent
+	NodeRuleModifierSync
+	NodeSyncToken
+
+	NodeParseModifierPredict
+	NodePredictLookaheadList
+	NodePredictLookahead
+	NodePredictOffset
+	NodePredictToken
+
 	// -- Pratt Section --
 
 	NodePrattSection
@@ -279,6 +292,9 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWImplicit, "keyword.pratt.implicit", "implicit", 2},
 		{TokKWPrecedence, "keyword.pratt.precedence", "precedence", 2},
 		{TokKWIgnore, "keyword.declaration.ignore", "IGNORE", 2},
+		{TokKWTransparent, "keyword.operator.transparent", "transparent", 2},
+		{TokKWSync, "keyword.operator.sync", "sync", 2},
+		{TokKWPredict, "keyword.operator.predict", "predict", 2},
 	}
 
 	for _, st := range statics {
@@ -798,7 +814,9 @@ func (b *dslGrammarBuilder) parseRule() Rule {
 	return b.g.sequence(NodeParseRule, "").
 		expectToken(NodeParseRuleName, TokIdentifier).
 		expectVirtualInRule(TokChainSeparator).
+		optionalToken(NodeRuleModifierTransparent, TokKWTransparent).
 		expectToken(NodeParseNodeName, TokIdentifier).
+		optionalRule(b.syncModifier()).
 		rule(b.g.NestByNode(
 			NodeParseRuleBody,
 			TokBraceOpen,
@@ -812,6 +830,14 @@ func (b *dslGrammarBuilder) parseRule() Rule {
 func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
 		Primary: b.parseSegment(),
+
+		PrefixRuleOps: []rule.PrattPrefixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+			{
+				RightBP:  40,
+				NodeKind: NodeParseModifierPredict,
+				Rule:     b.predictModifier(),
+			},
+		},
 
 		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokOptional, 30, NodeParseOptional),
@@ -906,6 +932,36 @@ func (b *dslGrammarBuilder) parseGroup() Rule {
 }
 
 // ----------------------------------------------------------- GENERAL
+
+func (b *dslGrammarBuilder) syncModifier() Rule {
+	return b.g.sequence(NodeRuleModifierSync, "").
+		expectVirtualInRule(TokKWSync).
+		rule(b.g.TransparentZeroOrMoreByNode(NodeSyncToken, "LIST", b.g.expectToken(NodeSyncToken, TokIdentifier))).
+		build()
+}
+
+// --- Lookahead (Predict) ---
+
+func (b *dslGrammarBuilder) predictModifier() Rule {
+	return b.g.sequence(NodeParseModifierPredict, "").
+		expectVirtualInRule(TokKWPredict).
+		rule(b.g.NestByNode(
+			NodePredictLookaheadList,
+			TokParenOpen,
+			TokParenClose,
+			b.g.TransparentZeroOrMoreByNode(NodePredictLookahead, "LIST", b.predictLookahead()),
+		)).
+		build()
+}
+
+func (b *dslGrammarBuilder) predictLookahead() Rule {
+	return b.g.sequence(NodePredictLookahead, "").
+		expectToken(NodePredictOffset, TokInteger).
+		expectVirtualInRule(TokAssignment).
+		expectToken(NodePredictToken, TokIdentifier).
+		optionalRule(b.g.expectVirtualInRule(NodePredictLookahead, TokComma)).
+		build()
+}
 
 /*
 varRefReference returns the late-bound DAG proxy.
