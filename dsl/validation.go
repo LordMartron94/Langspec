@@ -28,12 +28,14 @@ const (
 	VALIDATION_TOKEN_SHADOWED          ValidationCode = "V_LEX004"
 	VALIDATION_NO_EOF_IN_META          ValidationCode = "V_LEX005"
 	VALIDATION_MULTIPLE_EOF_IN_META    ValidationCode = "V_LEX006"
+	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX007"
 
 	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
 
 	VALIDATION_DUPLICATE_PARSE_RULE_NAME ValidationCode = "V_PAR001"
 	VALIDATION_UNRESOLVED_PARSE_RULE_REF ValidationCode = "V_PAR002"
 	VALIDATION_UNREFERENCED_PARSE_RULE   ValidationCode = "V_PAR003"
+	VALIDATION_PROGRAM_RULE_REQUIRED    ValidationCode = "V_PAR004"
 )
 
 func (v ValidationCode) String() string {
@@ -175,7 +177,7 @@ func getValidationStages() []*ValidationStage {
 		},
 		{
 			Name:        "Parse Rule Validation",
-			Description: "Validates parse section: duplicate rule names, rule references must refer to rules declared earlier in the section or to the same rule (recursion), and unreferenced rules.",
+			Description: "Validates parse section: PROGRAM rule required, duplicate rule names, rule references must refer to rules declared earlier in the section or to the same rule (recursion), unreferenced rules (excluding PROGRAM), and lex tokens not referenced in parse.",
 			Order:       2,
 			Processor: func(ctx *ValidationCtx) {
 				parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
@@ -191,6 +193,11 @@ func getValidationStages() []*ValidationStage {
 					}
 					name := getParseRuleName(nameNode)
 					allDeclared[name] = struct{}{}
+				}
+
+				if _, hasProgram := allDeclared[programRuleName]; !hasProgram {
+					msg := fmt.Sprintf("parse section must define a rule named '%s' (entry point)", programRuleName)
+					ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), msg, parseSection)
 				}
 
 				declaredSoFar := make(map[string]struct{})
@@ -229,16 +236,36 @@ func getValidationStages() []*ValidationStage {
 				}
 
 				parseRuleDeps := buildParseRuleDependencyMap(parseSection)
-				reachableParse := computeReachableParseRules(parseSection, parseRuleDeps)
-				for _, rule := range parseRules {
-					nameNode := rule.FindFirstKind(NodeParseRuleName)
-					if nameNode == nil || len(nameNode.Tokens()) == 0 {
-						continue
+				reachableParse := computeReachableParseRules(parseSection, parseRuleDeps, programRuleName)
+				if reachableParse != nil {
+					for _, rule := range parseRules {
+						nameNode := rule.FindFirstKind(NodeParseRuleName)
+						if nameNode == nil || len(nameNode.Tokens()) == 0 {
+							continue
+						}
+						name := getParseRuleName(nameNode)
+						if !reachableParse[name] {
+							msg := fmt.Sprintf("parse rule '%s' is never referenced (unreachable)", name)
+							ctx.ReportInfo(VALIDATION_UNREFERENCED_PARSE_RULE.String(), msg, nameNode)
+						}
 					}
-					name := getParseRuleName(nameNode)
-					if !reachableParse[name] {
-						msg := fmt.Sprintf("parse rule '%s' is never referenced (unreachable)", name)
-						ctx.ReportInfo(VALIDATION_UNREFERENCED_PARSE_RULE.String(), msg, nameNode)
+				}
+
+				lexSection := ctx.RootNode.FindFirstKind(NodeLexSection)
+				if lexSection != nil {
+					referencedTokens := collectTokenNamesReferencedInParseSection(parseSection)
+					for _, lexRuleToken := range lexSection.FindAllKind(NodeLexRuleTokenName) {
+						if len(lexRuleToken.Tokens()) != 1 {
+							continue
+						}
+						tokenName := strings.TrimSpace(string(lexRuleToken.Tokens()[0].Raw))
+						if tokenName == "" {
+							continue
+						}
+						if _, referenced := referencedTokens[tokenName]; !referenced {
+							msg := fmt.Sprintf("token '%s' is defined in LEX but not referenced in the parse section", tokenName)
+							ctx.ReportInfo(VALIDATION_TOKEN_UNREFERENCED_IN_PARSE.String(), msg, lexRuleToken)
+						}
 					}
 				}
 			},
@@ -390,16 +417,13 @@ func buildParseRuleDependencyMap(parseSection *Node) map[string][]string {
 	return out
 }
 
-func computeReachableParseRules(parseSection *Node, deps map[string][]string) map[string]bool {
-	parseRules := parseSection.FindAllKind(NodeParseRule)
-	if len(parseRules) == 0 {
+// programRuleName is the required entry-point parse rule name; it is excluded from unreferenced diagnostics.
+const programRuleName = "PROGRAM"
+
+func computeReachableParseRules(parseSection *Node, deps map[string][]string, entryRuleName string) map[string]bool {
+	if _, ok := deps[entryRuleName]; !ok {
 		return nil
 	}
-	firstRuleNameNode := parseRules[0].FindFirstKind(NodeParseRuleName)
-	if firstRuleNameNode == nil || len(firstRuleNameNode.Tokens()) == 0 {
-		return nil
-	}
-	entry := getParseRuleName(firstRuleNameNode)
 	reachable := make(map[string]bool)
 	var bfs func(name string)
 	bfs = func(name string) {
@@ -411,8 +435,31 @@ func computeReachableParseRules(parseSection *Node, deps map[string][]string) ma
 			bfs(ref)
 		}
 	}
-	bfs(entry)
+	bfs(entryRuleName)
 	return reachable
+}
+
+// collectTokenNamesReferencedInParseSection returns the set of lex token names used in the parse section
+// (NodeParseTokenReference and standalone NodeIdentifier in parse rule bodies).
+func collectTokenNamesReferencedInParseSection(parseSection *Node) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, n := range parseSection.FindAllKind(NodeParseTokenReference) {
+		if len(n.Tokens()) != 1 {
+			continue
+		}
+		if name := strings.TrimSpace(string(n.Tokens()[0].Raw)); name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	for _, n := range parseSection.FindAllKind(NodeIdentifier) {
+		if len(n.Tokens()) != 1 {
+			continue
+		}
+		if name := strings.TrimSpace(string(n.Tokens()[0].Raw)); name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 // lexRuleSectionCollectEOFTrueMetaValues returns all NodeMetaValue nodes (keyword true) for meta key "EOF" under section.
