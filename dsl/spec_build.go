@@ -80,6 +80,8 @@ const (
 	TokKWInfix
 	TokKWImplicit
 	TokKWPrecedence
+
+	TokKWIgnore
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -189,6 +191,11 @@ const (
 	NodeParseStar
 	NodeParsePlus
 
+	NodeParseSectionBody
+	NodeParseIgnoreSection
+	NodeParseIgnoreKeyword
+	NodeParseIgnoreRole
+
 	// -- Pratt Section --
 
 	NodePrattSection
@@ -271,6 +278,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWInfix, "keyword.pratt.infix", "infix", 2},
 		{TokKWImplicit, "keyword.pratt.implicit", "implicit", 2},
 		{TokKWPrecedence, "keyword.pratt.precedence", "precedence", 2},
+		{TokKWIgnore, "keyword.declaration.ignore", "IGNORE", 2},
 	}
 
 	for _, st := range statics {
@@ -703,8 +711,8 @@ func (b *dslGrammarBuilder) prattOperatorDef() Rule {
 		expectToken(NodePrattPrecedenceValue, TokInteger).
 		expectVirtualInRule(TokSemicolon).
 		build()
-}
 
+}
 func (b *dslGrammarBuilder) prattOperatorTarget() Rule {
 	return b.g.ChoiceByNode(NodePrattOperatorTarget,
 		b.g.expectToken(NodeParseTokenReference, TokIdentifier),
@@ -748,8 +756,37 @@ func (b *dslGrammarBuilder) parseSection() Rule {
 		NodeParseSection,
 		NodeParseKeyword,
 		TokKWParse,
-		b.parseRuleList(),
+		b.parseSectionBody(),
 	)
+}
+
+func (b *dslGrammarBuilder) parseSectionBody() Rule {
+	return b.g.sequence(NodeParseSectionBody, "").
+		optionalRule(b.parseIgnoreSection()).
+		rule(b.parseRuleList()).
+		build()
+}
+
+func (b *dslGrammarBuilder) parseIgnoreSection() Rule {
+	blockRule := b.g.block(
+		NodeParseIgnoreSection,
+		NodeParseIgnoreKeyword,
+		TokKWIgnore,
+		b.parseIgnoreRoleList(),
+	)
+	return b.g.rb.Rule.RecoverSync(blockRule, TokBraceClose)
+}
+
+func (b *dslGrammarBuilder) parseIgnoreRoleList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(
+		NodeParseIgnoreRole,
+		"LIST",
+		b.parseIgnoreRole(),
+	)
+}
+
+func (b *dslGrammarBuilder) parseIgnoreRole() Rule {
+	return b.g.expectToken(NodeParseIgnoreRole, TokIdentifier)
 }
 
 func (b *dslGrammarBuilder) parseRuleList() Rule {

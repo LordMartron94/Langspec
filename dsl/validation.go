@@ -216,34 +216,100 @@ func processSymbolBinding(ctx *ValidationCtx) {
 
 func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	used := make(map[string]bool)
+	ignoredRoles := getIgnoredRoles(ctx)
 
+	markExplicitTokenReferences(ctx, env, used)
+	markImplicitIdentifierReferences(ctx, env, used)
+	markNestTokenReferences(ctx, env, used)
+	reportUnusedTokens(ctx, env, used, ignoredRoles)
+}
+
+func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
 	for _, ref := range ctx.RootNode.FindAllKind(NodeParseTokenReference) {
-		name := getIdentifierValue(ref)
-		if _, exists := env.Tokens[name]; !exists {
-			code := VALIDATION_UNRESOLVED_TOKEN_REF
-			if enclosingPrattDef(ref) != nil {
-				code = VALIDATION_PRATT_UNRESOLVED_TOKEN
-			}
-			ctx.ReportError(code.String(), fmt.Sprintf("unresolved token reference '%s'", name), ref)
-		} else {
+		validateAndMarkToken(ctx, env, used, ref)
+	}
+}
+
+func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+	for _, nestOp := range ctx.RootNode.FindAllKind(NodeParseOpNest) {
+		validateAndMarkToken(ctx, env, used, nestOp.FindFirstKind(NodeParseNestOpenToken))
+		validateAndMarkToken(ctx, env, used, nestOp.FindFirstKind(NodeParseNestCloseToken))
+	}
+}
+
+func validateAndMarkToken(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, tokenNode *Node) {
+	if tokenNode == nil {
+		return
+	}
+
+	name := getIdentifierValue(tokenNode)
+	if _, exists := env.Tokens[name]; !exists {
+		reportUnresolvedToken(ctx, tokenNode, name)
+	} else {
+		used[name] = true
+	}
+}
+
+func reportUnresolvedToken(ctx *ValidationCtx, ref *Node, name string) {
+	code := VALIDATION_UNRESOLVED_TOKEN_REF
+	if enclosingPrattDef(ref) != nil {
+		code = VALIDATION_PRATT_UNRESOLVED_TOKEN
+	}
+	ctx.ReportError(code.String(), fmt.Sprintf("unresolved token reference '%s'", name), ref)
+}
+
+func markImplicitIdentifierReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+	parse := ctx.RootNode.FindFirstKind(NodeParseSection)
+	if parse == nil {
+		return
+	}
+	for _, id := range parse.FindAllKind(NodeIdentifier) {
+		name := getIdentifierValue(id)
+		if _, exists := env.Tokens[name]; exists {
 			used[name] = true
 		}
 	}
+}
 
-	if parse := ctx.RootNode.FindFirstKind(NodeParseSection); parse != nil {
-		for _, id := range parse.FindAllKind(NodeIdentifier) {
-			name := getIdentifierValue(id)
-			if _, exists := env.Tokens[name]; exists {
-				used[name] = true
-			}
-		}
-	}
-
+func reportUnusedTokens(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, ignoredRoles map[string]bool) {
 	for name, node := range env.Tokens {
-		if !used[name] {
-			ctx.ReportWarning(VALIDATION_TOKEN_UNREFERENCED_IN_PARSE.String(), fmt.Sprintf("token '%s' is never referenced in parse or pratt", name), node)
+		if used[name] || ignoredRoles[getTokenRole(node)] {
+			continue
 		}
+		ctx.ReportWarning(VALIDATION_TOKEN_UNREFERENCED_IN_PARSE.String(), fmt.Sprintf("token '%s' is never referenced in parse or pratt", name), node)
 	}
+}
+
+func getIgnoredRoles(ctx *ValidationCtx) map[string]bool {
+	ignored := make(map[string]bool)
+	parse := ctx.RootNode.FindFirstKind(NodeParseSection)
+	if parse == nil {
+		return ignored
+	}
+
+	ignoreSec := parse.FindFirstKind(NodeParseIgnoreSection)
+	if ignoreSec == nil {
+		return ignored
+	}
+
+	for _, roleNode := range ignoreSec.FindAllKind(NodeParseIgnoreRole) {
+		ignored[getIdentifierValue(roleNode)] = true
+	}
+	return ignored
+}
+
+func getTokenRole(tokenNameNode *Node) string {
+	parent := tokenNameNode.Parent()
+	if parent == nil || parent.Kind() != NodeLexRule {
+		return ""
+	}
+
+	roleNode := parent.FindFirstKind(NodeLexRuleRole)
+	if roleNode == nil {
+		return ""
+	}
+
+	return getIdentifierValue(roleNode)
 }
 
 func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
@@ -305,7 +371,7 @@ func processReachability(ctx *ValidationCtx) {
 	checkPatternCycles(ctx, env, patternDeps)
 	checkPatternReachability(ctx, env, patternDeps)
 
-	parseDeps := buildParseRuleDependencyMap(ctx.RootNode)
+	parseDeps := buildUnifiedParseDependencyMap(ctx.RootNode)
 	checkParseReachability(ctx, env, parseDeps)
 }
 
@@ -340,7 +406,7 @@ func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[strin
 	for name, node := range env.Rules {
 		if !reachable[name] {
 			nameNode := node.FindFirstKind(NodeParseRuleName)
-			ctx.ReportInfo(VALIDATION_UNREFERENCED_PARSE_RULE.String(), fmt.Sprintf("parse rule '%s' is never referenced", name), nameNode)
+			ctx.ReportWarning(VALIDATION_UNREFERENCED_PARSE_RULE.String(), fmt.Sprintf("parse rule '%s' is never referenced", name), nameNode)
 		}
 	}
 }
@@ -578,32 +644,43 @@ func buildPatternDependencyMap(root *Node, env *SemanticEnv) map[string][]string
 	return out
 }
 
-func buildParseRuleDependencyMap(parseSection *Node) map[string][]string {
+func buildUnifiedParseDependencyMap(root *Node) map[string][]string {
 	out := make(map[string][]string)
-	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
-		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		name := getParseRuleName(nameNode)
-		if name == "" {
-			continue
-		}
 
-		body := rule.FindFirstKind(NodeParseRuleBody)
-		if body == nil {
-			out[name] = nil
-			continue
-		}
-
-		var refs []string
-		for _, refNode := range body.FindAllKind(NodeParseRuleReference) {
-			if refName := getParseRuleRefName(refNode); refName != "" {
-				refs = append(refs, refName)
+	// 1. Process Standard Parse Rules
+	parseSection := root.FindFirstKind(NodeParseSection)
+	if parseSection != nil {
+		for _, rule := range parseSection.FindAllKind(NodeParseRule) {
+			name := getParseRuleName(rule.FindFirstKind(NodeParseRuleName))
+			if name != "" {
+				out[name] = extractAllRuleRefs(rule)
 			}
 		}
-		out[name] = refs
 	}
+
+	// 2. Process Pratt Expression Definitions
+	prattSection := root.FindFirstKind(NodePrattSection)
+	if prattSection != nil {
+		for _, prattDef := range prattSection.FindAllKind(NodePrattExprDef) {
+			name := getIdentifierValue(prattDef.FindFirstKind(NodePrattExprName))
+			if name != "" {
+				out[name] = extractAllRuleRefs(prattDef)
+			}
+		}
+	}
+
 	return out
 }
 
+func extractAllRuleRefs(container *Node) []string {
+	var refs []string
+	for _, refNode := range container.FindAllKind(NodeParseRuleReference) {
+		if name := getParseRuleRefName(refNode); name != "" {
+			refs = append(refs, name)
+		}
+	}
+	return refs
+}
 func computeReachablePatterns(root *Node, deps map[string][]string) map[string]bool {
 	entryPoints := make(map[string]bool)
 	if lexSection := root.FindFirstKind(NodeLexSection); lexSection != nil {

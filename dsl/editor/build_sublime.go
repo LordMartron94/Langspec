@@ -105,6 +105,9 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 	dsl.NodePrattExprName: {
 		Scopes: []string{"entity.name.function.parser-rule"},
 	},
+	dsl.NodeParseIgnoreRole: {
+		Scopes: []string{"constant.language.token-role-reference"},
+	},
 }
 
 // ------------------------------------------------------------- PATTERN BUILDING
