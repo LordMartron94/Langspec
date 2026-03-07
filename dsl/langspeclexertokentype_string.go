@@ -44,28 +44,27 @@ func _() {
 	_ = x[TokKWPragma-34]
 	_ = x[TokKWTool-35]
 	_ = x[TokKWParse-36]
-	_ = x[TokKWRef-37]
-	_ = x[TokKWTrue-38]
-	_ = x[TokKWFalse-39]
-	_ = x[TokKWLocal-40]
-	_ = x[TokKWVirtual-41]
-	_ = x[TokKWNest-42]
-	_ = x[TokKWPratt-43]
-	_ = x[TokKWPrimary-44]
-	_ = x[TokKWPrefix-45]
-	_ = x[TokKWPostfix-46]
-	_ = x[TokKWInfix-47]
-	_ = x[TokKWImplicit-48]
-	_ = x[TokKWPrecedence-49]
-	_ = x[TokKWTransparent-50]
-	_ = x[TokKWSync-51]
-	_ = x[TokKWPredict-52]
-	_ = x[TokKWIgnore-53]
+	_ = x[TokKWTrue-37]
+	_ = x[TokKWFalse-38]
+	_ = x[TokKWLocal-39]
+	_ = x[TokKWVirtual-40]
+	_ = x[TokKWNest-41]
+	_ = x[TokKWPratt-42]
+	_ = x[TokKWPrimary-43]
+	_ = x[TokKWPrefix-44]
+	_ = x[TokKWPostfix-45]
+	_ = x[TokKWInfix-46]
+	_ = x[TokKWImplicit-47]
+	_ = x[TokKWPrecedence-48]
+	_ = x[TokKWTransparent-49]
+	_ = x[TokKWSync-50]
+	_ = x[TokKWPredict-51]
+	_ = x[TokKWIgnore-52]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokVarRefTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokSemicolonTokDotTokChainSeparatorTokAssignmentTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWRefTokKWTrueTokKWFalseTokKWLocalTokKWVirtualTokKWNestTokKWPrattTokKWPrimaryTokKWPrefixTokKWPostfixTokKWInfixTokKWImplicitTokKWPrecedenceTokKWTransparentTokKWSyncTokKWPredictTokKWIgnore"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokVarRefTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokSemicolonTokDotTokChainSeparatorTokAssignmentTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWTrueTokKWFalseTokKWLocalTokKWVirtualTokKWNestTokKWPrattTokKWPrimaryTokKWPrefixTokKWPostfixTokKWInfixTokKWImplicitTokKWPrecedenceTokKWTransparentTokKWSyncTokKWPredictTokKWIgnore"
 
-var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 66, 78, 91, 103, 116, 128, 134, 151, 164, 181, 195, 203, 210, 218, 225, 237, 248, 255, 266, 282, 297, 311, 321, 331, 344, 354, 362, 374, 385, 394, 404, 412, 421, 431, 441, 453, 462, 472, 484, 495, 507, 517, 530, 545, 561, 570, 582, 593}
+var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 66, 78, 91, 103, 116, 128, 134, 151, 164, 181, 195, 203, 210, 218, 225, 237, 248, 255, 266, 282, 297, 311, 321, 331, 344, 354, 362, 374, 385, 394, 404, 413, 423, 433, 445, 454, 464, 476, 487, 499, 509, 522, 537, 553, 562, 574, 585}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1

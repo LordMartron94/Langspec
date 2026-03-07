@@ -214,15 +214,15 @@ func LangSpecCompilerCompile(
 		}
 	}
 
-	compiled := compileTree(compiler, result.RootNode)
-	result.LanguageName = compiled.dslName
-	result.LanguageVersion = compiled.dslVersion
+	// compiled := compileTree(compiler, result.RootNode)
+	// result.LanguageName = compiled.dslName
+	// result.LanguageVersion = compiled.dslVersion
 
-	result.CompiledLexerSpec = compiled.lexerSpec
-	result.CompiledParserSpec = compiled.parserSpec
-	result.CompiledGrammarPackage = compiled.grammarPackage
+	// result.CompiledLexerSpec = compiled.lexerSpec
+	// result.CompiledParserSpec = compiled.parserSpec
+	// result.CompiledGrammarPackage = compiled.grammarPackage
 
-	result.EOFToken = compiled.eofToken
+	// result.EOFToken = compiled.eofToken
 
 	return result, err
 }

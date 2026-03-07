@@ -660,8 +660,6 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return compileOptional(ctx, node)
 	case NodeParseOpRef:
 		return compileReference(ctx, node)
-	case NodeIdentifier:
-		return compileTokenMatch(ctx, node)
 	case NodeParsePlus:
 		return compilePlus(ctx, node)
 	case NodeParseStar:
@@ -815,7 +813,11 @@ func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 	outputNodeKind := nodeSingleTokenContent(node.FindFirstKind(NodeParseNodeName))
-	targetToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseTokenReference))
+	refNode := node.FindFirstKind(NodeParseOpRef)
+	if refNode == nil {
+		panic("compiler error: emit node missing reference")
+	}
+	targetToken := nodeSingleTokenContent(refNode)
 	var label syntaxa.GrammarLabel
 	if ctx.rootLevel {
 		label = ctx.grammarID
@@ -826,7 +828,11 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
-	targetToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseTokenReference))
+	refNode := node.FindFirstKind(NodeParseOpRef)
+	if refNode == nil {
+		panic("compiler error: virtual node missing reference")
+	}
+	targetToken := nodeSingleTokenContent(refNode)
 	var label syntaxa.GrammarLabel
 	if ctx.rootLevel {
 		label = ctx.grammarID
@@ -869,20 +875,31 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
-	refNode := node.FindFirstKind(NodeParseRuleReference)
-	if refNode == nil {
-		panic("compiler error: NodeParseOpRef missing NodeParseRuleReference child")
-	}
+	targetName := nodeSingleTokenContent(node)
+	_, isToken := ctx.env.Tokens[targetName]
+	_, isRule := ctx.env.Rules[targetName]
+	_, isPratt := ctx.env.Pratt[targetName]
 
-	targetRuleName := nodeSingleTokenContent(refNode)
+	if isToken {
+		return compileTokenMatch(ctx, node)
+	}
+	if isRule || isPratt {
+		return compileRuleReference(ctx, node, targetName)
+	}
+	panic(fmt.Errorf("compiler error: unresolved reference '%s' (not a token, rule, or pratt expression)", targetName))
+}
+
+func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName string) CompiledRule {
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 
 	var targetRuleNode *Node
 	if r, ok := ctx.env.Rules[targetRuleName]; ok {
 		targetRuleNode = r
+	} else if p, ok := ctx.env.Pratt[targetRuleName]; ok {
+		targetRuleNode = p
 	}
 
-	if targetRuleNode != nil {
+	if targetRuleNode != nil && ctx.env.Rules[targetRuleName] != nil {
 		isTransparent := targetRuleNode.FindFirstKind(NodeRuleModifierTransparent) != nil
 		if isTransparent && ctx.ruleBodyByRuleName != nil {
 			if bodyNode := ctx.ruleBodyByRuleName[targetRuleName]; bodyNode != nil {
@@ -941,7 +958,7 @@ func compilePrattExprDef(
 		panic("compiler error: pratt rule missing body")
 	}
 
-	config := buildPrattConfig(builder, grammarID, ruleNode, bodyNode)
+	config := buildPrattConfig(builder, env, grammarID, ruleNode, bodyNode)
 	compiledExpr := builder.Pratt.Expression(grammarID, config)
 
 	return builder.Rule.Define(compiledExpr)
@@ -949,6 +966,7 @@ func compilePrattExprDef(
 
 func buildPrattConfig(
 	builder *CompilerRuleBuilder,
+	env *SemanticEnv,
 	grammarID syntaxa.GrammarLabel,
 	ruleNode *Node,
 	bodyNode *Node,
@@ -960,11 +978,11 @@ func buildPrattConfig(
 		case NodePrattPrimary:
 			config.Primary = compilePrattPrimary(builder, grammarID, actualCat)
 		case NodePrattPrefix:
-			config.PrefixOps, config.PrefixRuleOps = compilePrattPrefixOps(builder, grammarID, actualCat)
+			config.PrefixOps, config.PrefixRuleOps = compilePrattPrefixOps(builder, env, grammarID, actualCat)
 		case NodePrattInfix:
-			config.InfixOps, config.InfixRuleOps = compilePrattInfixOps(builder, grammarID, actualCat)
+			config.InfixOps, config.InfixRuleOps = compilePrattInfixOps(builder, env, grammarID, actualCat)
 		case NodePrattPostfix:
-			config.PostfixOps, config.PostfixRuleOps = compilePrattPostfixOps(builder, grammarID, actualCat)
+			config.PostfixOps, config.PostfixRuleOps = compilePrattPostfixOps(builder, env, grammarID, actualCat)
 		case NodePrattImplicit:
 			config.ImplicitInfix = compilePrattImplicitOp(actualCat)
 		default:
@@ -991,8 +1009,13 @@ func compilePrattPrimary(
 ) CompiledRule {
 	body := node.FindFirstKind(NodePrattPrimaryBody)
 	refNode := body.FindFirstKind(NodePrattPrimaryRef)
-
-	targetRuleName := nodeSingleTokenContent(refNode.FindFirstKind(NodeParseRuleReference))
+	if refNode == nil {
+		panic("compiler error: pratt primary body missing ref")
+	}
+	if refChild := refNode.FindFirstKind(NodeParseOpRef); refChild != nil {
+		refNode = refChild
+	}
+	targetRuleName := getParseRuleRefName(refNode)
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 
 	return builder.Rule.Reference(grammarID, targetGrammarID)
@@ -1000,6 +1023,7 @@ func compilePrattPrimary(
 
 func compilePrattPrefixOps(
 	builder *CompilerRuleBuilder,
+	env *SemanticEnv,
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattPrefixOp[string, string], []rule.PrattPrefixRuleOp[rune, string, string, string, string]) {
@@ -1009,7 +1033,7 @@ func compilePrattPrefixOps(
 	ruleOps := make([]rule.PrattPrefixRuleOp[rune, string, string, string, string], 0)
 
 	for _, def := range bodyNode.Children() {
-		target, rightBP := extractPrefixData(def)
+		target, rightBP := extractPrefixData(def, env)
 
 		if target.IsRule {
 			ruleOps = append(ruleOps, rule.PrattPrefixRuleOp[rune, string, string, string, string]{
@@ -1032,6 +1056,7 @@ func compilePrattPrefixOps(
 
 func compilePrattInfixOps(
 	builder *CompilerRuleBuilder,
+	env *SemanticEnv,
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattInfixOp[string, string], []rule.PrattInfixRuleOp[rune, string, string, string, string]) {
@@ -1041,7 +1066,7 @@ func compilePrattInfixOps(
 	ruleOps := make([]rule.PrattInfixRuleOp[rune, string, string, string, string], 0)
 
 	for _, def := range bodyNode.Children() {
-		target, leftBP, rightBP := extractInfixData(def)
+		target, leftBP, rightBP := extractInfixData(def, env)
 
 		if target.IsRule {
 			ruleOps = append(ruleOps, rule.PrattInfixRuleOp[rune, string, string, string, string]{
@@ -1066,6 +1091,7 @@ func compilePrattInfixOps(
 
 func compilePrattPostfixOps(
 	builder *CompilerRuleBuilder,
+	env *SemanticEnv,
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattPostfixOp[string, string], []rule.PrattPostfixRuleOp[rune, string, string, string, string]) {
@@ -1075,7 +1101,7 @@ func compilePrattPostfixOps(
 	ruleOps := make([]rule.PrattPostfixRuleOp[rune, string, string, string, string], 0)
 
 	for _, def := range bodyNode.Children() {
-		target, leftBP := extractPostfixData(def)
+		target, leftBP := extractPostfixData(def, env)
 
 		if target.IsRule {
 			ruleOps = append(ruleOps, rule.PrattPostfixRuleOp[rune, string, string, string, string]{
@@ -1119,42 +1145,45 @@ type OperatorTarget struct {
 	NodeKind string
 }
 
-func extractOperatorTarget(defNode *Node) OperatorTarget {
+func extractOperatorTarget(defNode *Node, env *SemanticEnv) OperatorTarget {
 	nodeKind := nodeSingleTokenContent(defNode.FindFirstKind(NodeParseNodeName))
+	refNode := defNode.FindFirstKind(NodeParseOpRef)
+	if refNode == nil {
+		panic("compiler error: pratt operator target missing reference")
+	}
+	refName := nodeSingleTokenContent(refNode)
 
-	if tokenRef := defNode.FindFirstKind(NodeParseTokenReference); tokenRef != nil {
+	if env.Tokens[refName] != nil {
 		return OperatorTarget{
 			IsRule:   false,
-			Ref:      nodeSingleTokenContent(tokenRef),
+			Ref:      refName,
 			NodeKind: nodeKind,
 		}
 	}
-
-	if ruleRef := defNode.FindFirstKind(NodeParseRuleReference); ruleRef != nil {
+	if env.Rules[refName] != nil || env.Pratt[refName] != nil {
 		return OperatorTarget{
 			IsRule:   true,
-			Ref:      nodeSingleTokenContent(ruleRef),
+			Ref:      refName,
 			NodeKind: nodeKind,
 		}
 	}
-
-	panic("compiler error: valid pratt operator target missing")
+	panic(fmt.Errorf("compiler error: unresolved pratt operator target '%s'", refName))
 }
 
-func extractPrefixData(defNode *Node) (OperatorTarget, int) {
-	target := extractOperatorTarget(defNode)
+func extractPrefixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int) {
+	target := extractOperatorTarget(defNode, env)
 	rightBP := extractIntContent(defNode.FindFirstKind(NodePrattRightPrecedenceValue))
 	return target, rightBP
 }
 
-func extractPostfixData(defNode *Node) (OperatorTarget, int) {
-	target := extractOperatorTarget(defNode)
+func extractPostfixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int) {
+	target := extractOperatorTarget(defNode, env)
 	leftBP := extractIntContent(defNode.FindFirstKind(NodePrattLeftPrecedenceValue))
 	return target, leftBP
 }
 
-func extractInfixData(defNode *Node) (OperatorTarget, int, int) {
-	target := extractOperatorTarget(defNode)
+func extractInfixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int, int) {
+	target := extractOperatorTarget(defNode, env)
 	leftBP := extractIntContent(defNode.FindFirstKind(NodePrattLeftPrecedenceValue))
 	rightBP := extractIntContent(defNode.FindFirstKind(NodePrattRightPrecedenceValue))
 	return target, leftBP, rightBP

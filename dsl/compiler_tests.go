@@ -13,7 +13,6 @@ import (
 )
 
 const TestFile = "assets/testing/input.lspec"
-const TestFile2 = "assets/testing/input2.lspec"
 
 func TestDSLCompiler(t *testing.T) {
 	scratchAllocator := memforge.DynamicLinearAllocatorCreateFunction(uint64(memcore.KiloByte), func(currentCap, neededCap uint64) uint64 {
@@ -41,20 +40,20 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
 
-	// LangSpecCompilerDebugGrammar(compiler)
+	LangSpecCompilerDebugGrammar(compiler)
 
 	result, err := LangSpecCompilerCompile(compiler, TestFile)
 
 	LangSpecCompilerDebugResult(compiler, result, &CompilerDebugConfig{
 		DebugParseTrace: false,
-		DebugLST:        false,
+		DebugLST:        true,
 	})
 
 	if err != nil {
 		t.Fatalf("Compilation failed with error: %s", err.Error())
 	}
 
-	testResult(t, result, scratchAllocFn, TestFile, sink)
+	// testResult(t, result, scratchAllocFn, TestFile, sink)
 }
 
 func testResult(

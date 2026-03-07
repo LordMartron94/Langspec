@@ -129,14 +129,19 @@ func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	ignoredRoles := getIgnoredRoles(ctx)
 
 	markExplicitTokenReferences(ctx, env, used)
-	markImplicitIdentifierReferences(ctx, env, used)
 	markNestTokenReferences(ctx, env, used)
 	reportUnusedTokens(ctx, env, used, ignoredRoles)
 }
 
 func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
-	for _, ref := range ctx.RootNode.FindAllKind(NodeParseTokenReference) {
-		validateAndMarkToken(ctx, env, used, ref)
+	for _, ref := range ctx.RootNode.FindAllKind(NodeParseOpRef) {
+		name := getParseRuleRefName(ref)
+		if name == "" {
+			continue
+		}
+		if _, isToken := env.Tokens[name]; isToken {
+			validateAndMarkToken(ctx, env, used, ref)
+		}
 	}
 }
 
@@ -166,19 +171,6 @@ func reportUnresolvedToken(ctx *ValidationCtx, ref *Node, name string) {
 		code = VALIDATION_PRATT_UNRESOLVED_TOKEN
 	}
 	ctx.ReportError(code.String(), fmt.Sprintf("unresolved token reference '%s'", name), ref)
-}
-
-func markImplicitIdentifierReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
-	parse := ctx.RootNode.FindFirstKind(NodeParseSection)
-	if parse == nil {
-		return
-	}
-	for _, id := range parse.FindAllKind(NodeIdentifier) {
-		name := getIdentifierValue(id)
-		if _, exists := env.Tokens[name]; exists {
-			used[name] = true
-		}
-	}
 }
 
 func reportUnusedTokens(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, ignoredRoles map[string]bool) {
@@ -248,27 +240,29 @@ func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
 		ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("parse section must define entry rule '%s'", programRuleName), ctx.RootNode)
 	}
 
-	for _, ref := range ctx.RootNode.FindAllKind(NodeParseRuleReference) {
+	for _, ref := range ctx.RootNode.FindAllKind(NodeParseOpRef) {
 		name := getParseRuleRefName(ref)
 		if name == "" {
 			continue
 		}
-
 		_, isRule := env.Rules[name]
 		_, isPratt := env.Pratt[name]
+		_, isToken := env.Tokens[name]
 
-		if !isRule && !isPratt {
-			code := VALIDATION_UNRESOLVED_PARSE_RULE_REF
-			if enclosingPrattDef(ref) != nil {
-				code = VALIDATION_PRATT_UNRESOLVED_RULE
+		if isRule || isPratt {
+			if isPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
+				ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
 			}
-			ctx.ReportError(code.String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
 			continue
 		}
-
-		if isPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
-			ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
+		if isToken {
+			continue
 		}
+		code := VALIDATION_UNRESOLVED_PARSE_RULE_REF
+		if enclosingPrattDef(ref) != nil {
+			code = VALIDATION_PRATT_UNRESOLVED_RULE
+		}
+		ctx.ReportError(code.String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
 	}
 }
 
@@ -281,7 +275,7 @@ func processReachability(ctx *ValidationCtx) {
 	checkPatternCycles(ctx, env, patternDeps)
 	checkPatternReachability(ctx, env, patternDeps)
 
-	parseDeps := buildUnifiedParseDependencyMap(ctx.RootNode)
+	parseDeps := buildUnifiedParseDependencyMap(ctx.RootNode, env)
 	checkParseReachability(ctx, env, parseDeps)
 }
 
@@ -439,8 +433,9 @@ func processParseSafety(ctx *ValidationCtx) {
 		return
 	}
 
+	env := BuildSemanticEnv(ctx.RootNode, nil)
 	ruleNullable := computeParseRuleNullable(ruleBodies)
-	firstRefs := computeParseRuleFirstRefs(ruleBodies, ruleNullable)
+	firstRefs := computeParseRuleFirstRefs(ruleBodies, ruleNullable, env)
 
 	validateLeftRecursion(ctx, parseSection, firstRefs)
 	validateUnboundedOptionalRepetition(ctx, parseSection, ruleBodies, ruleNullable)
@@ -548,7 +543,7 @@ func buildPatternDependencyMap(root *Node, env *SemanticEnv) map[string][]string
 	return out
 }
 
-func buildUnifiedParseDependencyMap(root *Node) map[string][]string {
+func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]string {
 	out := make(map[string][]string)
 
 	// 1. Process Standard Parse Rules
@@ -557,7 +552,7 @@ func buildUnifiedParseDependencyMap(root *Node) map[string][]string {
 		for _, rule := range parseSection.FindAllKind(NodeParseRule) {
 			name := getParseRuleName(rule.FindFirstKind(NodeParseRuleName))
 			if name != "" {
-				out[name] = extractAllRuleRefs(rule)
+				out[name] = extractAllRuleRefs(rule, env)
 			}
 		}
 	}
@@ -568,7 +563,7 @@ func buildUnifiedParseDependencyMap(root *Node) map[string][]string {
 		for _, prattDef := range prattSection.FindAllKind(NodePrattExprDef) {
 			name := getIdentifierValue(prattDef.FindFirstKind(NodePrattExprName))
 			if name != "" {
-				out[name] = extractAllRuleRefs(prattDef)
+				out[name] = extractAllRuleRefs(prattDef, env)
 			}
 		}
 	}
@@ -576,10 +571,14 @@ func buildUnifiedParseDependencyMap(root *Node) map[string][]string {
 	return out
 }
 
-func extractAllRuleRefs(container *Node) []string {
+func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	var refs []string
-	for _, refNode := range container.FindAllKind(NodeParseRuleReference) {
-		if name := getParseRuleRefName(refNode); name != "" {
+	for _, refNode := range container.FindAllKind(NodeParseOpRef) {
+		name := getParseRuleRefName(refNode)
+		if name == "" {
+			continue
+		}
+		if env.Rules[name] != nil || env.Pratt[name] != nil {
 			refs = append(refs, name)
 		}
 	}
@@ -873,7 +872,7 @@ func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[
 			}
 		}
 		return true
-	case NodeParseRuleReference:
+	case NodeParseOpRef:
 		return ruleNullable[getParseRuleRefName(node)]
 	case NodeParseSegment:
 		if children := node.Children(); len(children) > 0 {
@@ -883,41 +882,36 @@ func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[
 			}
 		}
 		return false
-	case NodeParseOpRef:
-		if refNode := node.FindFirstKind(NodeParseRuleReference); refNode != nil {
-			return ruleNullable[getParseRuleRefName(refNode)]
-		}
-		return false
 	default:
 		return false
 	}
 }
 
-func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node) map[string]struct{} {
+func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node, env *SemanticEnv) map[string]struct{} {
 	out := make(map[string]struct{})
 	if node == nil {
 		return out
 	}
 	switch node.Kind() {
-	case NodeParseRuleReference:
-		if name := getParseRuleRefName(node); name != "" {
+	case NodeParseOpRef:
+		if name := getParseRuleRefName(node); name != "" && (env.Rules[name] != nil || env.Pratt[name] != nil) {
 			out[name] = struct{}{}
 		}
 	case NodeParseOptional, NodeParseStar, NodeParsePlus, NodeParseGroup:
 		if children := node.Children(); len(children) > 0 {
-			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies) {
+			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies, env) {
 				out[k] = struct{}{}
 			}
 		}
 	case NodeParseAlternation:
 		for _, ch := range node.Children() {
-			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies) {
+			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env) {
 				out[k] = struct{}{}
 			}
 		}
 	case NodeParseConcat:
 		for _, ch := range node.Children() {
-			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies) {
+			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env) {
 				out[k] = struct{}{}
 			}
 			if !parseExprNullable(ch, ruleNullable, ruleBodies) {
@@ -928,13 +922,7 @@ func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies
 		if children := node.Children(); len(children) > 0 {
 			ch := children[0]
 			if ch.Kind() == NodeParseOpRef || ch.Kind() == NodeParseGroup {
-				return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies)
-			}
-		}
-	case NodeParseOpRef:
-		if refNode := node.FindFirstKind(NodeParseRuleReference); refNode != nil {
-			if name := getParseRuleRefName(refNode); name != "" {
-				out[name] = struct{}{}
+				return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env)
 			}
 		}
 	}
@@ -962,10 +950,10 @@ func computeParseRuleNullable(ruleBodies map[string]*Node) map[string]bool {
 	return nullable
 }
 
-func computeParseRuleFirstRefs(ruleBodies map[string]*Node, ruleNullable map[string]bool) map[string]map[string]struct{} {
+func computeParseRuleFirstRefs(ruleBodies map[string]*Node, ruleNullable map[string]bool, env *SemanticEnv) map[string]map[string]struct{} {
 	out := make(map[string]map[string]struct{})
 	for name, root := range ruleBodies {
-		out[name] = parseExprFirstRuleRefs(root, ruleNullable, ruleBodies)
+		out[name] = parseExprFirstRuleRefs(root, ruleNullable, ruleBodies, env)
 	}
 	return out
 }
