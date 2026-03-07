@@ -13,6 +13,7 @@ import (
 )
 
 const TestFile = "assets/testing/input.lspec"
+const TestFile2 = "assets/testing/input2.lspec"
 
 func TestDSLCompiler(t *testing.T) {
 	scratchAllocator := memforge.DynamicLinearAllocatorCreateFunction(uint64(memcore.KiloByte), func(currentCap, neededCap uint64) uint64 {
@@ -40,7 +41,7 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := LangSpecCompilerCreate(compilerConfig)
 	defer LangSpecCompilerDestroy(compiler)
 
-	LangSpecCompilerDebugGrammar(compiler)
+	// LangSpecCompilerDebugGrammar(compiler)
 
 	result, err := LangSpecCompilerCompile(compiler, TestFile)
 
@@ -110,10 +111,6 @@ func testResult(
 
 	// renderParseTrace(sink.Writer, trace, func(t string) string { return t })
 
-	if err != nil {
-		t.Fatalf("testing compiled artifact failed with error: %s", err.Error())
-	}
-
 	contentRune, _ := system.FileReadAllRunes(sourceFile)
 
 	if syntaxErrors.HasErrors() {
@@ -121,6 +118,10 @@ func testResult(
 
 		t.Fatalf("file parse failed with %d syntax errors",
 			len(syntaxErrors.Errors))
+	}
+
+	if err != nil {
+		t.Fatalf("testing compiled artifact failed with error: %s", err.Error())
 	}
 
 	lstDump := rootNode.DebugDump(

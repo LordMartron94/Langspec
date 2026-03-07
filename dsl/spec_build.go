@@ -671,6 +671,7 @@ func (b *dslGrammarBuilder) prattExprDef() Rule {
 	return b.g.sequence(NodePrattExprDef, "").
 		optionalToken(NodeLocalVariable, TokKWLocal).
 		expectToken(NodePrattExprName, TokIdentifier).
+		optionalRule(b.syncModifier()).
 		rule(b.g.NestByNode(
 			NodePrattExprBody,
 			TokBraceOpen,
@@ -948,6 +949,7 @@ func (b *dslGrammarBuilder) nestMapping() Rule {
 		expectVirtualInRule(TokKWNest).
 		expectToken(NodeParseNestOpenToken, TokIdentifier).
 		expectToken(NodeParseNestCloseToken, TokIdentifier).
+		optionalRule(b.syncModifier()).
 		rule(b.g.NestByNode(
 			NodeParseNestBody,
 			TokBraceOpen,

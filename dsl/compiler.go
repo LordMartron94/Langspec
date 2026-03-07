@@ -56,14 +56,16 @@ parseCompileCtx holds shared state for compiling parse rules into grammar rules.
 Passed through instead of (builder, env, grammarID, nodeKind, ruleName, counts, rootLevel, transparent).
 */
 type parseCompileCtx struct {
-	builder     *CompilerRuleBuilder
-	env         *SemanticEnv
-	grammarID   syntaxa.GrammarLabel
-	nodeKind    string
-	ruleName    string
-	counts      map[string]int
-	rootLevel   bool
-	transparent bool
+	builder            *CompilerRuleBuilder
+	env                *SemanticEnv
+	grammarID          syntaxa.GrammarLabel
+	nodeKind           string
+	ruleName           string
+	counts             map[string]int
+	rootLevel          bool
+	transparent        bool
+	nestCloseToken     string           // when compiling nest body: close token to add to list element recovery (RecoverSync) so we sync to it
+	ruleBodyByRuleName map[string]*Node // rule name -> body root node; used to expand refs when nestCloseToken set
 }
 
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
@@ -547,19 +549,22 @@ func getParserSpecInfo(
 	programRuleNode := env.Rules[programRuleName]
 	rootNodeKind := nodeSingleTokenContent(programRuleNode.FindFirstKind(NodeParseNodeName))
 
+	ruleBodyByRuleName := buildParseRuleBodyMapForCompile(env.Rules)
+
 	var entryRule CompiledRule
 	var entryOverride syntaxa.GrammarLabel
 
 	for ruleName, ruleNode := range env.Rules {
 		ctx := &parseCompileCtx{
-			builder:     ruleBuilder,
-			env:         env,
-			grammarID:   syntaxa.GrammarLabel(ruleName),
-			nodeKind:    nodeSingleTokenContent(ruleNode.FindFirstKind(NodeParseNodeName)),
-			ruleName:    ruleName,
-			counts:      make(map[string]int),
-			rootLevel:   true,
-			transparent: ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil,
+			builder:            ruleBuilder,
+			env:                env,
+			grammarID:          syntaxa.GrammarLabel(ruleName),
+			nodeKind:           nodeSingleTokenContent(ruleNode.FindFirstKind(NodeParseNodeName)),
+			ruleName:           ruleName,
+			counts:             make(map[string]int),
+			rootLevel:          true,
+			transparent:        ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil,
+			ruleBodyByRuleName: ruleBodyByRuleName,
 		}
 		compiled, override := compileParseRuleDefinition(ctx, ruleNode)
 		if ruleName == programRuleName {
@@ -590,6 +595,24 @@ func getParserSpecInfo(
 	)
 
 	return grammarPackage, registry, rootNodeKind, skipRoles
+}
+
+func buildParseRuleBodyMapForCompile(rules map[string]*Node) map[string]*Node {
+	out := make(map[string]*Node, len(rules))
+	for ruleName, ruleNode := range rules {
+		bodyNode := ruleNode.FindFirstKind(NodeParseRuleBody)
+		if bodyNode == nil {
+			continue
+		}
+		rootExpr := getParseRuleBodyRoot(bodyNode)
+		if rootExpr == nil && len(bodyNode.Children()) > 0 {
+			rootExpr = bodyNode.Children()[0]
+		}
+		if rootExpr != nil {
+			out[ruleName] = rootExpr
+		}
+	}
+	return out
 }
 
 func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledRule, syntaxa.GrammarLabel) {
@@ -681,6 +704,9 @@ func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
 	}
 
 	if ctx.rootLevel {
+		if ctx.ruleName == programRuleName {
+			return ctx.builder.Rule.Root(ctx.grammarID, ctx.nodeKind, false, rules...)
+		}
 		if ctx.transparent {
 			return ctx.builder.Rule.TransparentSequence(ctx.grammarID, rules...)
 		}
@@ -817,7 +843,19 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 	bodyNode := node.FindFirstKind(NodeParseNestBody)
 	subCtx := *ctx
 	subCtx.rootLevel = false
+	subCtx.nestCloseToken = closeToken
 	innerRule := compileParseExpression(&subCtx, extractSingleChild(bodyNode))
+
+	syncNode := node.FindFirstKind(NodeRuleModifierSync)
+	if syncNode != nil {
+		var syncTokens []string
+		for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
+			syncTokens = append(syncTokens, nodeSingleTokenContent(tNode))
+		}
+		if len(syncTokens) > 0 {
+			innerRule = ctx.builder.Rule.RecoverSync(innerRule, syncTokens...)
+		}
+	}
 
 	if ctx.rootLevel {
 		if ctx.transparent {
@@ -839,12 +877,27 @@ func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 	targetRuleName := nodeSingleTokenContent(refNode)
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 
+	var targetRuleNode *Node
+	if r, ok := ctx.env.Rules[targetRuleName]; ok {
+		targetRuleNode = r
+	}
+
+	if targetRuleNode != nil {
+		isTransparent := targetRuleNode.FindFirstKind(NodeRuleModifierTransparent) != nil
+		if isTransparent && ctx.ruleBodyByRuleName != nil {
+			if bodyNode := ctx.ruleBodyByRuleName[targetRuleName]; bodyNode != nil {
+				return compileParseExpression(ctx, bodyNode)
+			}
+		}
+	}
+
 	var label syntaxa.GrammarLabel
 	if ctx.rootLevel {
 		label = ctx.grammarID
 	} else {
 		label = grammarSubLabel(ctx.ruleName, "REF", ctx.counts)
 	}
+
 	return ctx.builder.Rule.Reference(label, targetGrammarID)
 }
 
@@ -888,7 +941,7 @@ func compilePrattExprDef(
 		panic("compiler error: pratt rule missing body")
 	}
 
-	config := buildPrattConfig(builder, grammarID, bodyNode)
+	config := buildPrattConfig(builder, grammarID, ruleNode, bodyNode)
 	compiledExpr := builder.Pratt.Expression(grammarID, config)
 
 	return builder.Rule.Define(compiledExpr)
@@ -897,6 +950,7 @@ func compilePrattExprDef(
 func buildPrattConfig(
 	builder *CompilerRuleBuilder,
 	grammarID syntaxa.GrammarLabel,
+	ruleNode *Node,
 	bodyNode *Node,
 ) rule.PrattConfig[rune, string, string, string, string] {
 	config := rule.PrattConfig[rune, string, string, string, string]{}
@@ -915,6 +969,13 @@ func buildPrattConfig(
 			config.ImplicitInfix = compilePrattImplicitOp(actualCat)
 		default:
 			panic(fmt.Errorf("compiler error: unknown pratt category: %s", actualCat.Kind()))
+		}
+	}
+
+	// Optional sync on Pratt def: recovery tokens for this expression (e.g. PATTERN_EXPRESSION sync SEMICOLON).
+	if syncNode := ruleNode.FindFirstKind(NodeRuleModifierSync); syncNode != nil {
+		for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
+			config.RecoveryTokens = append(config.RecoveryTokens, nodeSingleTokenContent(tNode))
 		}
 	}
 
