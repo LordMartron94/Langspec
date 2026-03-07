@@ -26,10 +26,8 @@ const (
 	VALIDATION_AMBIGUOUS_TOKEN_MATCH       ValidationCode = "V_LEX002"
 	VALIDATION_IDENTICAL_TOKEN_PATTERN     ValidationCode = "V_LEX003"
 	VALIDATION_TOKEN_SHADOWED              ValidationCode = "V_LEX004"
-	VALIDATION_NO_EOF_IN_META              ValidationCode = "V_LEX005"
-	VALIDATION_MULTIPLE_EOF_IN_META        ValidationCode = "V_LEX006"
-	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX007"
-	VALIDATION_UNRESOLVED_TOKEN_REF        ValidationCode = "V_LEX008"
+	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX005"
+	VALIDATION_UNRESOLVED_TOKEN_REF        ValidationCode = "V_LEX006"
 
 	VALIDATION_NEGATION_INVALID_CONTENT  ValidationCode = "V_PAT007"
 	VALIDATION_REPETITION_MIN_GT_MAX     ValidationCode = "V_PAT008"
@@ -318,11 +316,6 @@ func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[strin
 // ------------------------------------------------------------- LEX SEMANTICS (STAGE 2)
 
 func processLexSemantics(ctx *ValidationCtx) {
-	lexRuleSection := ctx.RootNode.FindFirstKind(NodeLexSection)
-	if lexRuleSection != nil {
-		validateEOFMetaValues(ctx, lexRuleSection)
-	}
-
 	lexRules := collectLexRules(ctx.RootNode)
 	patternKeyToRules := groupLexRulesByPattern(lexRules)
 
@@ -332,20 +325,6 @@ func processLexSemantics(ctx *ValidationCtx) {
 		}
 		reportIdenticalAndAmbiguousPatterns(ctx, key, rules)
 		reportShadowedTokens(ctx, rules)
-	}
-}
-
-func validateEOFMetaValues(ctx *ValidationCtx, lexSection *Node) {
-	eofMetaValueNodes := lexRuleSectionCollectEOFTrueMetaValues(lexSection)
-	if len(eofMetaValueNodes) == 0 {
-		ctx.ReportInfo(VALIDATION_NO_EOF_IN_META.String(), "no lexeme has EOF=true; compiler will inject an EOF token", lexSection)
-		return
-	}
-
-	if len(eofMetaValueNodes) > 1 {
-		for _, node := range eofMetaValueNodes {
-			ctx.ReportError(VALIDATION_MULTIPLE_EOF_IN_META.String(), "multiple lexemes have EOF=true; only one allowed", node)
-		}
 	}
 }
 
@@ -388,7 +367,7 @@ func validateNegationNodes(ctx *ValidationCtx) {
 			continue
 		}
 		validateNegationSubtree(children[0], func(offending *Node) {
-			ctx.ReportError(VALIDATION_NEGATION_INVALID_CONTENT.String(), "negation (!) may only contain character, range, group, or alternation", offending)
+			ctx.ReportError(VALIDATION_NEGATION_INVALID_CONTENT.String(), "negation (!) may only contain character, range, group, class, or alternation", offending)
 		})
 	}
 }
@@ -787,7 +766,8 @@ func parseIntFromNode(node *Node) (int, bool) {
 
 func negationAllowedKind(kind LangSpecParserNodeKind) bool {
 	switch kind {
-	case NodeCharLiteral, NodePatternRange, NodePatternGroup, NodePatternAlternation, NodePatternSegment:
+	case NodeCharLiteral, NodePatternRange, NodePatternClass,
+		NodePatternGroup, NodePatternAlternation, NodePatternSegment:
 		return true
 	default:
 		return false
@@ -800,7 +780,7 @@ func validateNegationSubtree(node *Node, report func(offending *Node)) {
 		report(node)
 	}
 	switch kind {
-	case NodeCharLiteral, NodePatternRange:
+	case NodeCharLiteral, NodePatternRange, NodePatternClass:
 		return
 	default:
 		for _, ch := range node.Children() {
@@ -808,7 +788,6 @@ func validateNegationSubtree(node *Node, report func(offending *Node)) {
 		}
 	}
 }
-
 func getParseRuleBodyRoot(body *Node) *Node {
 	if body == nil {
 		return nil

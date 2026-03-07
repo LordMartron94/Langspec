@@ -13,7 +13,7 @@ import (
 // SYNTAX ERRORS
 // -----------------------------------------------------------------------------
 
-func renderSyntaxErrorsWithContext(
+func RenderSyntaxErrorsWithContext(
 	w io.Writer,
 	source []rune,
 	errs *syntaxa.SyntaxErrors[rune],
@@ -295,7 +295,7 @@ func renderParseTrace[TToken any](
 	fmt.Fprintln(w, "======================")
 }
 
-func renderLSTDump(w io.Writer, dump string) {
+func RenderLSTDump(w io.Writer, dump string) {
 	if w == nil || dump == "" {
 		return
 	}
@@ -304,7 +304,7 @@ func renderLSTDump(w io.Writer, dump string) {
 	fmt.Fprintln(w, "=========================")
 }
 
-func renderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump string) {
+func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump string) {
 	if w == nil {
 		return
 	}

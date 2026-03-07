@@ -183,7 +183,7 @@ type NestOverrideFunc[TToken comparable] func(ctx *NestOverrideContext[TToken]) 
 /*
 NestOverridePredicate returns true if the nest should use the associated NestOverrideFunc. Used with AddNestOverrideByPredicate.
 */
-type NestOverridePredicate[TToken comparable] func(nest *syntaxa.NestSpec[TToken]) bool
+type NestOverridePredicate[TToken, TNodeKind comparable] func(nest *syntaxa.NestSpec[TToken, TNodeKind]) bool
 
 // ------------------------------------------------------------------ CONFIGURATION
 
@@ -204,8 +204,8 @@ func (c OverrideConfig[TToken]) HasMetaScope() bool {
 	return c.MetaScope != ""
 }
 
-type nestOverrideHandler[TToken comparable] struct {
-	pred NestOverridePredicate[TToken]
+type nestOverrideHandler[TToken, TNodeKind comparable] struct {
+	pred NestOverridePredicate[TToken, TNodeKind]
 	fn   NestOverrideFunc[TToken]
 }
 
@@ -213,31 +213,31 @@ type nestOverrideHandler[TToken comparable] struct {
 PushDownAutomatonIRConfiguration holds scope provider, token formatter, scope extension, token overrides, nest override handlers, prototype token roles, and node overrides.
 Create with PushDownAutomatonIRConfigurationCreate; then use AddOverride, AddNestOverride, AddNodeOverride, AddPrototypeTokenRoles as needed.
 */
-type PushDownAutomatonIRConfiguration[TToken, TTokenRole comparable] struct {
+type PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind comparable] struct {
 	scopeProvider        ScopeProvider[TToken]
 	formatter            TokenFormatter[TToken]
 	scopeExtension       string
 	overrides            map[TToken]TokenOverrideFunc
 	prototypeTokenRoles  []TTokenRole
-	nestOverrideHandlers []nestOverrideHandler[TToken]
+	nestOverrideHandlers []nestOverrideHandler[TToken, TNodeKind]
 	nodeOverrides        map[syntaxa.GrammarLabel]OverrideConfig[TToken]
 }
 
 /*
 PushDownAutomatonIRConfigurationCreate allocates a new configuration with the given scope provider, formatter, and scope extension. Add overrides and prototype roles before calling PushDownAutomatonIRCreate.
 */
-func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
+func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole, TNodeKind comparable](
 	provider ScopeProvider[TToken],
 	formatter TokenFormatter[TToken],
 	scopeExtension string,
-) *PushDownAutomatonIRConfiguration[TToken, TTokenRole] {
-	return &PushDownAutomatonIRConfiguration[TToken, TTokenRole]{
+) *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind] {
+	return &PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]{
 		scopeProvider:        provider,
 		formatter:            formatter,
 		scopeExtension:       scopeExtension,
 		overrides:            make(map[TToken]TokenOverrideFunc),
 		prototypeTokenRoles:  make([]TTokenRole, 0),
-		nestOverrideHandlers: make([]nestOverrideHandler[TToken], 0),
+		nestOverrideHandlers: make([]nestOverrideHandler[TToken, TNodeKind], 0),
 		nodeOverrides:        make(map[syntaxa.GrammarLabel]OverrideConfig[TToken]),
 	}
 }
@@ -245,15 +245,15 @@ func PushDownAutomatonIRConfigurationCreate[TToken, TTokenRole comparable](
 /*
 AddOverride registers a token override. When the IR encounters this token, it calls fn to obtain the main rule and optional extra states instead of the default single-rule state.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddOverride(token TToken, fn TokenOverrideFunc) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddOverride(token TToken, fn TokenOverrideFunc) {
 	c.overrides[token] = fn
 }
 
 /*
 AddNestOverride registers a nest override for the given rule ID. The nest is identified by nest.OwnerRule == ruleID.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(ruleID syntaxa.GrammarLabel, fn NestOverrideFunc[TToken]) {
-	c.AddNestOverrideByPredicate(func(nest *syntaxa.NestSpec[TToken]) bool {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddNestOverride(ruleID syntaxa.GrammarLabel, fn NestOverrideFunc[TToken]) {
+	c.AddNestOverrideByPredicate(func(nest *syntaxa.NestSpec[TToken, TNodeKind]) bool {
 		return nest.OwnerRule == ruleID
 	}, fn)
 }
@@ -261,32 +261,32 @@ func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverride(r
 /*
 AddNestOverrideByPredicate registers a nest override for nests matching pred. Use when identification is not by OwnerRule alone.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNestOverrideByPredicate(pred NestOverridePredicate[TToken], fn NestOverrideFunc[TToken]) {
-	c.nestOverrideHandlers = append(c.nestOverrideHandlers, nestOverrideHandler[TToken]{pred: pred, fn: fn})
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddNestOverrideByPredicate(pred NestOverridePredicate[TToken, TNodeKind], fn NestOverrideFunc[TToken]) {
+	c.nestOverrideHandlers = append(c.nestOverrideHandlers, nestOverrideHandler[TToken, TNodeKind]{pred: pred, fn: fn})
 }
 
 /*
 AddNodeOverride attaches scope and/or meta-scope to a grammar node by GrammarLabel. Node must be a GToken (scope) or GConcat (meta-scope) for the override to apply.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeOverride(nodeID syntaxa.GrammarLabel, config OverrideConfig[TToken]) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddNodeOverride(nodeID syntaxa.GrammarLabel, config OverrideConfig[TToken]) {
 	c.nodeOverrides[nodeID] = config
 }
 
 /*
 AddNodeScopeOverride is a convenience for AddNodeOverride with only Scope set. Use for token nodes that need a custom scope.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddNodeScopeOverride(nodeID syntaxa.GrammarLabel, scopes ...string) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddNodeScopeOverride(nodeID syntaxa.GrammarLabel, scopes ...string) {
 	c.AddNodeOverride(nodeID, OverrideConfig[TToken]{Scopes: scopes})
 }
 
 /*
 AddPrototypeTokenRoles marks tokens with the given roles as prototype contexts: they are included in the root prototype state so they can be entered from the main context.
 */
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddPrototypeTokenRoles(tokenRoles ...TTokenRole) {
 	c.prototypeTokenRoles = append(c.prototypeTokenRoles, tokenRoles...)
 }
 
-func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole]) AddConditionalNodeScopeOverride(nodeID syntaxa.GrammarLabel, token TToken, scopes ...string) {
+func (c *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]) AddConditionalNodeScopeOverride(nodeID syntaxa.GrammarLabel, token TToken, scopes ...string) {
 	oc := c.nodeOverrides[nodeID]
 	if oc.TokenScopes == nil {
 		oc.TokenScopes = make(map[TToken][]string)
@@ -316,7 +316,7 @@ editorIRRole returns the IR role for a grammar node. Handles every known Grammar
 unknown kinds (e.g. a new kind added in syntaxa before editor is updated) return EditorIRRoleSegment
 so analysis-driven includes and lookahead still apply.
 */
-func editorIRRole[TToken comparable](node *syntaxa.Grammar[TToken]) EditorIRRole {
+func editorIRRole[TToken, TNodeKind comparable](node *syntaxa.Grammar[TToken, TNodeKind]) EditorIRRole {
 	if node == nil {
 		return EditorIRRoleEpsilon
 	}
@@ -342,9 +342,9 @@ validateNodeOverrideLabels ensures every node override label exists in the gramm
 is registered for a label that never appears in nodesByGrammarLabel, the build fails with a clear
 error so that "override for a node that is never added" cannot slip through.
 */
-func validateNodeOverrideLabels[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	nodesByGrammarLabel map[syntaxa.GrammarLabel][]*syntaxa.Grammar[TToken],
+func validateNodeOverrideLabels[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
+	nodesByGrammarLabel map[syntaxa.GrammarLabel][]*syntaxa.Grammar[TToken, TNodeKind],
 ) {
 	var missing []string
 	for label := range config.nodeOverrides {
@@ -377,7 +377,7 @@ PushDownAutomatonIRCreate builds the push-down automaton IR from the given confi
 It builds base states from tokens and delimited rules, injects node overrides and construct states from the grammar, injects nest states and sequence triggers, adds the prototype and main states, and returns the complete IR. grammarPackage.Analysis and grammarPackage.NodesByGrammarLabel must be populated (use syntaxa.ProducePackage).
 */
 func PushDownAutomatonIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
 	grammarPackage syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 ) *PushDownAutomatonIR {
@@ -474,8 +474,8 @@ func extractDelimitedRules[TToken, TTokenRole comparable](
 	return out
 }
 
-func buildBaseStates[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func buildBaseStates[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	tokensInUse []TToken,
 	tokenPatternMap map[TToken]Pattern,
 	tokenPriorityMap map[TToken]int,
@@ -498,8 +498,8 @@ func buildBaseStates[TToken, TTokenRole comparable](
 	return allStates, prototypeIncludes
 }
 
-func buildSingleBaseState[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func buildSingleBaseState[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	token TToken,
 	tokenPatternMap map[TToken]Pattern,
 	tokenPriorityMap map[TToken]int,
@@ -561,9 +561,9 @@ func buildTokenOverrideContext(id StateID, label string, originalPattern Pattern
 
 // ------------------------------------------------------------------ NEST COMPILER
 
-func tryApplyNestOverride[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	nest syntaxa.NestSpec[TToken],
+func tryApplyNestOverride[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
+	nest syntaxa.NestSpec[TToken, TNodeKind],
 	nestLabel string,
 	tokenPatternMap map[TToken]Pattern,
 ) ([]State, StateID, bool) {
@@ -584,9 +584,9 @@ func tryApplyNestOverride[TToken, TTokenRole comparable](
 	return nil, 0, false
 }
 
-func buildExpectState[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	nest syntaxa.NestSpec[TToken],
+func buildExpectState[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
+	nest syntaxa.NestSpec[TToken, TNodeKind],
 	nestLabel string,
 	tokenPatternMap map[TToken]Pattern,
 	expectStateID StateID,
@@ -628,11 +628,11 @@ func buildExpectState[TToken, TTokenRole comparable](
 	}
 }
 
-func collectExpectStateIncludes[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func collectExpectStateIncludes[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	root *syntaxa.Grammar[TToken],
+	root *syntaxa.Grammar[TToken, TNodeKind],
 	nestID syntaxa.GrammarLabel,
 ) includeAnalysis[TToken] {
 	out := includeAnalysis[TToken]{
@@ -642,7 +642,7 @@ func collectExpectStateIncludes[TToken, TTokenRole comparable](
 		return out
 	}
 
-	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken, TNodeKind]) (skip, stop bool) {
 		if n.Kind != syntaxa.GConcat || len(n.Children) < 2 {
 			return false, false
 		}
@@ -692,8 +692,8 @@ func mutateStateAction(allStates []State, targetStateID StateID, action RuleActi
 // and constructChainCtx. One env is shared for the run; one chain context per GConcat.
 
 // constructBuildEnv holds shared context for the construct-state pipeline (config, plan, analysis, token patterns, token priorities).
-type constructBuildEnv[TToken, TTokenRole comparable] struct {
-	Config           *PushDownAutomatonIRConfiguration[TToken, TTokenRole]
+type constructBuildEnv[TToken, TTokenRole, TNodeKind comparable] struct {
+	Config           *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind]
 	Plan             *IRPlan[TToken]
 	Analysis         *syntaxa.GrammarAnalysis[TToken]
 	TokenPatternMap  map[TToken]Pattern
@@ -703,9 +703,9 @@ type constructBuildEnv[TToken, TTokenRole comparable] struct {
 }
 
 // constructChainCtx holds context for building one construct state chain (one GConcat). Derived fields are set by buildConstructStateChain.
-type constructChainCtx[TToken, TTokenRole comparable] struct {
-	Env                 *constructBuildEnv[TToken, TTokenRole]
-	ConcatNode          *syntaxa.Grammar[TToken]
+type constructChainCtx[TToken, TTokenRole, TNodeKind comparable] struct {
+	Env                 *constructBuildEnv[TToken, TTokenRole, TNodeKind]
+	ConcatNode          *syntaxa.Grammar[TToken, TNodeKind]
 	MetaScope           string
 	InheritedSyncTokens []TToken
 	IsRepeating         bool
@@ -722,9 +722,9 @@ func nodeConstructEntryStateID(concatID syntaxa.GrammarLabel) StateID {
 	return StateID(produceStateID(fmt.Sprintf("node_construct_%s", sanitizeContextName(string(concatID)))))
 }
 
-func buildConstructStateChain[TToken, TTokenRole comparable](
-	env *constructBuildEnv[TToken, TTokenRole],
-	concatNode *syntaxa.Grammar[TToken],
+func buildConstructStateChain[TToken, TTokenRole, TNodeKind comparable](
+	env *constructBuildEnv[TToken, TTokenRole, TNodeKind],
+	concatNode *syntaxa.Grammar[TToken, TNodeKind],
 	metaScope string,
 	inheritedSyncTokens []TToken,
 	isRepeating bool,
@@ -735,7 +735,7 @@ func buildConstructStateChain[TToken, TTokenRole comparable](
 
 	currentSyncTokens := dedupeSyncTokens(append(append([]TToken(nil), inheritedSyncTokens...), concatNode.RecoveryTokens...))
 
-	chainCtx := &constructChainCtx[TToken, TTokenRole]{
+	chainCtx := &constructChainCtx[TToken, TTokenRole, TNodeKind]{
 		Env:                 env,
 		ConcatNode:          concatNode,
 		MetaScope:           metaScope,
@@ -817,7 +817,7 @@ func buildRecoveryState[TToken comparable](
 	}
 }
 
-func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainCtx[TToken, TTokenRole], index int) State {
+func buildConstructStep[TToken, TTokenRole, TNodeKind comparable](chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind], index int) State {
 	child := chainCtx.ConcatNode.Children[index]
 	baseLabel := chainCtx.BaseLabel
 	stepCount := chainCtx.StepCount
@@ -868,9 +868,9 @@ func buildConstructStep[TToken, TTokenRole comparable](chainCtx *constructChainC
 	return st
 }
 
-func handleNestConstructStep[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
-	child *syntaxa.Grammar[TToken],
+func handleNestConstructStep[TToken, TTokenRole, TNodeKind comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind],
+	child *syntaxa.Grammar[TToken, TNodeKind],
 	index int,
 	lbl string,
 	includes []StateID,
@@ -906,9 +906,9 @@ func handleNestConstructStep[TToken, TTokenRole comparable](
 	return []StateRule{pushRule, advanceRule}, includes
 }
 
-func handleTokenConstructStep[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
-	child *syntaxa.Grammar[TToken],
+func handleTokenConstructStep[TToken, TTokenRole, TNodeKind comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind],
+	child *syntaxa.Grammar[TToken, TNodeKind],
 	index int,
 	lbl string,
 	includes []StateID,
@@ -923,9 +923,9 @@ func handleTokenConstructStep[TToken, TTokenRole comparable](
 	return generateRulesForNode(env.Config, child, env.TokenPatternMap, env.TokenPriorityMap, nextID, lbl, action, laSuffix), nil
 }
 
-func handleSegmentConstructStep[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
-	child *syntaxa.Grammar[TToken],
+func handleSegmentConstructStep[TToken, TTokenRole, TNodeKind comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind],
+	child *syntaxa.Grammar[TToken, TNodeKind],
 	index int,
 	lbl string,
 	includes []StateID,
@@ -941,9 +941,9 @@ func handleSegmentConstructStep[TToken, TTokenRole comparable](
 	return buildIntermediateSegmentRules(chainCtx, child, index, action, nextID, includes)
 }
 
-func buildIntermediateSegmentRules[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
-	child *syntaxa.Grammar[TToken],
+func buildIntermediateSegmentRules[TToken, TTokenRole, TNodeKind comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind],
+	child *syntaxa.Grammar[TToken, TNodeKind],
 	index int,
 	action RuleAction,
 	nextID StateID,
@@ -960,9 +960,9 @@ func buildIntermediateSegmentRules[TToken, TTokenRole comparable](
 	return rules, includes
 }
 
-func buildTerminalSegmentRules[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
-	child *syntaxa.Grammar[TToken],
+func buildTerminalSegmentRules[TToken, TTokenRole, TNodeKind comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind],
+	child *syntaxa.Grammar[TToken, TNodeKind],
 	lbl string,
 	action RuleAction,
 	nextID StateID,
@@ -982,12 +982,12 @@ func buildTerminalSegmentRules[TToken, TTokenRole comparable](
 	return rules
 }
 
-func analyzeSegmentSemantics[TToken comparable](node *syntaxa.Grammar[TToken]) (inRepeat, isOptional bool) {
+func analyzeSegmentSemantics[TToken, TNodeKind comparable](node *syntaxa.Grammar[TToken, TNodeKind]) (inRepeat, isOptional bool) {
 	if node == nil {
 		return false, false
 	}
 
-	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken, TNodeKind]) (skip, stop bool) {
 		if n.Kind == syntaxa.GRepeat {
 			inRepeat = true
 			isOptional = true
@@ -1023,8 +1023,8 @@ func isTerminalStep(index, stepCount int) bool {
 	return index+1 >= stepCount
 }
 
-func buildLookaheadRules[TToken, TTokenRole comparable](
-	chainCtx *constructChainCtx[TToken, TTokenRole],
+func buildLookaheadRules[TToken, TTokenRole, TNodeKind comparable](
+	chainCtx *constructChainCtx[TToken, TTokenRole, TNodeKind],
 	index int,
 	action RuleAction,
 	nextID StateID,
@@ -1083,10 +1083,10 @@ func baseLabelForTransition(grammarID syntaxa.GrammarLabel) string {
 	return fmt.Sprintf("node_construct_%s", sanitizeContextName(string(grammarID)))
 }
 
-func buildIncludesForNode[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func buildIncludesForNode[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	node *syntaxa.Grammar[TToken],
+	node *syntaxa.Grammar[TToken, TNodeKind],
 	tokensInUse []TToken,
 ) []StateID {
 	validTokens, overrideIDs, triggerIDs := extractIncludes(config, nil, analysis, node, false)
@@ -1104,13 +1104,13 @@ func buildIncludesForNode[TToken, TTokenRole comparable](
 	return dedupeStateIDs(includes)
 }
 
-func injectPlannedNodeStates[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func injectPlannedNodeStates[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	nodesByGrammarLabel map[syntaxa.GrammarLabel][]*syntaxa.Grammar[TToken],
+	nodesByGrammarLabel map[syntaxa.GrammarLabel][]*syntaxa.Grammar[TToken, TNodeKind],
 	allStates []State,
-	grammarNode *syntaxa.Grammar[TToken],
+	grammarNode *syntaxa.Grammar[TToken, TNodeKind],
 	tokenPatternMap map[TToken]Pattern,
 	tokenPriorityMap map[TToken]int,
 	nestBodyRegistry map[syntaxa.GrammarLabel]StateID,
@@ -1170,7 +1170,7 @@ func injectPlannedNodeStates[TToken, TTokenRole comparable](
 		})
 	}
 
-	env := &constructBuildEnv[TToken, TTokenRole]{
+	env := &constructBuildEnv[TToken, TTokenRole, TNodeKind]{
 		Config:           config,
 		Plan:             plan,
 		Analysis:         analysis,
@@ -1189,9 +1189,9 @@ type constructTraverseCtx[TToken comparable] struct {
 	InRepeat   bool
 }
 
-func extractConstructStates[TToken, TTokenRole comparable](
-	env *constructBuildEnv[TToken, TTokenRole],
-	root *syntaxa.Grammar[TToken],
+func extractConstructStates[TToken, TTokenRole, TNodeKind comparable](
+	env *constructBuildEnv[TToken, TTokenRole, TNodeKind],
+	root *syntaxa.Grammar[TToken, TNodeKind],
 ) []State {
 	if root == nil {
 		return nil
@@ -1201,7 +1201,7 @@ func extractConstructStates[TToken, TTokenRole comparable](
 	plan := env.Plan
 	var states []State
 	initial := constructTraverseCtx[TToken]{SyncTokens: nil, InRepeat: false}
-	_ = syntaxa.GrammarWalkPreWithContext(root, initial, func(node *syntaxa.Grammar[TToken], ctx constructTraverseCtx[TToken]) (constructTraverseCtx[TToken], bool, bool) {
+	_ = syntaxa.GrammarWalkPreWithContext(root, initial, func(node *syntaxa.Grammar[TToken, TNodeKind], ctx constructTraverseCtx[TToken]) (constructTraverseCtx[TToken], bool, bool) {
 		currentInRepeat := ctx.InRepeat
 		switch node.Kind {
 		case syntaxa.GRepeat:
@@ -1242,8 +1242,8 @@ func extractConstructStates[TToken, TTokenRole comparable](
 
 // ------------------------------------------------------------------ SEQUENCE TRIGGER GENERATION
 
-func injectPlannedSequenceTriggers[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func injectPlannedSequenceTriggers[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	allStates []State,
 	nestRegistry map[syntaxa.GrammarLabel]StateID,
@@ -1289,11 +1289,11 @@ type includeAnalysis[TToken comparable] struct {
 	DirectNestIDs    []StateID
 }
 
-func extractIncludes[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func extractIncludes[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	contextRoot *syntaxa.Grammar[TToken],
+	contextRoot *syntaxa.Grammar[TToken, TNodeKind],
 	isRoot bool,
 ) (map[TToken]struct{}, []StateID, []StateID) {
 	a := traverseIncludes(config, plan, analysis, contextRoot, isRoot)
@@ -1306,11 +1306,11 @@ func extractIncludes[TToken, TTokenRole comparable](
 	return a.ValidTokens, overrides, a.TriggerIDs
 }
 
-func traverseIncludes[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func traverseIncludes[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	root *syntaxa.Grammar[TToken],
+	root *syntaxa.Grammar[TToken, TNodeKind],
 	isRoot bool,
 ) includeAnalysis[TToken] {
 	out := includeAnalysis[TToken]{
@@ -1331,7 +1331,7 @@ func traverseIncludes[TToken, TTokenRole comparable](
 	seenConstructs := make(map[StateID]bool)
 	seenDirectNests := make(map[StateID]bool)
 
-	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken, TNodeKind]) (skip, stop bool) {
 		// 1. Semantic Discovery
 		if analysis != nil && n != nil && n.NodePath != nil {
 			first := syntaxa.GrammarAnalysisFirst(analysis, n)
@@ -1499,13 +1499,13 @@ func sanitizeContextName(name string) string {
 	return sb.String()
 }
 
-func tokenToStateID[TToken, TTokenRole comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole], tok TToken) StateID {
+func tokenToStateID[TToken, TTokenRole, TNodeKind comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind], tok TToken) StateID {
 	return StateID(produceStateID(sanitizeContextName(config.formatter(tok))))
 }
 
 // ------------------------------------------------------------------ SEQUENCE DFA COMPILATION
 
-func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole], node *syntaxa.Grammar[TToken]) bool {
+func hasNodeOverrides[TToken, TTokenRole, TNodeKind comparable](config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind], node *syntaxa.Grammar[TToken, TNodeKind]) bool {
 	if node == nil || node.Kind != syntaxa.GConcat {
 		return false
 	}
@@ -1520,7 +1520,7 @@ func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIR
 		if child == nil {
 			continue
 		}
-		_ = child.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+		_ = child.WalkPre(func(n *syntaxa.Grammar[TToken, TNodeKind]) (skip, stop bool) {
 			if n.Kind == syntaxa.GNest || n.Kind == syntaxa.GConcat {
 				return true, false
 			}
@@ -1540,9 +1540,9 @@ func hasNodeOverrides[TToken, TTokenRole comparable](config *PushDownAutomatonIR
 	return false
 }
 
-func resolveScopeForTokenNode[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	node *syntaxa.Grammar[TToken],
+func resolveScopeForTokenNode[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
+	node *syntaxa.Grammar[TToken, TNodeKind],
 ) []string {
 	scope := []string{config.scopeProvider(node.Token)}
 	if oc, ok := config.nodeOverrides[node.GrammarLabel]; ok {
@@ -1555,9 +1555,9 @@ func resolveScopeForTokenNode[TToken, TTokenRole comparable](
 	return scope
 }
 
-func generateRulesForNode[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
-	node *syntaxa.Grammar[TToken],
+func generateRulesForNode[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
+	node *syntaxa.Grammar[TToken, TNodeKind],
 	tokenPatternMap map[TToken]Pattern,
 	tokenPriorityMap map[TToken]int,
 	nextID StateID,
@@ -1570,7 +1570,7 @@ func generateRulesForNode[TToken, TTokenRole comparable](
 	}
 
 	var rules []StateRule
-	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+	_ = node.WalkPre(func(n *syntaxa.Grammar[TToken, TNodeKind]) (skip, stop bool) {
 		switch editorIRRole(n) {
 		case EditorIRRoleToken:
 			if _, hasTokOverride := config.overrides[n.Token]; hasTokOverride {
@@ -1631,10 +1631,10 @@ type seqTriggerSpec[TToken comparable] struct {
 /*
 BuildIRPlan walks the grammar tree and builds an IRPlan: ConstructConacts (GConcat nodes with node overrides), OverrideTokens (GToken nodes with scope override), and SeqTriggers (token–nest pairs from sequence nodes via GrammarSequenceTokenNestPairs). config.nodeOverrides and config.overrides drive which nodes are considered. root must be the entry grammar (e.g. grammarPackage.Rules[grammarPackage.EntryRule]). analysis may be nil; when set, sequence triggers use First(prev) for non-GToken prev.
 */
-func BuildIRPlan[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func BuildIRPlan[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	root *syntaxa.Grammar[TToken],
+	root *syntaxa.Grammar[TToken, TNodeKind],
 ) *IRPlan[TToken] {
 	plan := &IRPlan[TToken]{
 		ConstructConacts: make(map[syntaxa.GrammarLabel]struct{}),
@@ -1646,7 +1646,7 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 		return plan
 	}
 
-	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken]) (skip, stop bool) {
+	_ = root.WalkPre(func(n *syntaxa.Grammar[TToken, TNodeKind]) (skip, stop bool) {
 		if n.Kind == syntaxa.GConcat {
 			isGlobalRoot := (n == root)
 			isConstruct := hasNodeOverrides(config, n) || (!isGlobalRoot && requiresStructuralChain(n))
@@ -1677,11 +1677,11 @@ func BuildIRPlan[TToken, TTokenRole comparable](
 	})
 	return plan
 }
-func buildBodyStatePlanned[TToken, TTokenRole comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+func buildBodyStatePlanned[TToken, TTokenRole, TNodeKind comparable](
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	nest syntaxa.NestSpec[TToken],
+	nest syntaxa.NestSpec[TToken, TNodeKind],
 	nestLabel string,
 	tokenPatternMap map[TToken]Pattern,
 	bodyStateID StateID,
@@ -1724,7 +1724,7 @@ func buildBodyStatePlanned[TToken, TTokenRole comparable](
 }
 
 func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	allStates []State,
 	grammarPackage syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
@@ -1793,13 +1793,13 @@ func injectNestStatesPlanned[TObservation cmp.Ordered, TToken, TTokenRole, TNode
 	return allStates, nestRegistry, nestBodyRegistry
 }
 
-func injectMainStatePlanned[TToken, TTokenRole comparable](
+func injectMainStatePlanned[TToken, TTokenRole, TNodeKind comparable](
 	allStates []State,
 	scopeExtension string,
-	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole],
+	config *PushDownAutomatonIRConfiguration[TToken, TTokenRole, TNodeKind],
 	plan *IRPlan[TToken],
 	analysis *syntaxa.GrammarAnalysis[TToken],
-	entryNode *syntaxa.Grammar[TToken],
+	entryNode *syntaxa.Grammar[TToken, TNodeKind],
 ) []State {
 	_, overrideIDs, triggerIDs := extractIncludes(config, plan, analysis, entryNode, true)
 
@@ -1952,7 +1952,7 @@ func appendStrictSequenceBailout(rules []StateRule, stateLabel string, recoveryS
 	return append(rules, bailoutRule)
 }
 
-func requiresStructuralChain[TToken comparable](node *syntaxa.Grammar[TToken]) bool {
+func requiresStructuralChain[TToken, TNodeKind comparable](node *syntaxa.Grammar[TToken, TNodeKind]) bool {
 	if node == nil || node.Kind != syntaxa.GConcat {
 		return false
 	}

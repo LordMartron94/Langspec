@@ -72,6 +72,13 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRuleset(
 	return l
 }
 
+/* Ruleset returns the ruleset for the given lexer state. Returns a zero ruleset if the state is not registered. */
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) Ruleset(
+	state TLexerState,
+) lexarch.LexingRuleset[TObservation, TToken, TTokenRole] {
+	return l.rulesets[state]
+}
+
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithDFADebugFormatter(
 	f *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]],
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
@@ -295,6 +302,8 @@ type LangParserConfiguration[
 
 	maxLexerAutomatonMemory memcore.MemoryUnitBytes
 
+	nfaToDFAPipelineMinTemp, nfaToDFAPipelineMaxTemp memcore.MemoryUnitBytes
+
 	streaming StreamingConfig
 
 	forceValidation bool
@@ -307,6 +316,7 @@ with safe and performant defaults.
 Defaults:
 
   - Lexer automaton memory limit: 1 GB
+  - NFA-to-DFA pipeline temp memory: min 1 KB, max 1 GB
   - Streaming configuration: DefaultStreamingConfig()
 
 The caller is expected to tune memory and streaming parameters
@@ -326,6 +336,8 @@ func LangParserConfigurationCreate[
 		spec:                    spec,
 		scratchAllocationFn:     scratch,
 		maxLexerAutomatonMemory: 1 * memcore.GigaByte,
+		nfaToDFAPipelineMinTemp: 1 * memcore.KiloByte,
+		nfaToDFAPipelineMaxTemp: 1 * memcore.GigaByte,
 		streaming:               DefaultStreamingConfig(),
 		forceValidation:         false,
 	}
@@ -378,6 +390,34 @@ func (c *LangParserConfiguration[
 	return c
 }
 
+/*
+WithNFAToDFAPipelineTempMemory configures the temporary allocator bounds used during
+NFA-to-DFA conversion and DFA minimization. Subset construction and Hopcroft minimization
+use a temporary allocator; if its use exceeds maxTemp, conversion panics.
+
+Typical values: min 1 KB–1 MB, max hundreds of MB to 1 GB depending on pattern complexity.
+*/
+func (c *LangParserConfiguration[
+	TObservation,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind,
+]) WithNFAToDFAPipelineTempMemory(
+	minTemp, maxTemp memcore.MemoryUnitBytes,
+) *LangParserConfiguration[
+	TObservation,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind,
+] {
+	c.nfaToDFAPipelineMinTemp = minTemp
+	c.nfaToDFAPipelineMaxTemp = maxTemp
+	return c
+}
+
+/*
 /*
 WithStreamingConfig replaces the entire streaming configuration block.
 
@@ -567,10 +607,12 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 LangParserLexerCreateFromSpec creates a lexer according to the spec.
 
 This is useful if clients want to delegate lexing creation without relying on the rest of LSpec's LangParser.
+diagnosticFn is optional (nil disables); when set it is invoked per ruleset with NFA build stats before NFA-to-DFA.
 */
 func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole comparable](
 	scratchAllocationFn memarch.AllocationFn,
 	maxLexerAutomatonMemory memcore.MemoryUnitBytes,
+	nfaToDFAPipelineMinTemp, nfaToDFAPipelineMaxTemp memcore.MemoryUnitBytes,
 	spec *LexerSpec[TObservation, TToken, TTokenRole, TLexerState],
 ) *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole] {
 	return lexarch.LexerCreate(
@@ -578,6 +620,8 @@ func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken
 		spec.eofToken,
 		scratchAllocationFn,
 		maxLexerAutomatonMemory,
+		nfaToDFAPipelineMinTemp,
+		nfaToDFAPipelineMaxTemp,
 		lexarch.ObservationCTXCreate(
 			spec.observationFormatter,
 			spec.observationDomain,
@@ -591,7 +635,7 @@ func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken
 func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	config *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind] {
-	lexer := LangParserLexerCreateFromSpec(config.scratchAllocationFn, config.maxLexerAutomatonMemory, config.spec.Lexer)
+	lexer := LangParserLexerCreateFromSpec(config.scratchAllocationFn, config.maxLexerAutomatonMemory, config.nfaToDFAPipelineMinTemp, config.nfaToDFAPipelineMaxTemp, config.spec.Lexer)
 
 	parser := syntaxa.SyntaxaParserCreate(
 		config.spec.Parser.grammarPackage,

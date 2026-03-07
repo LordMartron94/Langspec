@@ -87,6 +87,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 			return token
 		},
 	)
+	lexerSpec.WithCompilationMode(lexarch.Glushkov)
 
 	lspecCompiler := compiler{
 		factory: pattern.RegulaASTFactoryCreate(domain),
@@ -277,6 +278,10 @@ func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.Regula
 	switch kind {
 	case NodeCharLiteral:
 		return c.charLiteralToPattern(node)
+	case NodeStringLiteral:
+		return c.stringLiteralToPattern(node)
+	case NodePatternRegEx:
+		return c.regexLiteralToPattern(node)
 	case NodeVarRef:
 		return varRefToPattern(ctx, node)
 	case NodePatternConcat:
@@ -299,6 +304,8 @@ func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.Regula
 		return ctx.c.negationToPattern(node)
 	case NodePatternAny:
 		return c.factory.NegatedClass()
+	case NodePatternClass:
+		return classToPattern(ctx, node)
 	default:
 		panic(fmt.Errorf("engine error: unsupported pattern kind: '%s'", kind))
 	}
@@ -435,12 +442,30 @@ func (c *compiler) extractNegationRanges(node *Node, out *[]pattern.CharRange[ru
 		*out = append(*out, c.extractCharRange(node))
 	case NodePatternRange:
 		*out = append(*out, c.extractPatternRange(node))
+	case NodePatternClass:
+		c.extractClassRanges(node, out)
 	case NodePatternGroup:
 		c.extractGroupRanges(node, out)
 	case NodePatternAlternation:
 		c.extractAlternationRanges(node, out)
 	default:
 		panic(fmt.Sprintf("semantic error: negation (!) applied to invalid node kind '%s'", kind))
+	}
+}
+
+func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]) {
+	for _, itemNode := range node.Children() {
+		if itemNode.Kind() != NodePatternClassItem {
+			continue
+		}
+
+		if rangeNode := itemNode.FindFirstKind(NodePatternRange); rangeNode != nil {
+			*out = append(*out, c.extractPatternRange(rangeNode))
+		} else if charNode := itemNode.FindFirstKind(NodeCharLiteral); charNode != nil {
+			*out = append(*out, c.extractCharRange(charNode))
+		} else {
+			panic("compiler error: pattern class item must contain either a character literal or a range")
+		}
 	}
 }
 
@@ -488,11 +513,32 @@ func (c *compiler) extractPatternRange(node *Node) pattern.CharRange[rune] {
 	return c.factory.Range(loRunes[0], hiRunes[0])
 }
 
+func classToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
+	var ranges []pattern.CharRange[rune]
+	ctx.c.extractClassRanges(node, &ranges)
+	return ctx.c.factory.Class(ranges...)
+}
+
 // --- ATOMS
 
 func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 	content := nodeFormattedContent(node, ATTRIBUTE_CHAR_LITERAL_VALUE)
 	return c.factory.Literal([]rune(content)...)
+}
+
+func (c *compiler) stringLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
+	content := nodeFormattedContent(node, ATTRIBUTE_LITERAL_STRING_VALUE)
+	return c.factory.Literal([]rune(content)...)
+}
+
+func (c *compiler) regexLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
+	content := nodeFormattedContent(node, ATTRIBUTE_REGEX_LITERAL_VALUE)
+	compiled, err := pattern.RegexToRegula(content, c.factory)
+	if err != nil {
+		panic(fmt.Errorf("compiler error while converting regex to Regula: %w", err))
+	}
+
+	return compiled
 }
 
 func varRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
@@ -666,6 +712,8 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return compileStar(ctx, node)
 	case NodeParseOpEmit:
 		return compileEmit(ctx, node)
+	case NodeParseOpEmitOneOf:
+		return compileEmitOneOf(ctx, node)
 	case NodeParseOpSuppress:
 		return compileVirtual(ctx, node)
 	case NodeParseOpNest:
@@ -757,15 +805,11 @@ func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
 		token := nodeSingleTokenContent(la.FindFirstKind(NodePredictToken))
 		preds = append(preds, prediction{offset, token})
 	}
-
-	return ctx.builder.Rule.Predict(innerRule, func(selectCtx *syntaxa.SelectRuleContext[rune, string, string]) bool {
-		for _, p := range preds {
-			if selectCtx.Peek(p.offset).Token != p.token {
-				return false
-			}
-		}
-		return true
-	})
+	lookaheadSlice := make([]syntaxa.Lookahead[string], len(preds))
+	for i, p := range preds {
+		lookaheadSlice[i] = syntaxa.Lookahead[string]{Offset: p.offset, Expected: p.token}
+	}
+	return ctx.builder.Rule.PredictLookahead(innerRule, lookaheadSlice)
 }
 
 func compileOptional(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -818,6 +862,11 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 		panic("compiler error: emit node missing reference")
 	}
 	targetToken := nodeSingleTokenContent(refNode)
+
+	if ctx.env.Tokens[targetToken] == nil {
+		panic(fmt.Sprintf("semantic error: cannot use node binding (:) on rule reference '%s'. Node binding is only valid for lexical tokens.", targetToken))
+	}
+
 	var label syntaxa.GrammarLabel
 	if ctx.rootLevel {
 		label = ctx.grammarID
@@ -825,6 +874,43 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 		label = grammarSubLabel(ctx.ruleName, "EMIT", ctx.counts)
 	}
 	return ctx.builder.Token.Expect(label, outputNodeKind, targetToken)
+}
+
+func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
+	outputNodeKind := nodeSingleTokenContent(node.FindFirstKind(NodeParseNodeName))
+	groupNode := node.FindFirstKind(NodeParseGroup)
+	if groupNode == nil {
+		panic("compiler error: emit-one-of node missing group")
+	}
+	groupChildren := groupNode.Children()
+	if len(groupChildren) != 1 {
+		panic("compiler error: emit-one-of group must have exactly one expression")
+	}
+	innerExpr := groupChildren[0]
+	flatAlts := flattenNodesByKind(innerExpr, NodeParseAlternation)
+	tokens := make([]string, 0, len(flatAlts))
+	for _, alt := range flatAlts {
+		refNode := alt.FindFirstKind(NodeParseOpRef)
+		if refNode == nil {
+			panic("compiler error: emit-one-of choice alternatives must be token references")
+		}
+		tok := nodeSingleTokenContent(refNode)
+		if ctx.env.Tokens[tok] == nil {
+			panic(fmt.Sprintf("semantic error: emit-one-of token '%s' is not a lexical token", tok))
+		}
+		tokens = append(tokens, tok)
+	}
+	if len(tokens) == 0 {
+		panic("compiler error: emit-one-of choice must have at least one alternative")
+	}
+
+	var label syntaxa.GrammarLabel
+	if ctx.rootLevel {
+		label = ctx.grammarID
+	} else {
+		label = grammarSubLabel(ctx.ruleName, "EMIT_ONE_OF", ctx.counts)
+	}
+	return ctx.builder.Token.ExpectOneOf(label, outputNodeKind, tokens...)
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -1255,6 +1341,10 @@ func checkForEOFLexeme(lexerSection *Node) string {
 }
 
 func nodeSingleTokenContent(node *Node) string {
+	if node == nil {
+		panic("engine error: extraction called on nil node")
+	}
+
 	tks := node.Tokens()
 	if len(tks) != 1 {
 		panic("engine error: single token content extraction requires node to have exactly 1 token")

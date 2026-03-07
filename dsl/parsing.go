@@ -17,7 +17,7 @@ const (
 func buildLangSpecDSLParserSpec(
 	programRule Rule,
 	registry syntaxa.RuleRegistry[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	additionalRules []*syntaxa.Grammar[LangSpecLexerTokenType],
+	additionalRules []*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind],
 ) (
 	*langspec.ParserSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	Rule,

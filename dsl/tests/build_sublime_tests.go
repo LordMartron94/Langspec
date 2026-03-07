@@ -1,7 +1,8 @@
-package editor
+package tests
 
 import (
 	"langspec/dsl"
+	"langspec/dsl/editor"
 	"memcore"
 	"memforge"
 	"testing"
@@ -29,7 +30,7 @@ func TestBuildSublimeSyntaxForDSL(t *testing.T) {
 	compiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(compiler)
 
-	if err := BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile); err != nil {
+	if err := editor.BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile); err != nil {
 		t.Fatalf("Sublime Syntax generation failed with error: %s", err.Error())
 	}
 }

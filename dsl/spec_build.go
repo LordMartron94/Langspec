@@ -33,6 +33,8 @@ const (
 	TokBraceClose
 	TokParenOpen
 	TokParenClose
+	TokBracketOpen
+	TokBracketClose
 	TokSemicolon
 	TokDot
 	TokChainSeparator
@@ -144,6 +146,7 @@ const (
 	NodePatternKeyword
 	NodePatternDefinition
 	NodePatternAny
+	NodePatternRegEx
 	NodePatternDefName
 	NodeVarRef
 	NodeVarRefToken
@@ -162,6 +165,8 @@ const (
 	NodeRepetitionBounds
 	NodeRepetitionMin
 	NodeRepetitionMax
+	NodePatternClass
+	NodePatternClassItem
 
 	NodeLocalVariable
 
@@ -175,6 +180,7 @@ const (
 	NodeParseRuleBody
 	NodeParseOpSuppress
 	NodeParseOpEmit
+	NodeParseOpEmitOneOf
 	NodeParseOpRef
 	NodeParseAlternation
 	NodeParseConcat
@@ -270,6 +276,8 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokBraceClose, "punctuation.section.braces.end", "}", 0},
 		{TokParenOpen, "punctuation.section.parens.begin", "(", 0},
 		{TokParenClose, "punctuation.section.parens.end", ")", 0},
+		{TokBracketOpen, "punctuation.section.brackets.begin", "[", 0},
+		{TokBracketClose, "punctuation.section.brackets.end", "]", 0},
 		{TokComma, "punctuation.separator.comma", ",", 0},
 		{TokPlus, "keyword.operator.plus", "+", 0},
 		{TokNegation, "keyword.operator.negation", "!", 0},
@@ -409,7 +417,6 @@ func (b *dslGrammarBuilder) program() Rule {
 		b.g.rb.Rule.Required(b.lexSection(), "must have lex ruleset"),
 		b.g.rb.Rule.OptionalPrefix(b.prattSection(), TokKWPratt),
 		b.g.rb.Rule.Required(b.parseSection(), "must have parse ruleset"),
-		b.g.expectVirtual(VirtualEOF, TokEOF),
 	)
 }
 
@@ -543,21 +550,45 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 }
 
 func (b *dslGrammarBuilder) patternSegment() Rule {
-	rangeRule := b.g.rb.Rule.Predict(
+	rangeRule := b.g.rb.Rule.PredictLookahead(
 		b.patternRange(),
-		func(ctx *syntaxa.SelectRuleContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]) bool {
-			return ctx.Peek(1).Token == TokRange
-		},
+		[]syntaxa.Lookahead[LangSpecLexerTokenType]{{Offset: 1, Expected: TokRange}},
 	)
 
 	return b.g.ChoiceByNode(NodePatternSegment,
 		b.varRefReference(),
+		b.patternClass(),
 		rangeRule,
 		b.charLiteral(),
 		b.g.expectToken(NodePatternAny, TokDot),
+		b.g.expectToken(NodePatternRegEx, TokRegexLiteral),
+		b.g.expectToken(NodeStringLiteral, TokStringLiteral),
 		b.g.NestByNode(NodePatternGroup, TokParenOpen, TokParenClose,
 			b.g.rb.Rule.Reference("PATTERN EXPR REF", VirtualGrammarIDToGrammarID(VirtualPatternExpression))),
 	)
+}
+
+func (b *dslGrammarBuilder) patternClass() Rule {
+	return b.g.NestByNode(
+		NodePatternClass,
+		TokBracketOpen,
+		TokBracketClose,
+		b.g.TransparentZeroOrMoreByNode(NodePatternClassItem, "LIST", b.patternClassItem()),
+	)
+}
+
+func (b *dslGrammarBuilder) patternClassItem() Rule {
+	rangeRule := b.g.rb.Rule.PredictLookahead(
+		b.patternRange(),
+		[]syntaxa.Lookahead[LangSpecLexerTokenType]{{Offset: 1, Expected: TokRange}},
+	)
+
+	itemChoice := b.g.ChoiceByNode(NodePatternClassItem, rangeRule, b.charLiteral())
+
+	return b.g.sequence(NodePatternClassItem, "").
+		rule(itemChoice).
+		optionalRule(b.g.expectVirtualInRule(NodePatternClassItem, TokComma)).
+		build()
 }
 
 func (b *dslGrammarBuilder) patternRange() Rule {
@@ -890,11 +921,34 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 
 func (b *dslGrammarBuilder) parseSegment() Rule {
 	return b.g.ChoiceByNode(NodeParseSegment,
+		b.emitOneOfMapping(),
 		b.emitMapping(),
 		b.virtualMapping(),
 		b.nestMapping(),
 		b.g.expectToken(NodeParseOpRef, TokIdentifier),
 		b.parseGroup(),
+	)
+}
+
+func (b *dslGrammarBuilder) emitOneOfMapping() Rule {
+	emitOneOf := b.g.sequence(NodeParseOpEmitOneOf, "").
+		expectToken(NodeParseNodeName, TokIdentifier).
+		expectVirtualInRule(TokAssignment).
+		rule(b.g.NestByNode(
+			NodeParseGroup,
+			TokParenOpen,
+			TokParenClose,
+			b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+		)).
+		build()
+
+	return b.g.rb.Rule.PredictLookahead(
+		emitOneOf,
+		[]syntaxa.Lookahead[LangSpecLexerTokenType]{
+			{Offset: 0, Expected: TokIdentifier},
+			{Offset: 1, Expected: TokAssignment},
+			{Offset: 2, Expected: TokParenOpen},
+		},
 	)
 }
 
@@ -905,10 +959,11 @@ func (b *dslGrammarBuilder) emitMapping() Rule {
 		expectToken(NodeParseOpRef, TokIdentifier).
 		build()
 
-	return b.g.rb.Rule.Predict(
+	return b.g.rb.Rule.PredictLookahead(
 		emit,
-		func(ctx *syntaxa.SelectRuleContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]) bool {
-			return ctx.Peek(0).Token == TokIdentifier && ctx.Peek(1).Token == TokAssignment
+		[]syntaxa.Lookahead[LangSpecLexerTokenType]{
+			{Offset: 0, Expected: TokIdentifier},
+			{Offset: 1, Expected: TokAssignment},
 		},
 	)
 }
@@ -1035,7 +1090,6 @@ func buildCharLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAS
 	)
 
 	escapeTrigger := f.Literal('\\')
-
 	escapedChar := f.Class(
 		f.Range('\'', '\''),
 		f.Range('\\', '\\'),
@@ -1044,12 +1098,12 @@ func buildCharLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAS
 		f.Range('t', 't'),
 	)
 
-	escapeSequence := f.Sequence(escapeTrigger, escapedChar)
+	standardEscape := f.Sequence(escapeTrigger, escapedChar)
+	unicodeEscape := buildUnicodeEscapePattern(f)
 
-	charContent := f.AnyOf(normalChar, escapeSequence)
+	charContent := f.AnyOf(normalChar, standardEscape, unicodeEscape)
 
 	quote := f.Literal('\'')
-
 	return f.Sequence(quote, charContent, quote)
 }
 
@@ -1060,6 +1114,7 @@ func buildStringLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.Regula
 		f.Range('\n', '\n'),
 		f.Range('\r', '\r'),
 	)
+
 	escapeTrigger := f.Literal('\\')
 	escapedChar := f.Class(
 		f.Range('"', '"'),
@@ -1068,8 +1123,12 @@ func buildStringLiteralPattern(f *pattern.RegulaASTFactory[rune]) pattern.Regula
 		f.Range('r', 'r'),
 		f.Range('t', 't'),
 	)
-	escapeSequence := f.Sequence(escapeTrigger, escapedChar)
-	body := f.AnyOf(normalChar, escapeSequence).Star()
+
+	standardEscape := f.Sequence(escapeTrigger, escapedChar)
+	unicodeEscape := buildUnicodeEscapePattern(f)
+
+	body := f.AnyOf(normalChar, standardEscape, unicodeEscape).Star()
+
 	quote := f.Literal('"')
 	return f.Sequence(quote, body, quote)
 }
@@ -1097,4 +1156,17 @@ func buildPassThroughEscape(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST
 	anyChar := f.NegatedClass()
 
 	return f.Sequence(escapeTrigger, anyChar)
+}
+
+func buildUnicodeEscapePattern(f *pattern.RegulaASTFactory[rune]) pattern.RegulaAST[rune] {
+	hexDigit := f.Class(
+		f.Range('0', '9'),
+		f.Range('a', 'f'),
+		f.Range('A', 'F'),
+	)
+
+	shortHex := f.Sequence(f.Literal('\\', 'u'), hexDigit.Repeat(4, 4))
+	longHex := f.Sequence(f.Literal('\\', 'U'), hexDigit.Repeat(8, 8))
+
+	return f.AnyOf(shortHex, longHex)
 }

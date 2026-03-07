@@ -13,7 +13,7 @@ import (
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
-	editorIRConfig := langspeceditor.PushDownAutomatonIRConfigurationCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole](
+	editorIRConfig := langspeceditor.PushDownAutomatonIRConfigurationCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](
 		func(t dsl.LangSpecLexerTokenType) string { return scopeMap[t] },
 		dsl.LangSpecLexerTokenType.String,
 		".lspec",

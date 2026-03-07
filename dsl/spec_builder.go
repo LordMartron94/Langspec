@@ -23,10 +23,10 @@ except the root, for use as ProducePackage additionalRules (disconnected sub-gra
 */
 func additionalRulesFromBuilder(
 	rb *rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	root *syntaxa.Grammar[LangSpecLexerTokenType],
-) []*syntaxa.Grammar[LangSpecLexerTokenType] {
+	root *syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind],
+) []*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind] {
 	defined := rb.GetDefinedGrammars()
-	out := make([]*syntaxa.Grammar[LangSpecLexerTokenType], 0, len(defined))
+	out := make([]*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind], 0, len(defined))
 	for _, g := range defined {
 		if g != root {
 			out = append(out, g)

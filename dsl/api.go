@@ -180,7 +180,7 @@ func LangSpecCompilerCompile(
 	}
 
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		renderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors)
+		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors)
 		err = fmt.Errorf(
 			"langspec parse failed with %d syntax errors",
 			len(syntaxErrors.Errors),
@@ -214,15 +214,17 @@ func LangSpecCompilerCompile(
 		}
 	}
 
-	// compiled := compileTree(compiler, result.RootNode)
-	// result.LanguageName = compiled.dslName
-	// result.LanguageVersion = compiled.dslVersion
+	if err == nil {
+		compiled := compileTree(compiler, result.RootNode)
+		result.LanguageName = compiled.dslName
+		result.LanguageVersion = compiled.dslVersion
 
-	// result.CompiledLexerSpec = compiled.lexerSpec
-	// result.CompiledParserSpec = compiled.parserSpec
-	// result.CompiledGrammarPackage = compiled.grammarPackage
+		result.CompiledLexerSpec = compiled.lexerSpec
+		result.CompiledParserSpec = compiled.parserSpec
+		result.CompiledGrammarPackage = compiled.grammarPackage
 
-	// result.EOFToken = compiled.eofToken
+		result.EOFToken = compiled.eofToken
+	}
 
 	return result, err
 }
@@ -250,9 +252,10 @@ func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string)
 
 func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	grammarDump := compiler.programRule.GetGrammar().DebugDump(
-		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType]{
-			FormatKind:  syntaxa.GrammarKind.String,
-			FormatToken: LangSpecLexerTokenType.String,
+		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+			FormatKind:           syntaxa.GrammarKind.String,
+			FormatToken:          LangSpecLexerTokenType.String,
+			FormatOutputNodeKind: LangSpecParserNodeKind.String,
 			FormatRange: func(min int, max *int) string {
 				if max == nil {
 					return fmt.Sprintf("[%d..∞]", min)
@@ -270,7 +273,7 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 		FormatToken: LangSpecLexerTokenType.String,
 	})
 
-	renderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump)
+	RenderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump)
 }
 
 func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
@@ -323,7 +326,7 @@ func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCom
 			},
 		)
 
-		renderLSTDump(compiler.diagnosticWriter, lstDump)
+		RenderLSTDump(compiler.diagnosticWriter, lstDump)
 	}
 }
 
