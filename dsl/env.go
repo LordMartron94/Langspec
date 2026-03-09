@@ -1,16 +1,12 @@
 package dsl
 
-import (
-	"strings"
-)
-
 // ------------------------------------------------------------- SEMANTIC ENVIRONMENT
 
 // SemanticSymbolKind identifies which symbol table a duplicate belongs to.
 type SemanticSymbolKind uint8
 
 const (
-	SymbolKindToken   SemanticSymbolKind = iota
+	SymbolKindToken SemanticSymbolKind = iota
 	SymbolKindPattern
 	SymbolKindRule
 	SymbolKindPratt
@@ -134,14 +130,6 @@ func buildEnvPratt(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 	}
 }
 
-// VarRefTargetName returns the target identifier of a variable reference node (e.g. $foo -> "foo").
-// Canonical helper for both validation and compilation so resolution is consistent.
-func VarRefTargetName(varRef *Node) string {
-	if targetNode := varRef.FindFirstKind(NodeVarRefTarget); targetNode != nil && len(targetNode.Tokens()) > 0 {
-		return strings.TrimSpace(string(targetNode.Tokens()[0].Raw))
-	}
-	if tokens := varRef.Tokens(); len(tokens) >= 2 {
-		return strings.TrimSpace(string(tokens[1].Raw))
-	}
-	return ""
+func PatternRefTargetName(patternRef *Node) string {
+	return string(patternRef.Tokens()[0].Raw)
 }

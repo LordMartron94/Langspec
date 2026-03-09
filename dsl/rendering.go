@@ -17,6 +17,7 @@ func RenderSyntaxErrorsWithContext(
 	w io.Writer,
 	source []rune,
 	errs *syntaxa.SyntaxErrors[rune],
+	advanceFn lexarch.ColumnAdvanceFn[rune],
 ) {
 	if w == nil || errs == nil || len(errs.Errors) == 0 {
 		return
@@ -27,15 +28,15 @@ func RenderSyntaxErrorsWithContext(
 	fmt.Fprintln(w, "\n===== SYNTAX ERRORS =====")
 
 	for _, e := range errs.Errors {
-		renderSingleSyntaxError(w, e, lines)
+		renderSingleSyntaxError(w, e, lines, advanceFn)
 	}
 
 	fmt.Fprintln(w, "========================")
 }
 
-func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], lines [][]rune) {
+func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], lines [][]rune, advanceFn lexarch.ColumnAdvanceFn[rune]) {
 	printSyntaxErrorHeader(w, e)
-	renderDiagnosticContext(w, lines, e.StartLine, e.StartColumn, e.EndLine, e.EndColumn)
+	renderDiagnosticContext(w, lines, e.StartLine, e.StartColumn, e.EndLine, e.EndColumn, advanceFn)
 }
 
 func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError[rune]) {
@@ -54,6 +55,7 @@ func renderValidationEntries(
 	w io.Writer,
 	source []rune,
 	entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
+	advanceFn lexarch.ColumnAdvanceFn[rune],
 ) {
 	if w == nil || entries == nil || len(entries.Results) == 0 {
 		return
@@ -64,7 +66,7 @@ func renderValidationEntries(
 	fmt.Fprintln(w, "\n===== VALIDATION =====")
 
 	for _, stage := range entries.Results {
-		renderValidationStage(w, stage, lines)
+		renderValidationStage(w, stage, lines, advanceFn)
 	}
 
 	fmt.Fprintln(w, "=======================")
@@ -74,6 +76,7 @@ func renderValidationStage(
 	w io.Writer,
 	stage validation.StageValidationResult[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	lines [][]rune,
+	advanceFn lexarch.ColumnAdvanceFn[rune],
 ) {
 	fmt.Fprintf(w, "\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
 
@@ -83,7 +86,7 @@ func renderValidationStage(
 	}
 
 	for _, entry := range stage.Entries {
-		renderValidationEntry(w, entry, lines)
+		renderValidationEntry(w, entry, lines, advanceFn)
 	}
 }
 
@@ -91,6 +94,7 @@ func renderValidationEntry(
 	w io.Writer,
 	entry validation.ValidationEntry[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	lines [][]rune,
+	advanceFn lexarch.ColumnAdvanceFn[rune],
 ) {
 	fmt.Fprintf(w, "  [%v] %s — %s\n", entry.Severity, entry.Code, entry.Message)
 
@@ -103,7 +107,7 @@ func renderValidationEntry(
 	fmt.Fprintf(w, "      Location: line %d:%d to %d:%d (Node Kind: %v, ID: %d)\n",
 		startLine, startCol, endLine, endCol, entry.Node.Kind(), entry.Node.ID())
 
-	renderDiagnosticContext(w, lines, startLine, startCol, endLine, endCol)
+	renderDiagnosticContext(w, lines, startLine, startCol, endLine, endCol, advanceFn)
 }
 
 func renderFallbackValidationSpan(
@@ -119,18 +123,18 @@ func renderFallbackValidationSpan(
 // SHARED DIAGNOSTIC HIGHLIGHTING
 // -----------------------------------------------------------------------------
 
-func renderDiagnosticContext(w io.Writer, lines [][]rune, startL, startC, endL, endC int) {
+func renderDiagnosticContext(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
 	if !isValidSpanRange(startL, endL, len(lines)) {
-		renderInvalidSpanBlock(w, lines, startL, startC, endL, endC)
+		renderInvalidSpanBlock(w, lines, startL, startC, endL, endC, advanceFn)
 		return
 	}
 
 	if startL == endL {
-		renderSingleLineHighlight(w, lines[startL-1], startL, startC, endC)
+		renderSingleLineHighlight(w, lines[startL-1], startL, startC, endC, advanceFn)
 		return
 	}
 
-	renderMultiLineHighlight(w, lines, startL, startC, endL, endC)
+	renderMultiLineHighlight(w, lines, startL, startC, endL, endC, advanceFn)
 }
 
 func isValidSpanRange(startLine, endLine, totalLines int) bool {
@@ -140,26 +144,71 @@ func isValidSpanRange(startLine, endLine, totalLines int) bool {
 	return isValidLine(startLine, totalLines) && isValidLine(endLine, totalLines)
 }
 
-func renderSingleLineHighlight(w io.Writer, line []rune, lineNum, startCol, endCol int) {
-	fmt.Fprintf(w, " %4d | %s\n", lineNum, string(line))
+func renderSingleLineHighlight(
+	w io.Writer,
+	line []rune,
+	lineNum, startCol, endCol int,
+	advanceFn lexarch.ColumnAdvanceFn[rune],
+) {
+	var sourceBuilder strings.Builder
+	var markerBuilder strings.Builder
+
+	currentCol := 1
+
+	for _, r := range line {
+		nextCol := advanceFn(r, currentCol)
+		width := nextCol - currentCol
+
+		// 1. Sanitize the source line so the terminal cannot stretch it
+		if r == '\t' {
+			sourceBuilder.WriteString(strings.Repeat(" ", width))
+		} else {
+			sourceBuilder.WriteRune(r)
+		}
+
+		// 2. Build the perfectly aligned marker beneath it
+		if currentCol < startCol {
+			markerBuilder.WriteString(strings.Repeat(" ", width))
+		} else if currentCol >= startCol && currentCol < endCol {
+			if currentCol == startCol {
+				markerBuilder.WriteString("^")
+				if width > 1 {
+					markerBuilder.WriteString(strings.Repeat("~", width-1))
+				}
+			} else {
+				markerBuilder.WriteString(strings.Repeat("~", width))
+			}
+		}
+
+		currentCol = nextCol
+	}
+
+	// Handle tokens (like EOF) that extend past the physical line break
+	if currentCol <= startCol {
+		markerBuilder.WriteString(strings.Repeat(" ", startCol-currentCol))
+		markerBuilder.WriteString("^")
+	} else if currentCol < endCol {
+		markerBuilder.WriteString(strings.Repeat("~", endCol-currentCol))
+	}
+
+	fmt.Fprintf(w, " %4d | %s\n", lineNum, sourceBuilder.String())
 	fmt.Fprint(w, "      | ")
-	fmt.Fprintln(w, renderSpanMarker(line, startCol, endCol, 4))
-	fmt.Fprintln(w)
+	fmt.Fprintln(w, markerBuilder.String())
 }
 
-func renderMultiLineHighlight(w io.Writer, lines [][]rune, startL, startC, endL, endC int) {
+func renderMultiLineHighlight(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
 	firstLine := lines[startL-1]
-	renderSingleLineHighlight(w, firstLine, startL, startC, len(firstLine)+1)
+	renderSingleLineHighlight(w, firstLine, startL, startC, len(firstLine)+1, advanceFn)
 
 	if endL > startL+1 {
 		fmt.Fprintln(w, "      | ...")
 	}
 
 	lastLine := lines[endL-1]
-	renderSingleLineHighlight(w, lastLine, endL, 1, endC)
+	renderSingleLineHighlight(w, lastLine, endL, 1, endC, advanceFn)
 }
 
-func renderInvalidSpanBlock(w io.Writer, lines [][]rune, startL, startC, endL, endC int) {
+func renderInvalidSpanBlock(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
 	fmt.Fprintln(w, " ── INVALID OR OUT-OF-BOUNDS SPAN DETECTED ────────────────")
 	fmt.Fprintf(w, "  Requested: %d:%d to %d:%d | Total lines: %d\n", startL, startC, endL, endC, len(lines))
 
@@ -169,7 +218,7 @@ func renderInvalidSpanBlock(w io.Writer, lines [][]rune, startL, startC, endL, e
 		return
 	}
 
-	renderSingleLineHighlight(w, lines[lineIdx], lineIdx+1, startC, endC)
+	renderSingleLineHighlight(w, lines[lineIdx], lineIdx+1, startC, endC, advanceFn)
 	fmt.Fprintln(w, " ──────────────────────────────────────────────────────────")
 }
 
@@ -183,7 +232,7 @@ func determineFallbackLineIndex(startLine, totalLines int) int {
 	return -1
 }
 
-func renderSpanMarker(line []rune, startCol, endCol int, tabWidth int) string {
+func renderSpanMarker(startCol, endCol int) string {
 	startCol = enforceMinimumColumn(startCol)
 	endCol = enforceMinimumColumn(endCol)
 
@@ -191,13 +240,13 @@ func renderSpanMarker(line []rune, startCol, endCol int, tabWidth int) string {
 		endCol = startCol
 	}
 
-	visualStart := calculateVisualOffset(line, startCol, tabWidth)
-	visualEnd := calculateVisualOffset(line, endCol, tabWidth)
+	// The absolute truth: Visual spaces needed = Target Column - 1
+	visualStart := startCol - 1
+	spanWidth := endCol - startCol
 
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat(" ", visualStart))
 
-	spanWidth := visualEnd - visualStart
 	if spanWidth <= 1 {
 		sb.WriteString("^")
 		return sb.String()
@@ -213,26 +262,6 @@ func enforceMinimumColumn(col int) int {
 		return 1
 	}
 	return col
-}
-
-func calculateVisualOffset(line []rune, targetCol int, tabWidth int) int {
-	visualPos := 0
-	for col := 1; col < targetCol; col++ {
-		runeIdx := col - 1
-		if runeIdx < len(line) {
-			visualPos += getCharacterVisualWidth(line[runeIdx], visualPos, tabWidth)
-		} else {
-			visualPos++
-		}
-	}
-	return visualPos
-}
-
-func getCharacterVisualWidth(r rune, currentVisualPos int, tabWidth int) int {
-	if r == '\t' {
-		return tabWidth - (currentVisualPos % tabWidth)
-	}
-	return 1
 }
 
 func isValidLine(lineNum, totalLines int) bool {
@@ -261,7 +290,7 @@ func splitLinesRunes(runes []rune) [][]rune {
 // DEBUG DUMPS & TRACES
 // -----------------------------------------------------------------------------
 
-func renderParseTrace[TToken any](
+func RenderParseTrace[TToken any](
 	w io.Writer,
 	trace *syntaxa.ParseTrace[TToken],
 	formatToken func(TToken) string,

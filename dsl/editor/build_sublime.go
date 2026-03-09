@@ -58,10 +58,8 @@ type NodeBinding struct {
 var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 	dsl.NodeDSLName:            {Scopes: []string{"entity.name.language"}},
 	dsl.NodePatternAlternation: {Scopes: []string{"keyword.operator.alternation"}},
-	dsl.NodePatternDefName:     {Scopes: []string{"entity.name.variable.constant"}},
-	dsl.NodeVarRefToken:        {Scopes: []string{"punctuation.reference.variable"}},
-	dsl.NodeVarRefTarget:       {Scopes: []string{"variable.constant.reference.target"}},
-	dsl.NodeVarRef:             {MetaScope: "meta.variable.reference"},
+	dsl.NodePatternDefName:     {Scopes: []string{"entity.name.pattern.constant"}},
+	dsl.NodePatternRef:         {Scopes: []string{"constant.language.pattern-reference"}},
 	dsl.NodeLexRuleTokenName:   {Scopes: []string{"entity.name.token"}},
 	dsl.NodeLexRuleRole:        {Scopes: []string{"entity.name.token-role"}},
 	dsl.NodeMetaKey:            {Scopes: []string{"entity.other.attribute-name.meta"}},
@@ -85,13 +83,19 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 		},
 	},
 	dsl.NodeParseRuleName: {
-		Scopes: []string{"entity.name.function.parser-rule"},
+		Scopes: []string{"entity.name.function.parser-expression"},
 	},
 	dsl.NodeParseNodeName: {
 		Scopes: []string{"entity.name.type.parser-node"},
 	},
-	dsl.NodeParseOpRef: {
-		Scopes: []string{"meta.reference"},
+	dsl.NodeParseSymbolReference: {
+		Scopes: []string{"constant.language.symbol-reference"},
+	},
+	dsl.NodeParseExpressionReference: {
+		Scopes: []string{"entity.name.function.expression-reference"},
+	},
+	dsl.NodeParseTokenReference: {
+		Scopes: []string{"constant.language.token-reference"},
 	},
 	dsl.NodeParseNestOpenToken: {
 		Scopes: []string{"constant.language.token-reference"},

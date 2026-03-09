@@ -2,18 +2,15 @@ package tests
 
 import (
 	"fmt"
-	"foundation/domain"
 	"foundation/system"
 	"langspec"
 	"langspec/dsl"
 	"langspec/dsl/generator"
+
 	"lexarch"
-	"memarch"
 	"syntaxa"
 	"testing"
 
-	"autarch"
-	"autarch/pattern"
 	"memcore"
 	"memforge"
 )
@@ -76,7 +73,7 @@ func TestDSLCompiler(t *testing.T) {
 
 	dsl.LangSpecCompilerDebugResult(compiler, result, &dsl.CompilerDebugConfig{
 		DebugParseTrace: false,
-		DebugLST:        true,
+		DebugLST:        false,
 	})
 
 	if err != nil {
@@ -129,8 +126,10 @@ func TestDSLCompiler(t *testing.T) {
 
 	_, rootNode, syntaxErrors, err := langspec.LangParserParseFile(langParser, session)
 
+	// dsl.RenderParseTrace(sink.Writer, trace, func(t string) string { return t })
+
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		dsl.RenderSyntaxErrorsWithContext(sink.Writer, contentRune, syntaxErrors)
+		dsl.RenderSyntaxErrorsWithContext(sink.Writer, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))
 		t.Fatalf(
 			"langspec generated-file parse failed with %d syntax errors",
 			len(syntaxErrors.Errors),
@@ -189,29 +188,4 @@ func TestDSLCompiler(t *testing.T) {
 	)
 
 	dsl.RenderLSTDump(sink.Writer, lstDump)
-}
-
-func nfaStateCountPerRule[TToken, TTokenRole comparable](
-	rules []lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole],
-	tokenNameFn func(TToken) string,
-	scratchAllocFn memarch.AllocationFn,
-	observationDomain *domain.DiscreteDomain[rune],
-	formatter pattern.ObservationFormatter[rune],
-) map[string]uint64 {
-	out := make(map[string]uint64, len(rules))
-	var zeroOutcome lexarch.TokenOutcome[TToken, TTokenRole]
-	for _, rule := range rules {
-		ctx := pattern.CreateSharedCompilationContext[rune, pattern.RegulaAST[rune]](observationDomain, formatter)
-		p := rule.Pattern
-		inst := pattern.PatternCompilationInstruction[rune, lexarch.TokenOutcome[TToken, TTokenRole], pattern.RegulaAST[rune]]{
-			Pattern: &p,
-			Outcome: lexarch.TokenOutcome[TToken, TTokenRole]{Token: rule.Token, Priority: rule.Priority, TokenRole: rule.Role},
-		}
-		nfas, err := pattern.RegulaCompileToNFAGlushkov(scratchAllocFn, []pattern.PatternCompilationInstruction[rune, lexarch.TokenOutcome[TToken, TTokenRole], pattern.RegulaAST[rune]]{inst}, ctx, zeroOutcome)
-		if err != nil {
-			panic(fmt.Sprintf("per-rule NFA compile failed for %s: %v", tokenNameFn(rule.Token), err))
-		}
-		out[tokenNameFn(rule.Token)] = autarch.NFANumStates(nfas[0])
-	}
-	return out
 }

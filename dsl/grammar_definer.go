@@ -83,32 +83,6 @@ func (g *GrammarDefiner) expectOneOfWithGrammarID(grammarID syntaxa.GrammarLabel
 }
 
 /*
-expectPair returns a rule that expects two tokens in sequence and creates a single LST node
-with both lexemes attached. GrammarID is derived from the node via LangSpecGrammarIDFromNode(node, "").
-*/
-func (g *GrammarDefiner) expectPair(node LangSpecParserNodeKind, firstToken, secondToken LangSpecLexerTokenType) Rule {
-	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Token.ExpectPair(grammarID, node, firstToken, secondToken)
-}
-
-/*
-expectPairWithChildNodes expects two tokens in sequence and creates a single LST node (constructNode kind)
-with both lexemes attached. The grammar has three distinct IDs: construct (concat), first token, second token,
-so the IR can attach metascope to the construct and distinct scopes to each token.
-*/
-func (g *GrammarDefiner) expectPairWithChildNodes(
-	constructNode LangSpecParserNodeKind,
-	firstTokenNode LangSpecParserNodeKind,
-	secondTokenNode LangSpecParserNodeKind,
-	firstToken, secondToken LangSpecLexerTokenType,
-) Rule {
-	concatID := LangSpecGrammarIDFromNode(constructNode)
-	firstTokenID := LangSpecGrammarIDFromNode(firstTokenNode)
-	secondTokenID := LangSpecGrammarIDFromNode(secondTokenNode)
-	return g.rb.Token.ExpectPairWithChildGrammarIDs(concatID, firstTokenID, secondTokenID, constructNode, firstToken, secondToken)
-}
-
-/*
 sequence starts a chainable sequence for the given node kind. GrammarID is
 LangSpecGrammarIDFromNode(nodeKind, suffix). Call Build on the returned SequenceBuilder.
 */

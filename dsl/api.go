@@ -180,7 +180,7 @@ func LangSpecCompilerCompile(
 	}
 
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors)
+		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))
 		err = fmt.Errorf(
 			"langspec parse failed with %d syntax errors",
 			len(syntaxErrors.Errors),
@@ -197,7 +197,7 @@ func LangSpecCompilerCompile(
 		result.ValidationEntries = validationEntries
 
 		if validationEntries != nil && len(validationEntries.Results) > 0 {
-			renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries)
+			renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries, lexarch.ColumnAdvanceRune(4))
 
 			errorAmount := 0
 			for _, stage := range validationEntries.Results {
@@ -278,7 +278,7 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 
 func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
 	if config.DebugParseTrace {
-		renderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })
+		RenderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })
 	}
 
 	if config.DebugLST {

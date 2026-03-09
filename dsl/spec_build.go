@@ -25,7 +25,6 @@ const (
 	TokWhitespace
 	TokLineComment
 	TokBlockComment
-	TokVarRef // $
 
 	// -- Punctuation & Operators --
 	TokDashes
@@ -148,9 +147,7 @@ const (
 	NodePatternAny
 	NodePatternRegEx
 	NodePatternDefName
-	NodeVarRef
-	NodeVarRefToken
-	NodeVarRefTarget
+	NodePatternRef
 	NodePatternRange
 	NodeCharLiteral
 	NodePatternStar
@@ -181,12 +178,15 @@ const (
 	NodeParseOpSuppress
 	NodeParseOpEmit
 	NodeParseOpEmitOneOf
-	NodeParseOpRef
 	NodeParseAlternation
 	NodeParseConcat
 	NodeParseOptional
 	NodeParseSegment
 	NodeParseGroup
+
+	NodeParseSymbolReference
+	NodeParseTokenReference
+	NodeParseExpressionReference
 
 	NodeParseOpNest
 	NodeParseNestOpenToken
@@ -285,7 +285,6 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokChainSeparator, "punctuation.separator.chain", "->", 0},
 		{TokEqualsOperator, "keyword.operator.assignment", "=", 0},
 		{TokOptional, "keyword.operator.optional", "?", 0},
-		{TokVarRef, "keyword.operator.variable", "$", 0},
 		{TokRange, "keyword.operator.range", "..", 0},
 		{TokStar, "keyword.operator.star", "*", 0},
 		{TokKWLSpec, "keyword.declaration", "lspec", 2},
@@ -408,7 +407,7 @@ func buildProgramRule(g *GrammarDefiner) Rule {
 }
 
 func (b *dslGrammarBuilder) program() Rule {
-	b.declareVarRef()
+	b.declarePatternRef()
 
 	return b.g.RootByNode(NodeProgram, false,
 		b.g.rb.Rule.Required(b.header(), "must have header"),
@@ -501,8 +500,17 @@ func (b *dslGrammarBuilder) patternDefinitionList() Rule {
 
 func (b *dslGrammarBuilder) patternDefinition() Rule {
 	return b.g.rb.Rule.RecoverSync(b.g.sequence(NodePatternDefinition, "").
-		optionalToken(NodeLocalVariable, TokKWLocal).
-		expectToken(NodePatternDefName, TokIdentifier).
+		rule(
+			b.g.rb.Rule.Choice(
+				syntaxa.GrammarLabel("DUMMY CHOICE FOR PATTERNS"),
+				b.g.rb.Rule.TransparentSequence(
+					syntaxa.GrammarLabel("DUMMY LOCAL VAR FOR PATTERNS"),
+					b.g.expectToken(NodeLocalVariable, TokKWLocal),
+					b.g.expectToken(NodePatternDefName, TokIdentifier),
+				),
+				b.g.expectToken(NodePatternDefName, TokIdentifier),
+			),
+		).
 		expectVirtualInRule(TokAssignment).
 		requiredRule(b.patternExpr(), "pattern definition must have an expression").
 		expectVirtualInRule(TokSemicolon).
@@ -556,7 +564,7 @@ func (b *dslGrammarBuilder) patternSegment() Rule {
 	)
 
 	return b.g.ChoiceByNode(NodePatternSegment,
-		b.varRefReference(),
+		b.patternRefReference(),
 		b.patternClass(),
 		rangeRule,
 		b.charLiteral(),
@@ -654,7 +662,7 @@ func (b *dslGrammarBuilder) lexRule() Rule {
 		expectToken(NodeLexRuleRole, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
 		rule(b.g.ChoiceByNode(NodeLexRulePattern,
-			b.varRefReference(),
+			b.patternRefReference(),
 			b.g.expectToken(NodeLexRulePattern, TokRegexLiteral),
 		)).
 		optionalRule(b.metaSection()).
@@ -735,7 +743,7 @@ func (b *dslGrammarBuilder) prattPrimary() Rule {
 
 func (b *dslGrammarBuilder) prattPrimaryRef() Rule {
 	return b.g.sequence(NodePrattPrimaryRef, "").
-		expectToken(NodeParseOpRef, TokIdentifier).
+		expectToken(NodeParseExpressionReference, TokIdentifier).
 		expectVirtualInRule(TokSemicolon).
 		build()
 }
@@ -793,7 +801,7 @@ func (b *dslGrammarBuilder) prattInfixDef() Rule {
 }
 
 func (b *dslGrammarBuilder) prattOperatorTarget() Rule {
-	return b.g.expectToken(NodeParseOpRef, TokIdentifier)
+	return b.g.expectToken(NodeParseSymbolReference, TokIdentifier)
 }
 
 func (b *dslGrammarBuilder) prattImplicitBlock() Rule {
@@ -925,7 +933,7 @@ func (b *dslGrammarBuilder) parseSegment() Rule {
 		b.emitMapping(),
 		b.virtualMapping(),
 		b.nestMapping(),
-		b.g.expectToken(NodeParseOpRef, TokIdentifier),
+		b.g.expectToken(NodeParseExpressionReference, TokIdentifier),
 		b.parseGroup(),
 	)
 }
@@ -956,7 +964,7 @@ func (b *dslGrammarBuilder) emitMapping() Rule {
 	emit := b.g.sequence(NodeParseOpEmit, "").
 		expectToken(NodeParseNodeName, TokIdentifier).
 		expectVirtualInRule(TokAssignment).
-		expectToken(NodeParseOpRef, TokIdentifier).
+		expectToken(NodeParseTokenReference, TokIdentifier).
 		build()
 
 	return b.g.rb.Rule.PredictLookahead(
@@ -971,7 +979,7 @@ func (b *dslGrammarBuilder) emitMapping() Rule {
 func (b *dslGrammarBuilder) virtualMapping() Rule {
 	return b.g.sequence(NodeParseOpSuppress, "").
 		expectVirtualInRule(TokKWVirtual).
-		expectToken(NodeParseOpRef, TokIdentifier).
+		expectToken(NodeParseTokenReference, TokIdentifier).
 		build()
 }
 
@@ -1034,18 +1042,15 @@ func (b *dslGrammarBuilder) predictLookahead() Rule {
 		build()
 }
 
-/*
-varRefReference returns the late-bound DAG proxy.
-*/
-func (b *dslGrammarBuilder) varRefReference() Rule {
+func (b *dslGrammarBuilder) patternRefReference() Rule {
 	return b.g.rb.Rule.Reference(
 		syntaxa.GrammarLabel("VAR REF PROXY"),
-		LangSpecGrammarIDFromNode(NodeVarRef),
+		LangSpecGrammarIDFromNode(NodePatternRef),
 	)
 }
 
-func (b *dslGrammarBuilder) declareVarRef() {
-	r := b.g.expectPairWithChildNodes(NodeVarRef, NodeVarRefToken, NodeVarRefTarget, TokVarRef, TokIdentifier)
+func (b *dslGrammarBuilder) declarePatternRef() {
+	r := b.g.expectToken(NodePatternRef, TokIdentifier)
 	b.g.rb.Rule.Define(r)
 }
 

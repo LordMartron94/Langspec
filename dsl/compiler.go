@@ -196,7 +196,7 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 	patternNode := ruleNode.FindFirstKind(NodeLexRulePattern)
 
 	if patternNode == nil {
-		patternNode = ruleNode.FindFirstKind(NodeVarRef)
+		patternNode = ruleNode.FindFirstKind(NodePatternRef)
 	}
 
 	if patternNode == nil {
@@ -204,8 +204,8 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 	}
 
 	switch patternNode.Kind() {
-	case NodeVarRef:
-		target := VarRefTargetName(patternNode)
+	case NodePatternRef:
+		target := PatternRefTargetName(patternNode)
 		if ctx.env.Patterns[target] == nil {
 			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
 		}
@@ -282,8 +282,8 @@ func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.Regula
 		return c.stringLiteralToPattern(node)
 	case NodePatternRegEx:
 		return c.regexLiteralToPattern(node)
-	case NodeVarRef:
-		return varRefToPattern(ctx, node)
+	case NodePatternRef:
+		return patternRefToPattern(ctx, node)
 	case NodePatternConcat:
 		return concatToPattern(ctx, node)
 	case NodePatternAlternation:
@@ -541,8 +541,8 @@ func (c *compiler) regexLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 	return compiled
 }
 
-func varRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	targetName := VarRefTargetName(node)
+func patternRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
+	targetName := PatternRefTargetName(node)
 	if ctx.env.Patterns[targetName] == nil {
 		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
 	}
@@ -704,7 +704,7 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return compilePredict(ctx, node)
 	case NodeParseOptional:
 		return compileOptional(ctx, node)
-	case NodeParseOpRef:
+	case NodeParseExpressionReference, NodeParseTokenReference:
 		return compileReference(ctx, node)
 	case NodeParsePlus:
 		return compilePlus(ctx, node)
@@ -857,15 +857,11 @@ func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 	outputNodeKind := nodeSingleTokenContent(node.FindFirstKind(NodeParseNodeName))
-	refNode := node.FindFirstKind(NodeParseOpRef)
+	refNode := node.FindFirstKind(NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: emit node missing reference")
 	}
 	targetToken := nodeSingleTokenContent(refNode)
-
-	if ctx.env.Tokens[targetToken] == nil {
-		panic(fmt.Sprintf("semantic error: cannot use node binding (:) on rule reference '%s'. Node binding is only valid for lexical tokens.", targetToken))
-	}
 
 	var label syntaxa.GrammarLabel
 	if ctx.rootLevel {
@@ -890,14 +886,11 @@ func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
 	flatAlts := flattenNodesByKind(innerExpr, NodeParseAlternation)
 	tokens := make([]string, 0, len(flatAlts))
 	for _, alt := range flatAlts {
-		refNode := alt.FindFirstKind(NodeParseOpRef)
+		refNode := alt.FindFirstKind(NodeParseTokenReference)
 		if refNode == nil {
 			panic("compiler error: emit-one-of choice alternatives must be token references")
 		}
 		tok := nodeSingleTokenContent(refNode)
-		if ctx.env.Tokens[tok] == nil {
-			panic(fmt.Sprintf("semantic error: emit-one-of token '%s' is not a lexical token", tok))
-		}
 		tokens = append(tokens, tok)
 	}
 	if len(tokens) == 0 {
@@ -914,7 +907,7 @@ func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
-	refNode := node.FindFirstKind(NodeParseOpRef)
+	refNode := node.FindFirstKind(NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: virtual node missing reference")
 	}
@@ -977,22 +970,6 @@ func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName string) CompiledRule {
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
-
-	var targetRuleNode *Node
-	if r, ok := ctx.env.Rules[targetRuleName]; ok {
-		targetRuleNode = r
-	} else if p, ok := ctx.env.Pratt[targetRuleName]; ok {
-		targetRuleNode = p
-	}
-
-	if targetRuleNode != nil && ctx.env.Rules[targetRuleName] != nil {
-		isTransparent := targetRuleNode.FindFirstKind(NodeRuleModifierTransparent) != nil
-		if isTransparent && ctx.ruleBodyByRuleName != nil {
-			if bodyNode := ctx.ruleBodyByRuleName[targetRuleName]; bodyNode != nil {
-				return compileParseExpression(ctx, bodyNode)
-			}
-		}
-	}
 
 	var label syntaxa.GrammarLabel
 	if ctx.rootLevel {
@@ -1098,10 +1075,10 @@ func compilePrattPrimary(
 	if refNode == nil {
 		panic("compiler error: pratt primary body missing ref")
 	}
-	if refChild := refNode.FindFirstKind(NodeParseOpRef); refChild != nil {
+	if refChild := refNode.FindFirstKind(NodeParseExpressionReference); refChild != nil {
 		refNode = refChild
 	}
-	targetRuleName := getParseRuleRefName(refNode)
+	targetRuleName := getRefName(refNode)
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 
 	return builder.Rule.Reference(grammarID, targetGrammarID)
@@ -1233,7 +1210,7 @@ type OperatorTarget struct {
 
 func extractOperatorTarget(defNode *Node, env *SemanticEnv) OperatorTarget {
 	nodeKind := nodeSingleTokenContent(defNode.FindFirstKind(NodeParseNodeName))
-	refNode := defNode.FindFirstKind(NodeParseOpRef)
+	refNode := defNode.FindFirstKind(NodeParseSymbolReference)
 	if refNode == nil {
 		panic("compiler error: pratt operator target missing reference")
 	}

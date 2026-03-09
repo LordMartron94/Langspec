@@ -443,7 +443,7 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRo
 		Priority: rule.Priority,
 		Token:    g.tokenFormatter(rule.Token),
 		Role:     g.tokenRoleFormatter(rule.Role),
-		Pattern:  "$" + g.formatPatternName(rule.Token),
+		Pattern:  g.formatPatternName(rule.Token),
 		Meta:     meta,
 	}
 }
@@ -552,7 +552,7 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) getSortedGrammar
 }
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	decompiler := newParseDecompiler[TToken, TNodeKind](g.tokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold)
+	decompiler := newParseDecompiler(g.tokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold)
 	return decompiler.BuildRuleDoc(labelStr, ruleNode)
 }
 
@@ -601,16 +601,18 @@ func (d *parseDecompiler[TToken, TNodeKind]) BuildRuleDoc(labelStr string, ruleN
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) buildHeaderDoc(labelStr string, ruleNode *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	isTransparent := ruleNode.OutputNodeKind == nil
+	isTransparent := ruleNode.OutputNodeKind == nil || ruleNode.Kind == syntaxa.GToken || ruleNode.Kind == syntaxa.GChoice
 
 	nodeName := labelStr
-	if !isTransparent {
+	if ruleNode.OutputNodeKind != nil {
 		nodeName = fmt.Sprintf("%v", *ruleNode.OutputNodeKind)
 	}
 
 	transparencyMod := ""
 	if isTransparent {
 		transparencyMod = "transparent "
+
+		nodeName = "gr_" + nodeName
 	}
 
 	base := fmt.Sprintf("%s -> %s%s", d.sanitizer(labelStr), transparencyMod, d.sanitizer(nodeName))
@@ -658,7 +660,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) buildLookaheadDoc(g *syntaxa.Gramma
 		parts = append(parts, fmt.Sprintf("%d:%s", la.Offset, d.tokenFormatter(la.Expected)))
 	}
 
-	return concat(doctext("predict ("), doctext(strings.Join(parts, ", ")), doctext(")"), line())
+	return concat(doctext("predict ("), doctext(strings.Join(parts, ", ")), doctext(")"), space())
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) mapGrammarToDoc(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
@@ -689,20 +691,16 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapGrammarToDoc(g *syntaxa.Grammar[
 	}
 
 	if g.Kind == syntaxa.GToken && g.OutputNodeKind != nil {
-		if !g.IsContextBoundary || string(g.GrammarLabel) != d.currentRuleLabel {
-			nodeName := d.sanitizer(d.nodeKindFormatter(*g.OutputNodeKind))
-			return concat(doctext(nodeName), doctext(" : "), baseDoc)
-		}
+		nodeName := d.sanitizer(d.nodeKindFormatter(*g.OutputNodeKind))
+		return concat(doctext(nodeName), doctext(" : "), baseDoc)
 	}
 
 	if g.Kind == syntaxa.GChoice && g.OutputNodeKind != nil {
-		if !g.IsContextBoundary || string(g.GrammarLabel) != d.currentRuleLabel {
-			nodeName := d.sanitizer(d.nodeKindFormatter(*g.OutputNodeKind))
-			return concat(
-				doctext(nodeName), doctext(" : "),
-				doctext("("), nest(1, concat(line(), baseDoc)), line(), doctext(")"),
-			)
-		}
+		nodeName := d.sanitizer(d.nodeKindFormatter(*g.OutputNodeKind))
+		return concat(
+			doctext(nodeName), doctext(" : "),
+			doctext("("), nest(1, concat(line(), baseDoc)), line(), doctext(")"),
+		)
 	}
 
 	return baseDoc
@@ -710,7 +708,6 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapGrammarToDoc(g *syntaxa.Grammar[
 
 func (d *parseDecompiler[TToken, TNodeKind]) mapConcat(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
 	var docs []Doc
-
 	forceBreak := len(g.Children) >= 1
 
 	for i, child := range g.Children {
@@ -721,7 +718,6 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapConcat(g *syntaxa.Grammar[TToken
 		childDoc := d.concatChildDoc(g, child)
 
 		if child.Kind == syntaxa.GChoice {
-			childDoc = concat(doctext("("), nest(1, concat(line(), childDoc)), line(), doctext(")"))
 			forceBreak = true
 		}
 
@@ -735,14 +731,14 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapConcat(g *syntaxa.Grammar[TToken
 	return group(concat(docs...))
 }
 
-// concatChildDoc formats a single element of a sequence. For pair-like concats (sequence with
-// OutputNodeKind), token children are emitted as plain token names so the output reads as
-// "TokVarRef\nTokIdentifier" rather than "virtual TokVarRef\nvirtual TokIdentifier".
 func (d *parseDecompiler[TToken, TNodeKind]) concatChildDoc(parent *syntaxa.Grammar[TToken, TNodeKind], child *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	if parent.OutputNodeKind != nil && child.Kind == syntaxa.GToken {
-		return doctext(d.tokenFormatter(child.Token))
+	childDoc := d.walk(child)
+
+	if child.Kind == syntaxa.GChoice {
+		return concat(doctext("("), nest(1, concat(line(), childDoc)), line(), doctext(")"))
 	}
-	return d.walk(child)
+
+	return childDoc
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) mapChoice(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
@@ -756,14 +752,10 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapChoice(g *syntaxa.Grammar[TToken
 	return group(concat(docs...))
 }
 
-// choiceChildDoc formats a single alternative. For emit-one-of (choice with OutputNodeKind),
-// token children are emitted as plain token names so the output reads as
-// "NodeMetaValue : ( TokStringLiteral | TokKWFalse | TokKWTrue )" rather than
-// each alternative incorrectly prefixed with "virtual".
 func (d *parseDecompiler[TToken, TNodeKind]) choiceChildDoc(parent *syntaxa.Grammar[TToken, TNodeKind], child *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	if parent.OutputNodeKind != nil && child.Kind == syntaxa.GToken {
-		return doctext(d.tokenFormatter(child.Token))
-	}
+	// if parent.OutputNodeKind != nil && child.Kind == syntaxa.GToken && child.OutputNodeKind == nil {
+	// 	return doctext(d.tokenFormatter(child.Token))
+	// }
 	return d.walk(child)
 }
 

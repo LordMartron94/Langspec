@@ -828,10 +828,14 @@ func buildConstructStep[TToken, TTokenRole, TNodeKind comparable](chainCtx *cons
 	config := chainCtx.Env.Config
 
 	var laSuffix string
-	if index == 0 && index+1 < stepCount {
-		suffixFirst := syntaxa.GrammarAnalysisFirstOfSuffix(chainCtx.Env.Analysis, chainCtx.ConcatNode, index+1)
-		if la, ok := buildLookaheadForTokens(suffixFirst, chainCtx.Env.TokenPatternMap); ok {
-			laSuffix = la
+	if index == 0 {
+		if explicitLA, ok := buildExplicitLookaheadRegex(chainCtx.ConcatNode.Lookaheads, chainCtx.Env.TokenPatternMap); ok {
+			laSuffix = explicitLA
+		} else if index+1 < stepCount {
+			suffixFirst := syntaxa.GrammarAnalysisFirstOfSuffix(chainCtx.Env.Analysis, chainCtx.ConcatNode, index+1)
+			if fallbackLA, ok := buildLookaheadForTokens(suffixFirst, chainCtx.Env.TokenPatternMap); ok {
+				laSuffix = fallbackLA
+			}
 		}
 	}
 
@@ -1963,4 +1967,39 @@ func requiresStructuralChain[TToken, TNodeKind comparable](node *syntaxa.Grammar
 		}
 	}
 	return false
+}
+
+func buildExplicitLookaheadRegex[TToken comparable](
+	lookaheads []syntaxa.Lookahead[TToken],
+	tokenPatternMap map[TToken]Pattern,
+) (string, bool) {
+	var future []syntaxa.Lookahead[TToken]
+	for _, la := range lookaheads {
+		if la.Offset > 0 {
+			future = append(future, la)
+		}
+	}
+
+	if len(future) == 0 {
+		return "", false
+	}
+
+	slices.SortFunc(future, func(a, b syntaxa.Lookahead[TToken]) int {
+		return a.Offset - b.Offset
+	})
+
+	var sb strings.Builder
+	sb.WriteString(`(?=`)
+	for _, la := range future {
+		r, err := tokenPatternMap[la.Expected].ToRegEx()
+		if err != nil || r == "" {
+			return "", false
+		}
+		sb.WriteString(`\s*(?:`)
+		sb.WriteString(r)
+		sb.WriteString(`)`)
+	}
+	sb.WriteString(`)`)
+
+	return sb.String(), true
 }

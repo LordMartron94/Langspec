@@ -418,7 +418,6 @@ func (c *LangParserConfiguration[
 }
 
 /*
-/*
 WithStreamingConfig replaces the entire streaming configuration block.
 
 This is the preferred method when applying predefined profiles
