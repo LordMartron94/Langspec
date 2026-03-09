@@ -355,35 +355,17 @@ func (c *compiler) rangeToPattern(
 }
 
 func starToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
-
-	if len(children) != 1 {
-		panic("error: star pattern must have exactly 1 child")
-	}
-
-	childPattern := compilePatternExpression(ctx, children[0])
+	childPattern := compilePatternExpression(ctx, node.RequireSingleChild())
 	return childPattern.Star()
 }
 
 func plusToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
-
-	if len(children) != 1 {
-		panic("error: plus pattern must have exactly 1 child")
-	}
-
-	childPattern := compilePatternExpression(ctx, children[0])
+	childPattern := compilePatternExpression(ctx, node.RequireSingleChild())
 	return childPattern.Plus()
 }
 
 func optionalToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
-
-	if len(children) != 1 {
-		panic("error: optional pattern must have exactly 1 child")
-	}
-
-	childPattern := compilePatternExpression(ctx, children[0])
+	childPattern := compilePatternExpression(ctx, node.RequireSingleChild())
 	return childPattern.Optional()
 }
 
@@ -412,24 +394,14 @@ func repetitionToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[r
 }
 
 func groupToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
-	if len(children) != 1 {
-		panic("engine error: group node must have exactly 1 child")
-	}
-
-	return compilePatternExpression(ctx, children[0])
+	return compilePatternExpression(ctx, node.RequireSingleChild())
 }
 
 func (c *compiler) negationToPattern(
 	node *Node,
 ) pattern.RegulaAST[rune] {
-	children := node.Children()
-	if len(children) != 1 {
-		panic("engine error: negation node must have exactly 1 child")
-	}
-
 	var ranges []pattern.CharRange[rune]
-	c.extractNegationRanges(children[0], &ranges)
+	c.extractNegationRanges(node.RequireSingleChild(), &ranges)
 
 	return c.factory.NegatedClass(ranges...)
 }
@@ -470,11 +442,7 @@ func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]
 }
 
 func (c *compiler) extractGroupRanges(node *Node, out *[]pattern.CharRange[rune]) {
-	children := node.Children()
-	if len(children) != 1 {
-		panic("engine error: group node in negation must have exactly 1 child")
-	}
-	c.extractNegationRanges(children[0], out)
+	c.extractNegationRanges(node.RequireSingleChild(), out)
 }
 
 func (c *compiler) extractAlternationRanges(node *Node, out *[]pattern.CharRange[rune]) {
@@ -563,6 +531,25 @@ func grammarSubLabel(ruleName string, role string, counts map[string]int) syntax
 		return syntaxa.GrammarLabel(ruleName + " " + role)
 	}
 	return syntaxa.GrammarLabel(fmt.Sprintf("%s %s %d", ruleName, role, n+1))
+}
+
+func parseCtxLabel(ctx *parseCompileCtx, role string) syntaxa.GrammarLabel {
+	if ctx.rootLevel {
+		return ctx.grammarID
+	}
+	return grammarSubLabel(ctx.ruleName, role, ctx.counts)
+}
+
+func collectSyncTokens(ruleNode *Node) []string {
+	syncNode := ruleNode.FindFirstKind(NodeRuleModifierSync)
+	if syncNode == nil {
+		return nil
+	}
+	var out []string
+	for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
+		out = append(out, nodeSingleTokenContent(tNode))
+	}
+	return out
 }
 
 func getParserSpecInfo(
@@ -676,19 +663,9 @@ func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledR
 	}
 
 	compiledExpr := compileParseExpression(ctx, rootExpr)
-
-	// Inject Sync modifier wrapping logic
-	syncNode := ruleNode.FindFirstKind(NodeRuleModifierSync)
-	if syncNode != nil {
-		var syncTokens []string
-		for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
-			syncTokens = append(syncTokens, nodeSingleTokenContent(tNode))
-		}
-		if len(syncTokens) > 0 {
-			compiledExpr = ctx.builder.Rule.RecoverSync(compiledExpr, syncTokens...)
-		}
+	if syncTokens := collectSyncTokens(ruleNode); len(syncTokens) > 0 {
+		compiledExpr = ctx.builder.Rule.RecoverSync(compiledExpr, syncTokens...)
 	}
-
 	return ctx.builder.Rule.Define(compiledExpr), ""
 }
 
@@ -727,20 +704,8 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 // ------------------------------- EXPRESSION HANDLERS -------------------------------
 
-func flattenNodesByKind(node *Node, kind LangSpecParserNodeKind) []*Node {
-	if node.Kind() != kind {
-		return []*Node{node}
-	}
-
-	var flat []*Node
-	for _, child := range node.Children() {
-		flat = append(flat, flattenNodesByKind(child, kind)...)
-	}
-	return flat
-}
-
 func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
-	flatNodes := flattenNodesByKind(node, NodeParseConcat)
+	flatNodes := node.FlattenByKind(NodeParseConcat)
 
 	rules := make([]CompiledRule, 0, len(flatNodes))
 	subCtx := *ctx
@@ -758,13 +723,11 @@ func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
 		}
 		return ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, rules...)
 	}
-
-	label := grammarSubLabel(ctx.ruleName, "SEQUENCE", ctx.counts)
-	return ctx.builder.Rule.TransparentSequence(label, rules...)
+	return ctx.builder.Rule.TransparentSequence(parseCtxLabel(ctx, "SEQUENCE"), rules...)
 }
 
 func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
-	flatNodes := flattenNodesByKind(node, NodeParseAlternation)
+	flatNodes := node.FlattenByKind(NodeParseAlternation)
 
 	rules := make([]CompiledRule, 0, len(flatNodes))
 	subCtx := *ctx
@@ -773,14 +736,7 @@ func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
 		compiled := compileParseExpression(&subCtx, child)
 		rules = append(rules, compiled)
 	}
-
-	var label syntaxa.GrammarLabel
-	if ctx.rootLevel {
-		label = ctx.grammarID
-	} else {
-		label = grammarSubLabel(ctx.ruleName, "CHOICE", ctx.counts)
-	}
-	return ctx.builder.Rule.Choice(label, rules...)
+	return ctx.builder.Rule.Choice(parseCtxLabel(ctx, "CHOICE"), rules...)
 }
 
 func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -813,7 +769,7 @@ func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileOptional(ctx *parseCompileCtx, node *Node) CompiledRule {
-	child := extractSingleChild(node)
+	child := node.RequireSingleChild()
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	innerRule := compileParseExpression(&subCtx, child)
@@ -822,7 +778,7 @@ func compileOptional(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compilePlus(ctx *parseCompileCtx, node *Node) CompiledRule {
-	child := extractSingleChild(node)
+	child := node.RequireSingleChild()
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	innerRule := compileParseExpression(&subCtx, child)
@@ -833,13 +789,11 @@ func compilePlus(ctx *parseCompileCtx, node *Node) CompiledRule {
 		}
 		return ctx.builder.Rule.OneOrMore(ctx.grammarID, ctx.nodeKind, innerRule)
 	}
-
-	label := grammarSubLabel(ctx.ruleName, "REPEAT_PLUS", ctx.counts)
-	return ctx.builder.Rule.TransparentNOrMore(label, 1, innerRule)
+	return ctx.builder.Rule.TransparentNOrMore(parseCtxLabel(ctx, "REPEAT_PLUS"), 1, innerRule)
 }
 
 func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
-	child := extractSingleChild(node)
+	child := node.RequireSingleChild()
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	innerRule := compileParseExpression(&subCtx, child)
@@ -850,9 +804,7 @@ func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 		}
 		return ctx.builder.Rule.ZeroOrMore(ctx.grammarID, ctx.nodeKind, innerRule)
 	}
-
-	label := grammarSubLabel(ctx.ruleName, "REPEAT_STAR", ctx.counts)
-	return ctx.builder.Rule.TransparentZeroOrMore(label, innerRule)
+	return ctx.builder.Rule.TransparentZeroOrMore(parseCtxLabel(ctx, "REPEAT_STAR"), innerRule)
 }
 
 func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -862,14 +814,7 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 		panic("compiler error: emit node missing reference")
 	}
 	targetToken := nodeSingleTokenContent(refNode)
-
-	var label syntaxa.GrammarLabel
-	if ctx.rootLevel {
-		label = ctx.grammarID
-	} else {
-		label = grammarSubLabel(ctx.ruleName, "EMIT", ctx.counts)
-	}
-	return ctx.builder.Token.Expect(label, outputNodeKind, targetToken)
+	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), outputNodeKind, targetToken)
 }
 
 func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -883,7 +828,7 @@ func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
 		panic("compiler error: emit-one-of group must have exactly one expression")
 	}
 	innerExpr := groupChildren[0]
-	flatAlts := flattenNodesByKind(innerExpr, NodeParseAlternation)
+	flatAlts := innerExpr.FlattenByKind(NodeParseAlternation)
 	tokens := make([]string, 0, len(flatAlts))
 	for _, alt := range flatAlts {
 		refNode := alt.FindFirstKind(NodeParseTokenReference)
@@ -896,14 +841,7 @@ func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if len(tokens) == 0 {
 		panic("compiler error: emit-one-of choice must have at least one alternative")
 	}
-
-	var label syntaxa.GrammarLabel
-	if ctx.rootLevel {
-		label = ctx.grammarID
-	} else {
-		label = grammarSubLabel(ctx.ruleName, "EMIT_ONE_OF", ctx.counts)
-	}
-	return ctx.builder.Token.ExpectOneOf(label, outputNodeKind, tokens...)
+	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), outputNodeKind, tokens...)
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -912,13 +850,7 @@ func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
 		panic("compiler error: virtual node missing reference")
 	}
 	targetToken := nodeSingleTokenContent(refNode)
-	var label syntaxa.GrammarLabel
-	if ctx.rootLevel {
-		label = ctx.grammarID
-	} else {
-		label = grammarSubLabel(ctx.ruleName, "VIRTUAL", ctx.counts)
-	}
-	return ctx.builder.Token.ExpectVirtual(label, targetToken)
+	return ctx.builder.Token.ExpectVirtual(parseCtxLabel(ctx, "VIRTUAL"), targetToken)
 }
 
 func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -926,27 +858,16 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 	closeToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestCloseToken))
 
 	innerRule := extractNestInnerRule(ctx, node, closeToken)
-
-	// sync modifier
-	if syncNode := node.FindFirstKind(NodeRuleModifierSync); syncNode != nil {
-		var syncTokens []string
-		for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
-			syncTokens = append(syncTokens, nodeSingleTokenContent(tNode))
-		}
-		if len(syncTokens) > 0 {
-			innerRule = ctx.builder.Rule.RecoverSync(innerRule, syncTokens...)
-		}
+	if syncTokens := collectSyncTokens(node); len(syncTokens) > 0 {
+		innerRule = ctx.builder.Rule.RecoverSync(innerRule, syncTokens...)
 	}
-
 	if ctx.rootLevel {
 		if ctx.transparent {
 			return ctx.builder.Rule.TransparentNest(ctx.grammarID, openToken, closeToken, innerRule)
 		}
 		return ctx.builder.Rule.Nest(ctx.grammarID, ctx.nodeKind, openToken, closeToken, innerRule)
 	}
-
-	label := grammarSubLabel(ctx.ruleName, "NEST", ctx.counts)
-	return ctx.builder.Rule.TransparentNest(label, openToken, closeToken, innerRule)
+	return ctx.builder.Rule.TransparentNest(parseCtxLabel(ctx, "NEST"), openToken, closeToken, innerRule)
 }
 
 func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) CompiledRule {
@@ -955,7 +876,7 @@ func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) C
 	subCtx.nestCloseToken = closeToken
 
 	if bodyNode := node.FindFirstKind(NodeParseNestBody); bodyNode != nil {
-		return compileParseExpression(&subCtx, extractSingleChild(bodyNode))
+		return compileParseExpression(&subCtx, bodyNode.RequireSingleChild())
 	}
 
 	if refNode := node.FindFirstKind(NodeParseExpressionReference); refNode != nil {
@@ -982,42 +903,24 @@ func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName string) CompiledRule {
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
-
-	var label syntaxa.GrammarLabel
-	if ctx.rootLevel {
-		label = ctx.grammarID
-	} else {
-		label = grammarSubLabel(ctx.ruleName, "REF", ctx.counts)
-	}
-
-	return ctx.builder.Rule.Reference(label, targetGrammarID)
+	return ctx.builder.Rule.Reference(parseCtxLabel(ctx, "REF"), targetGrammarID)
 }
 
+// compileGroup compiles a parse group. Uses Unwrap so nested groups (e.g. ( ( expr ) )) yield the innermost expression.
 func compileGroup(ctx *parseCompileCtx, node *Node) CompiledRule {
-	child := extractSingleChild(node)
-	return compileParseExpression(ctx, child)
+	inner := node.Unwrap(NodeParseGroup)
+	return compileParseExpression(ctx, inner)
 }
 
 func compileTokenMatch(ctx *parseCompileCtx, node *Node) CompiledRule {
 	targetToken := nodeSingleTokenContent(node)
-
 	if ctx.rootLevel {
 		if ctx.transparent {
 			return ctx.builder.Token.ExpectVirtual(ctx.grammarID, targetToken)
 		}
 		return ctx.builder.Token.Expect(ctx.grammarID, ctx.nodeKind, targetToken)
 	}
-
-	label := grammarSubLabel(ctx.ruleName, "TOKEN", ctx.counts)
-	return ctx.builder.Token.Expect(label, "", targetToken)
-}
-
-func extractSingleChild(node *Node) *Node {
-	children := node.Children()
-	if len(children) != 1 {
-		panic(fmt.Errorf("compiler error: expected 1 child for %s, got %d", node.Kind(), len(children)))
-	}
-	return children[0]
+	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "TOKEN"), "", targetToken)
 }
 
 func compilePrattExprDef(
@@ -1064,14 +967,7 @@ func buildPrattConfig(
 			panic(fmt.Errorf("compiler error: unknown pratt category: %s", actualCat.Kind()))
 		}
 	}
-
-	// Optional sync on Pratt def: recovery tokens for this expression (e.g. PATTERN_EXPRESSION sync SEMICOLON).
-	if syncNode := ruleNode.FindFirstKind(NodeRuleModifierSync); syncNode != nil {
-		for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
-			config.RecoveryTokens = append(config.RecoveryTokens, nodeSingleTokenContent(tNode))
-		}
-	}
-
+	config.RecoveryTokens = append(config.RecoveryTokens, collectSyncTokens(ruleNode)...)
 	return config
 }
 
@@ -1327,19 +1223,6 @@ func checkForEOFLexeme(lexerSection *Node) string {
 		}
 	}
 	return ""
-}
-
-func nodeSingleTokenContent(node *Node) string {
-	if node == nil {
-		panic("engine error: extraction called on nil node")
-	}
-
-	tks := node.Tokens()
-	if len(tks) != 1 {
-		panic("engine error: single token content extraction requires node to have exactly 1 token")
-	}
-
-	return lexemeRawContent(tks[0])
 }
 
 func nodeFormattedContent(node *Node, formatAttribute string) string {

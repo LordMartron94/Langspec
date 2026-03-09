@@ -537,42 +537,6 @@ func validateUnboundedOptionalRepetition(ctx *ValidationCtx, parseSection *Node,
 	}
 }
 
-// ------------------------------------------------------------- UTILITIES
-
-func getIdentifierValue(node *Node) string {
-	tks := node.Tokens()
-	if len(tks) != 1 {
-		panic("engine error: identifier node must have exactly 1 child")
-	}
-	return string(tks[0].Raw)
-}
-
-func extractPatternDefName(def *Node) (string, *Node) {
-	nameNode := def.FindFirstKind(NodePatternDefName)
-	if nameNode == nil || len(nameNode.Tokens()) == 0 {
-		return "", nil
-	}
-	return string(nameNode.Tokens()[0].Raw), nameNode
-}
-
-func getParseRuleName(nameNode *Node) string {
-	return getTrimmedIdentifierNodeContent(nameNode)
-}
-
-func getTrimmedIdentifierNodeContent(node *Node) string {
-	if node == nil || len(node.Tokens()) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(getIdentifierValue(node))
-}
-
-func getRefName(refNode *Node) string {
-	if refNode == nil || len(refNode.Tokens()) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(getIdentifierValue(refNode))
-}
-
 // parseRefSymbolKind is the result of resolving a parse reference name against the semantic environment.
 type parseRefSymbolKind uint8
 
