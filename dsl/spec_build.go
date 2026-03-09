@@ -989,15 +989,18 @@ func (b *dslGrammarBuilder) nestMapping() Rule {
 		expectToken(NodeParseNestOpenToken, TokIdentifier).
 		expectToken(NodeParseNestCloseToken, TokIdentifier).
 		optionalRule(b.syncModifier()).
-		rule(b.g.NestByNode(
-			NodeParseNestBody,
-			TokBraceOpen,
-			TokBraceClose,
-			b.g.rb.Rule.Required(
-				b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
-				"rule expression needs at least one expression",
-			),
-		)).
+		rule(b.g.rb.Rule.Choice(
+			"DUMMY CHOICE NEST",
+			b.g.expectToken(NodeParseExpressionReference, TokIdentifier),
+			b.g.NestByNode(
+				NodeParseNestBody,
+				TokBraceOpen,
+				TokBraceClose,
+				b.g.rb.Rule.Required(
+					b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+					"rule expression needs at least one expression",
+				),
+			))).
 		build()
 }
 

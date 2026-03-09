@@ -760,7 +760,25 @@ func (d *parseDecompiler[TToken, TNodeKind]) choiceChildDoc(parent *syntaxa.Gram
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) mapNest(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	header := fmt.Sprintf("nest %s %s {", d.tokenFormatter(*g.OpenToken), d.tokenFormatter(*g.CloseToken))
+	openTok := d.tokenFormatter(*g.OpenToken)
+	closeTok := d.tokenFormatter(*g.CloseToken)
+
+	// --- Short form: nest OPEN CLOSE RULE
+	if refNode, ok := isReferenceBody(g); ok {
+		ref := d.sanitizer(string(refNode.ReferenceTarget))
+
+		return concat(
+			doctext("nest "),
+			doctext(openTok),
+			space(),
+			doctext(closeTok),
+			space(),
+			doctext(ref),
+		)
+	}
+
+	// --- Normal inline form
+	header := fmt.Sprintf("nest %s %s {", openTok, closeTok)
 
 	var childDoc = doctext("")
 	if len(g.Children) > 0 {
@@ -773,6 +791,19 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapNest(g *syntaxa.Grammar[TToken, 
 		line(),
 		doctext("}"),
 	)
+}
+
+func isReferenceBody[TToken, TNodeKind comparable](g *syntaxa.Grammar[TToken, TNodeKind]) (*syntaxa.Grammar[TToken, TNodeKind], bool) {
+	if len(g.Children) != 1 {
+		return nil, false
+	}
+
+	child := g.Children[0]
+	if child.Kind != syntaxa.GReference {
+		return nil, false
+	}
+
+	return child, true
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) mapRepeat(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {

@@ -17,6 +17,7 @@ import (
 
 const TestFile = "assets/testing/input.lspec"
 const TestOutput = "assets/testing/generated_lspec_spec.lspec"
+const TestOutput2 = "assets/testing/generated_lspec_spec2.lspec"
 
 const currentLSpecVersion = "v0.1.0"
 

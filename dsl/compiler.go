@@ -925,14 +925,10 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 	openToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestOpenToken))
 	closeToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestCloseToken))
 
-	bodyNode := node.FindFirstKind(NodeParseNestBody)
-	subCtx := *ctx
-	subCtx.rootLevel = false
-	subCtx.nestCloseToken = closeToken
-	innerRule := compileParseExpression(&subCtx, extractSingleChild(bodyNode))
+	innerRule := extractNestInnerRule(ctx, node, closeToken)
 
-	syncNode := node.FindFirstKind(NodeRuleModifierSync)
-	if syncNode != nil {
+	// sync modifier
+	if syncNode := node.FindFirstKind(NodeRuleModifierSync); syncNode != nil {
 		var syncTokens []string
 		for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
 			syncTokens = append(syncTokens, nodeSingleTokenContent(tNode))
@@ -951,6 +947,22 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 	label := grammarSubLabel(ctx.ruleName, "NEST", ctx.counts)
 	return ctx.builder.Rule.TransparentNest(label, openToken, closeToken, innerRule)
+}
+
+func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) CompiledRule {
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	subCtx.nestCloseToken = closeToken
+
+	if bodyNode := node.FindFirstKind(NodeParseNestBody); bodyNode != nil {
+		return compileParseExpression(&subCtx, extractSingleChild(bodyNode))
+	}
+
+	if refNode := node.FindFirstKind(NodeParseExpressionReference); refNode != nil {
+		return compileParseExpression(&subCtx, refNode)
+	}
+
+	panic("compiler error: nest must contain a body or a reference")
 }
 
 func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
