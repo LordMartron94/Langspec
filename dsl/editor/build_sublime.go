@@ -38,9 +38,16 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	err := sublime.GenerateSyntaxFile(
 		editorIR,
 		[]string{".lspec"},
-		func(ctx SublimeContext) string { return ctx.Scope },
 		"source.lspec",
 		syntaxFile,
+		sublime.ExtractionConfig[SublimeContext]{
+			ExtractScope: func(sc SublimeContext) string {
+				return sc.Scope
+			},
+			ExtractMetaScope: func(sc SublimeContext) string {
+				return sc.MetaScope
+			},
+		},
 	)
 
 	return err
@@ -53,16 +60,10 @@ func buildContextProducer(
 ) func(*EditorCtx) SublimeContext {
 
 	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
-
 		// 1. Resolve base lexical scope
 		baseScope := resolveBaseScope(ctx, scopeMap)
 
-		// 2. Apply Custom Token Overrides (Regex Literal, Line Comments)
-		// Note: These currently just return the base scope until the IR
-		// supports mapping transitions to complex embeds/captures.
-		baseScope = applyTokenOverrides(ctx, baseScope)
-
-		// 3. Apply Node/AST Overrides (Dead code path until IR processes Parser Nodes)
+		// 2. Apply Node/AST Overrides (Dead code path until IR processes Parser Nodes)
 		baseScope = applyNodeOverrides(ctx, baseScope)
 
 		return SublimeContext{
@@ -81,24 +82,6 @@ func resolveBaseScope(
 	return scopeMap[*ctx.Token]
 }
 
-func applyTokenOverrides(
-	ctx *EditorCtx,
-	currentScope string,
-) string {
-	if ctx.Token == nil {
-		return currentScope
-	}
-
-	switch *ctx.Token {
-	case dsl.TokLineComment:
-		return "comment.line.double-slash"
-	case dsl.TokRegexLiteral:
-		return "string.regexp.literal"
-	default:
-		return currentScope
-	}
-}
-
 func applyNodeOverrides(
 	ctx *EditorCtx,
 	currentScope string,
@@ -115,6 +98,8 @@ func buildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorO
 		switch *editorCtx.Token {
 		case dsl.TokLineComment:
 			return lineCommentOverride(), true
+		case dsl.TokBlockComment:
+			return blockCommentOverride(), true
 		case dsl.TokRegexLiteral:
 			return regExOverride(), true
 		default:
@@ -142,6 +127,22 @@ func lineCommentOverride() *EditorOverride {
 		MatchContext: &matchCtx,
 		Captures: map[int]SublimeContext{
 			1: {Scope: "punctuation.definition.comment"},
+		},
+	}
+}
+
+func blockCommentOverride() *EditorOverride {
+	openPattern := pattern.LiteralString(runeFactory, "/*")
+	closePattern := pattern.LiteralString(runeFactory, "*/")
+
+	return &EditorOverride{
+		Pattern:      &openPattern,
+		MatchContext: &SublimeContext{Scope: "punctuation.definition.comment.begin"},
+		DelimitedPayload: &langspeceditor.DelimitedPayload[rune, SublimeContext]{
+			StateLabel:   "block_comment_inner",
+			BodyContext:  SublimeContext{MetaScope: "comment.block"},
+			ClosePattern: closePattern,
+			CloseContext: SublimeContext{Scope: "punctuation.definition.comment.end"},
 		},
 	}
 }

@@ -15,6 +15,14 @@ import (
 const headerLine = "# ======================================================\n"
 const timeFormat = "2006-01-02 15:04:05 MST"
 
+// ------------------------------------------------------------------ TYPES
+
+// ExtractionConfig centralizes all generic context unpacking logic.
+type ExtractionConfig[TContext any] struct {
+	ExtractScope     func(TContext) string
+	ExtractMetaScope func(TContext) string
+}
+
 type languageMetadata struct {
 	Name           string   `yaml:"name"`
 	FileExtensions []string `yaml:"file_extensions"`
@@ -23,6 +31,7 @@ type languageMetadata struct {
 }
 
 type contextEntry struct {
+	MetaScope      *string        `yaml:"meta_scope,omitempty"`
 	Match          *string        `yaml:"match,omitempty"`
 	Scope          string         `yaml:"scope,omitempty"`
 	Push           string         `yaml:"push,omitempty"`
@@ -44,9 +53,9 @@ type contextsSection struct {
 func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	ir *editor.EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	fileExtensions []string,
-	extractScope func(TContext) string,
 	baseScope string,
 	outputFile string,
+	config ExtractionConfig[TContext],
 ) error {
 	sb := &strings.Builder{}
 
@@ -56,7 +65,7 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 		return err
 	}
 
-	if err := writeContexts(sb, ir.EditorStates, extractScope); err != nil {
+	if err := writeContexts(sb, ir.EditorStates, config); err != nil {
 		return err
 	}
 
@@ -80,6 +89,12 @@ func writeHeader(sb *strings.Builder, name, version string) {
 	sb.WriteString("\n")
 }
 
+func writeSectionHeader(sb *strings.Builder, headerContent string) {
+	sb.WriteString(headerLine)
+	fmt.Fprintf(sb, "#  %s\n", headerContent)
+	sb.WriteString(headerLine)
+}
+
 func writeMetadata(sb *strings.Builder, name string, exts []string, baseScope string) error {
 	writeSectionHeader(sb, "Language Metadata")
 
@@ -96,11 +111,11 @@ func writeMetadata(sb *strings.Builder, name string, exts []string, baseScope st
 func writeContexts[TObservation cmp.Ordered, TContext any](
 	sb *strings.Builder,
 	states []editor.EditorState[TObservation, TContext],
-	extractScope func(TContext) string,
+	config ExtractionConfig[TContext],
 ) error {
 	writeSectionHeader(sb, "Contexts & Rules")
 
-	contextsMap := buildContextsMap(states, extractScope)
+	contextsMap := buildContextsMap(states, config)
 	section := contextsSection{Contexts: contextsMap}
 
 	return encodeAndWriteYAML(sb, section)
@@ -110,14 +125,21 @@ func writeContexts[TObservation cmp.Ordered, TContext any](
 
 func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	states []editor.EditorState[TObservation, TContext],
-	extractScope func(TContext) string,
+	config ExtractionConfig[TContext],
 ) map[string][]contextEntry {
 
 	contextsMap := make(map[string][]contextEntry)
 
 	for _, state := range states {
 		label := determineContextLabel(state.Label)
-		contextsMap[label] = buildTransitions(state.Transitions, extractScope)
+		entries := buildTransitions(state.Transitions, config)
+
+		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
+			metaEntry := contextEntry{MetaScope: &metaScope}
+			entries = append([]contextEntry{metaEntry}, entries...)
+		}
+
+		contextsMap[label] = entries
 	}
 
 	return contextsMap
@@ -125,13 +147,13 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 
 func buildTransitions[TObservation cmp.Ordered, TContext any](
 	transitions []editor.EditorTransition[TObservation, TContext],
-	extractScope func(TContext) string,
+	config ExtractionConfig[TContext],
 ) []contextEntry {
 
 	var entries []contextEntry
 
 	for _, t := range transitions {
-		entry := buildSingleTransition(t, extractScope)
+		entry := buildSingleTransition(t, config)
 		entries = append(entries, entry)
 	}
 
@@ -140,7 +162,7 @@ func buildTransitions[TObservation cmp.Ordered, TContext any](
 
 func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 	t editor.EditorTransition[TObservation, TContext],
-	extractScope func(TContext) string,
+	config ExtractionConfig[TContext],
 ) contextEntry {
 
 	regexStr, err := t.OnPattern.ToRegEx()
@@ -150,11 +172,11 @@ func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 
 	entry := contextEntry{
 		Match:    &regexStr,
-		Scope:    extractScope(t.MatchContext),
-		Captures: buildCapturesMap(t.Captures, extractScope),
+		Scope:    config.ExtractScope(t.MatchContext),
+		Captures: buildCapturesMap(t.Captures, config.ExtractScope),
 	}
 
-	applyStackOperation(&entry, t, extractScope)
+	applyStackOperation(&entry, t, config)
 
 	return entry
 }
@@ -180,7 +202,7 @@ func buildCapturesMap[TContext any](
 func applyStackOperation[TObservation cmp.Ordered, TContext any](
 	entry *contextEntry,
 	t editor.EditorTransition[TObservation, TContext],
-	extractScope func(TContext) string,
+	config ExtractionConfig[TContext],
 ) {
 	switch t.Operation {
 	case editor.STACK_PUSH:
@@ -189,40 +211,16 @@ func applyStackOperation[TObservation cmp.Ordered, TContext any](
 		b := true
 		entry.Pop = &b
 	case editor.STACK_EMBED:
-		applyEmbedOperation(entry, t.ForeignPayload, extractScope)
+		applyEmbedOperation(entry, t.ForeignPayload, config)
 	case editor.STACK_NONE:
 		// Transition consumes the token and applies scope without altering the stack.
 	}
 }
 
-func determineContextLabel(label string) string {
-	if label == editor.ROOT_LABEL {
-		return "main"
-	}
-	return label
-}
-
-func writeSectionHeader(sb *strings.Builder, headerContent string) {
-	sb.WriteString(headerLine)
-	fmt.Fprintf(sb, "#  %s\n", headerContent)
-	sb.WriteString(headerLine)
-}
-
-func encodeAndWriteYAML(sb *strings.Builder, data any) error {
-	value, err := yaml.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("yaml marshal failed: %w", err)
-	}
-
-	sb.Write(value)
-	sb.WriteString("\n")
-	return nil
-}
-
 func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	entry *contextEntry,
 	payload *editor.ForeignMachinePayload[TObservation, TContext],
-	extractScope func(TContext) string,
+	config ExtractionConfig[TContext],
 ) {
 	if payload == nil {
 		return
@@ -234,7 +232,25 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	}
 
 	entry.Embed = payload.MachineID
-	entry.EmbedScope = extractScope(payload.MachineContext)
+	entry.EmbedScope = config.ExtractMetaScope(payload.MachineContext)
 	entry.Escape = &escapeStr
-	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, extractScope)
+	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, config.ExtractScope)
+}
+
+func determineContextLabel(label string) string {
+	if label == editor.ROOT_LABEL {
+		return "main"
+	}
+	return label
+}
+
+func encodeAndWriteYAML(sb *strings.Builder, data any) error {
+	value, err := yaml.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("yaml marshal failed: %w", err)
+	}
+
+	sb.Write(value)
+	sb.WriteString("\n")
+	return nil
 }

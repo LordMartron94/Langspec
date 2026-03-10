@@ -20,10 +20,11 @@ type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeK
 }
 
 type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	Pattern        *pattern.RegulaAST[TObservation]
-	MatchContext   *TContext
-	Captures       map[int]TContext
-	ForeignPayload *ForeignMachinePayload[TObservation, TContext]
+	Pattern          *pattern.RegulaAST[TObservation]
+	MatchContext     *TContext
+	Captures         map[int]TContext
+	ForeignPayload   *ForeignMachinePayload[TObservation, TContext]
+	DelimitedPayload *DelimitedPayload[TObservation, TContext]
 }
 
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
@@ -59,6 +60,13 @@ const (
 	STACK_POP                        // Token matched, exit current state
 	STACK_EMBED
 )
+
+type DelimitedPayload[TObservation cmp.Ordered, TContext any] struct {
+	StateLabel   string
+	BodyContext  TContext
+	ClosePattern pattern.RegulaAST[TObservation]
+	CloseContext TContext
+}
 
 type ForeignMachinePayload[TObservation cmp.Ordered, TContext any] struct {
 	MachineID      string
@@ -113,7 +121,10 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 		sanitizer:      text.NewIdentifierSanitizer(),
 	}
 
-	rootState := generator.buildRootState()
+	states, rootState := generator.buildRootState()
+
+	editorStates := []EditorState[TObservation, TContext]{rootState}
+	editorStates = append(editorStates, states...)
 
 	return &EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
 		LanguageMeta: LanguageMeta{
@@ -121,7 +132,7 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 			LanguageVersion: grammarPackage.Version,
 		},
 		LanguageMachine: LanguageMachine[TObservation, TContext]{
-			EditorStates: []EditorState[TObservation, TContext]{rootState},
+			EditorStates: editorStates,
 			RootState:    rootState,
 		},
 	}
@@ -129,16 +140,18 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 
 // ------------------------------------------------------------- Private Helpers
 
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildRootState() EditorState[TObservation, TContext] {
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildRootState() ([]EditorState[TObservation, TContext], EditorState[TObservation, TContext]) {
 	sortedRules := e.getSortedLexerRules()
-	transitions := e.buildTransitions(sortedRules)
+	transitions, extraStates := e.buildTransitions(sortedRules)
 
-	return EditorState[TObservation, TContext]{
+	rootState := EditorState[TObservation, TContext]{
 		ID:          e.generateID(),
 		Label:       ROOT_LABEL,
 		Context:     *new(TContext),
 		Transitions: transitions,
 	}
+
+	return extraStates, rootState
 }
 
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) getSortedLexerRules() []lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole] {
@@ -151,19 +164,25 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildTransitions(
 	rules []lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
-) []EditorTransition[TObservation, TContext] {
-	transitions := make([]EditorTransition[TObservation, TContext], len(rules))
+) ([]EditorTransition[TObservation, TContext], []EditorState[TObservation, TContext]) {
 
-	for i, rule := range rules {
-		transitions[i] = e.buildSingleTransition(rule)
+	var transitions []EditorTransition[TObservation, TContext]
+	var extraStates []EditorState[TObservation, TContext]
+
+	for _, rule := range rules {
+		t, targetState := e.buildSingleTransition(rule)
+		transitions = append(transitions, t)
+		if targetState != nil {
+			extraStates = append(extraStates, *targetState)
+		}
 	}
 
-	return transitions
+	return transitions, extraStates
 }
 
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildSingleTransition(
 	rule lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
-) EditorTransition[TObservation, TContext] {
+) (EditorTransition[TObservation, TContext], *EditorState[TObservation, TContext]) {
 
 	ctx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:     &rule.Token,
@@ -172,28 +191,49 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 
 	pattern := rule.Pattern
 	matchCtx := e.config.contextProducer(ctx)
-	var captures map[int]TContext
-	var foreign *ForeignMachinePayload[TObservation, TContext]
-	op := STACK_NONE
+
+	t := EditorTransition[TObservation, TContext]{
+		Operation: STACK_NONE,
+	}
+	var spawnedState *EditorState[TObservation, TContext]
 
 	if override, hasOverride := e.config.overrideProducer(ctx); hasOverride {
 		pattern = e.applyPatternOverride(pattern, override)
 		matchCtx = e.applyContextOverride(matchCtx, override)
-		captures = override.Captures
+		t.Captures = override.Captures
 
 		if override.ForeignPayload != nil {
-			foreign = override.ForeignPayload
-			op = STACK_EMBED
+			t.ForeignPayload = override.ForeignPayload
+			t.Operation = STACK_EMBED
+		} else if override.DelimitedPayload != nil {
+			spawnedState = e.constructDelimitedTargetState(override.DelimitedPayload)
+			t.Target = spawnedState
+			t.Operation = STACK_PUSH
 		}
 	}
 
-	return EditorTransition[TObservation, TContext]{
-		OnPattern:      pattern,
-		MatchContext:   matchCtx,
-		Captures:       captures,
-		Target:         nil,
-		ForeignPayload: foreign,
-		Operation:      op,
+	t.OnPattern = pattern
+	t.MatchContext = matchCtx
+
+	return t, spawnedState
+}
+
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) constructDelimitedTargetState(
+	payload *DelimitedPayload[TObservation, TContext],
+) *EditorState[TObservation, TContext] {
+
+	return &EditorState[TObservation, TContext]{
+		ID:      e.generateID(),
+		Label:   payload.StateLabel,
+		Context: payload.BodyContext,
+		Transitions: []EditorTransition[TObservation, TContext]{
+			{
+				OnPattern:    payload.ClosePattern,
+				MatchContext: payload.CloseContext,
+				Target:       nil,
+				Operation:    STACK_POP,
+			},
+		},
 	}
 }
 
