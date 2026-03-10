@@ -23,12 +23,16 @@ type languageMetadata struct {
 }
 
 type contextEntry struct {
-	Match    *string        `yaml:"match,omitempty"`
-	Scope    string         `yaml:"scope,omitempty"`
-	Push     string         `yaml:"push,omitempty"`
-	Pop      *bool          `yaml:"pop,omitempty"`
-	Set      string         `yaml:"set,omitempty"`
-	Captures map[int]string `yaml:"captures,omitempty"`
+	Match          *string        `yaml:"match,omitempty"`
+	Scope          string         `yaml:"scope,omitempty"`
+	Push           string         `yaml:"push,omitempty"`
+	Pop            *bool          `yaml:"pop,omitempty"`
+	Set            string         `yaml:"set,omitempty"`
+	Captures       map[int]string `yaml:"captures,omitempty"`
+	Embed          string         `yaml:"embed,omitempty"`
+	EmbedScope     string         `yaml:"embed_scope,omitempty"`
+	Escape         *string        `yaml:"escape,omitempty"`
+	EscapeCaptures map[int]string `yaml:"escape_captures,omitempty"`
 }
 
 type contextsSection struct {
@@ -150,7 +154,7 @@ func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 		Captures: buildCapturesMap(t.Captures, extractScope),
 	}
 
-	applyStackOperation(&entry, t)
+	applyStackOperation(&entry, t, extractScope)
 
 	return entry
 }
@@ -176,6 +180,7 @@ func buildCapturesMap[TContext any](
 func applyStackOperation[TObservation cmp.Ordered, TContext any](
 	entry *contextEntry,
 	t editor.EditorTransition[TObservation, TContext],
+	extractScope func(TContext) string,
 ) {
 	switch t.Operation {
 	case editor.STACK_PUSH:
@@ -183,6 +188,8 @@ func applyStackOperation[TObservation cmp.Ordered, TContext any](
 	case editor.STACK_POP:
 		b := true
 		entry.Pop = &b
+	case editor.STACK_EMBED:
+		applyEmbedOperation(entry, t.ForeignPayload, extractScope)
 	case editor.STACK_NONE:
 		// Transition consumes the token and applies scope without altering the stack.
 	}
@@ -210,4 +217,24 @@ func encodeAndWriteYAML(sb *strings.Builder, data any) error {
 	sb.Write(value)
 	sb.WriteString("\n")
 	return nil
+}
+
+func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
+	entry *contextEntry,
+	payload *editor.ForeignMachinePayload[TObservation, TContext],
+	extractScope func(TContext) string,
+) {
+	if payload == nil {
+		return
+	}
+
+	escapeStr, err := payload.EscapePattern.ToRegEx()
+	if err != nil {
+		panic(fmt.Errorf("failed to compile escape pattern: %w", err))
+	}
+
+	entry.Embed = payload.MachineID
+	entry.EmbedScope = extractScope(payload.MachineContext)
+	entry.Escape = &escapeStr
+	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, extractScope)
 }

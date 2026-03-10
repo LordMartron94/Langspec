@@ -20,9 +20,10 @@ type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeK
 }
 
 type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	Pattern      *pattern.RegulaAST[TObservation]
-	MatchContext *TContext
-	Captures     map[int]TContext
+	Pattern        *pattern.RegulaAST[TObservation]
+	MatchContext   *TContext
+	Captures       map[int]TContext
+	ForeignPayload *ForeignMachinePayload[TObservation, TContext]
 }
 
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
@@ -56,14 +57,23 @@ const (
 	STACK_NONE StackOperation = iota // Token matched, no state change
 	STACK_PUSH                       // Token matched, enter new Target state
 	STACK_POP                        // Token matched, exit current state
+	STACK_EMBED
 )
 
+type ForeignMachinePayload[TObservation cmp.Ordered, TContext any] struct {
+	MachineID      string
+	MachineContext TContext
+	EscapePattern  pattern.RegulaAST[TObservation]
+	EscapeCaptures map[int]TContext
+}
+
 type EditorTransition[TObservation cmp.Ordered, TContext any] struct {
-	OnPattern    pattern.RegulaAST[TObservation]
-	MatchContext TContext
-	Target       *EditorState[TObservation, TContext]
-	Captures     map[int]TContext
-	Operation    StackOperation
+	OnPattern      pattern.RegulaAST[TObservation]
+	MatchContext   TContext
+	Target         *EditorState[TObservation, TContext]
+	Captures       map[int]TContext
+	Operation      StackOperation
+	ForeignPayload *ForeignMachinePayload[TObservation, TContext]
 }
 
 type LanguageMeta struct {
@@ -160,25 +170,30 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 		TokenRole: &rule.Role,
 	}
 
-	// 1. Establish Defaults
 	pattern := rule.Pattern
-	matchContext := e.config.contextProducer(ctx)
+	matchCtx := e.config.contextProducer(ctx)
 	var captures map[int]TContext
+	var foreign *ForeignMachinePayload[TObservation, TContext]
+	op := STACK_NONE
 
-	// 2. Apply Overrides (if present)
 	if override, hasOverride := e.config.overrideProducer(ctx); hasOverride {
 		pattern = e.applyPatternOverride(pattern, override)
-		matchContext = e.applyContextOverride(matchContext, override)
+		matchCtx = e.applyContextOverride(matchCtx, override)
 		captures = override.Captures
+
+		if override.ForeignPayload != nil {
+			foreign = override.ForeignPayload
+			op = STACK_EMBED
+		}
 	}
 
-	// 3. Construct Transition
 	return EditorTransition[TObservation, TContext]{
-		OnPattern:    pattern,
-		MatchContext: matchContext,
-		Captures:     captures,
-		Target:       nil,
-		Operation:    STACK_NONE,
+		OnPattern:      pattern,
+		MatchContext:   matchCtx,
+		Captures:       captures,
+		Target:         nil,
+		ForeignPayload: foreign,
+		Operation:      op,
 	}
 }
 

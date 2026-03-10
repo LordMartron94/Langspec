@@ -115,8 +115,8 @@ func buildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorO
 		switch *editorCtx.Token {
 		case dsl.TokLineComment:
 			return lineCommentOverride(), true
-		// case dsl.TokBlockComment:
-		// 	return blockCommentOverride(), true
+		case dsl.TokRegexLiteral:
+			return regExOverride(), true
 		default:
 			return nil, false
 		}
@@ -142,6 +142,23 @@ func lineCommentOverride() *EditorOverride {
 		MatchContext: &matchCtx,
 		Captures: map[int]SublimeContext{
 			1: {Scope: "punctuation.definition.comment"},
+		},
+	}
+}
+
+func regExOverride() *EditorOverride {
+	backtick := pattern.LiteralString(runeFactory, "`")
+
+	return &EditorOverride{
+		Pattern:      &backtick,
+		MatchContext: &SublimeContext{Scope: "punctuation.definition.string.begin"},
+		ForeignPayload: &langspeceditor.ForeignMachinePayload[rune, SublimeContext]{
+			MachineID:      "scope:source.regexp",
+			MachineContext: SublimeContext{Scope: "meta.embedded.regexp"},
+			EscapePattern:  backtick,
+			EscapeCaptures: map[int]SublimeContext{
+				0: {Scope: "punctuation.definition.string.end"},
+			},
 		},
 	}
 }
@@ -193,17 +210,3 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 	dsl.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
 	dsl.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
 }
-
-// ------------------------------------------------------------- PATTERN BUILDING
-
-// func buildRegexLiteralOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
-// 	backtickRegex, _ := pattern.LiteralString(runeFactory, "`").ToRegEx()
-// 	return langspeceditor.TokenOverrideEmbed(ctx,
-// 		backtickRegex,
-// 		"punctuation.definition.string.begin",
-// 		"scope:source.regexp",
-// 		"meta.embedded.regexp",
-// 		"`",
-// 		map[int]string{0: "punctuation.definition.string.end"},
-// 	)
-// }
