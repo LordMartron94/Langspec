@@ -1,53 +1,104 @@
 package editor
 
 import (
-	"autarch/pattern"
-	"foundation/domain"
 	"langspec/dsl"
 	langspeceditor "langspec/editor"
 	"langspec/editor/sublime"
 )
+
+type SublimeContext struct {
+	Scope     string
+	MetaScope string
+}
 
 // ------------------------------------------------------------- ORCHESTRATOR
 
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
-	editorIRConfig := langspeceditor.PushDownAutomatonIRConfigurationCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](
-		func(t dsl.LangSpecLexerTokenType) string { return scopeMap[t] },
+	config := langspeceditor.EditorIRConfigurationCreate(
 		dsl.LangSpecLexerTokenType.String,
-		".lspec",
+		buildContextProducer(scopeMap),
 	)
 
-	// 1. Core Configuration
-	editorIRConfig.AddPrototypeTokenRoles(dsl.LANG_SPEC_WHITESPACE_ROLE, dsl.LANG_SPEC_COMMENT_ROLE)
-
-	// 2. Custom Token Logic
-	editorIRConfig.AddOverride(dsl.TokLineComment, buildLineCommentOverride)
-	editorIRConfig.AddOverride(dsl.TokRegexLiteral, buildRegexLiteralOverride)
-
-	// 3. Apply the Declarative Manifest
-	for kind, binding := range langSpecEditorManifest {
-		grammarID := dsl.LangSpecGrammarIDFromNode(kind)
-
-		editorIRConfig.AddNodeOverride(grammarID, langspeceditor.OverrideConfig[dsl.LangSpecLexerTokenType]{
-			Scopes:      binding.Scopes,
-			MetaScope:   binding.MetaScope,
-			TokenScopes: binding.TokenScopes,
-		})
-	}
-
-	// 4. Engine Execution
-	editorIR := langspeceditor.PushDownAutomatonIRCreate(
-		editorIRConfig,
+	editorIR := langspeceditor.EditorIRCreate(
 		dsl.LangSpecCompilerLexingRuleSet(compiler),
 		*dsl.LangSpecCompilerGrammarPackage(compiler),
+		config,
 	)
 
-	return sublime.SublimeTextGenerateSyntaxFile(editorIR, syntaxFile, []string{".lspec"}, false)
+	err := sublime.GenerateSyntaxFile(
+		editorIR,
+		[]string{".lspec"},
+		func(ctx SublimeContext) string { return ctx.Scope },
+		"source.lspec",
+		syntaxFile,
+	)
+
+	return err
 }
 
-// ------------------------------------------------------------- NODE BINDING
+// ------------------------------------------------------------- CONTEXT PIPELINE
+
+func buildContextProducer(
+	scopeMap map[dsl.LangSpecLexerTokenType]string,
+) func(*langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
+
+	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
+
+		// 1. Resolve base lexical scope
+		baseScope := resolveBaseScope(ctx, scopeMap)
+
+		// 2. Apply Custom Token Overrides (Regex Literal, Line Comments)
+		// Note: These currently just return the base scope until the IR
+		// supports mapping transitions to complex embeds/captures.
+		baseScope = applyTokenOverrides(ctx, baseScope)
+
+		// 3. Apply Node/AST Overrides (Dead code path until IR processes Parser Nodes)
+		baseScope = applyNodeOverrides(ctx, baseScope)
+
+		return SublimeContext{
+			Scope: baseScope,
+		}
+	}
+}
+
+func resolveBaseScope(
+	ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind],
+	scopeMap map[dsl.LangSpecLexerTokenType]string,
+) string {
+	if ctx.Token == nil {
+		return ""
+	}
+	return scopeMap[*ctx.Token]
+}
+
+func applyTokenOverrides(
+	ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind],
+	currentScope string,
+) string {
+	if ctx.Token == nil {
+		return currentScope
+	}
+
+	switch *ctx.Token {
+	case dsl.TokLineComment:
+		return "comment.line.double-slash"
+	case dsl.TokRegexLiteral:
+		return "string.regexp.literal"
+	default:
+		return currentScope
+	}
+}
+
+func applyNodeOverrides(
+	ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind],
+	currentScope string,
+) string {
+	return currentScope
+}
+
+// ------------------------------------------------------------- NODE BINDING (PRESERVED)
 
 type NodeBinding struct {
 	Scopes      []string
@@ -82,64 +133,42 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 			dsl.TokKWFalse:       {"entity.other.attribute-value", "constant.language.bool"},
 		},
 	},
-	dsl.NodeParseRuleName: {
-		Scopes: []string{"entity.name.function.parser-expression"},
-	},
-	dsl.NodeParseNodeName: {
-		Scopes: []string{"entity.name.type.parser-node"},
-	},
-	dsl.NodeParseSymbolReference: {
-		Scopes: []string{"constant.language.symbol-reference"},
-	},
-	dsl.NodeParseExpressionReference: {
-		Scopes: []string{"entity.name.function.expression-reference"},
-	},
-	dsl.NodeParseTokenReference: {
-		Scopes: []string{"constant.language.token-reference"},
-	},
-	dsl.NodeParseNestOpenToken: {
-		Scopes: []string{"constant.language.token-reference"},
-	},
-	dsl.NodeParseNestCloseToken: {
-		Scopes: []string{"constant.language.token-reference"},
-	},
-	dsl.NodePrattExprName: {
-		Scopes: []string{"entity.name.function.parser-rule"},
-	},
-	dsl.NodeParseIgnoreRole: {
-		Scopes: []string{"constant.language.token-role-reference"},
-	},
-	dsl.NodePredictToken: {
-		Scopes: []string{"constant.language.token-reference"},
-	},
-	dsl.NodeSyncToken: {
-		Scopes: []string{"constant.language.token-reference"},
-	},
+	dsl.NodeParseRuleName:            {Scopes: []string{"entity.name.function.parser-expression"}},
+	dsl.NodeParseNodeName:            {Scopes: []string{"entity.name.type.parser-node"}},
+	dsl.NodeParseSymbolReference:     {Scopes: []string{"constant.language.symbol-reference"}},
+	dsl.NodeParseExpressionReference: {Scopes: []string{"entity.name.function.expression-reference"}},
+	dsl.NodeParseTokenReference:      {Scopes: []string{"constant.language.token-reference"}},
+	dsl.NodeParseNestOpenToken:       {Scopes: []string{"constant.language.token-reference"}},
+	dsl.NodeParseNestCloseToken:      {Scopes: []string{"constant.language.token-reference"}},
+	dsl.NodePrattExprName:            {Scopes: []string{"entity.name.function.parser-rule"}},
+	dsl.NodeParseIgnoreRole:          {Scopes: []string{"constant.language.token-role-reference"}},
+	dsl.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
+	dsl.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
 }
 
 // ------------------------------------------------------------- PATTERN BUILDING
 
-var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
+// var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 
-func buildLineCommentOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
-	slashes := pattern.LiteralString(runeFactory, "//").Capture()
-	notTerminator := runeFactory.NegatedClass(
-		runeFactory.Range('\n', '\n'),
-		runeFactory.Range('\r', '\r'),
-	).Star().Capture()
-	regex, _ := slashes.Then(notTerminator).ToRegEx()
+// func buildLineCommentOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
+// 	slashes := pattern.LiteralString(runeFactory, "//").Capture()
+// 	notTerminator := runeFactory.NegatedClass(
+// 		runeFactory.Range('\n', '\n'),
+// 		runeFactory.Range('\r', '\r'),
+// 	).Star().Capture()
+// 	regex, _ := slashes.Then(notTerminator).ToRegEx()
 
-	return langspeceditor.TokenOverrideMatchWithCapture(ctx, regex, "comment.line.double-slash", "punctuation.definition.comment")
-}
+// 	return langspeceditor.TokenOverrideMatchWithCapture(ctx, regex, "comment.line.double-slash", "punctuation.definition.comment")
+// }
 
-func buildRegexLiteralOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
-	backtickRegex, _ := pattern.LiteralString(runeFactory, "`").ToRegEx()
-	return langspeceditor.TokenOverrideEmbed(ctx,
-		backtickRegex,
-		"punctuation.definition.string.begin",
-		"scope:source.regexp",
-		"meta.embedded.regexp",
-		"`",
-		map[int]string{0: "punctuation.definition.string.end"},
-	)
-}
+// func buildRegexLiteralOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
+// 	backtickRegex, _ := pattern.LiteralString(runeFactory, "`").ToRegEx()
+// 	return langspeceditor.TokenOverrideEmbed(ctx,
+// 		backtickRegex,
+// 		"punctuation.definition.string.begin",
+// 		"scope:source.regexp",
+// 		"meta.embedded.regexp",
+// 		"`",
+// 		map[int]string{0: "punctuation.definition.string.end"},
+// 	)
+// }

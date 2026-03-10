@@ -333,7 +333,7 @@ func RenderLSTDump(w io.Writer, dump string) {
 	fmt.Fprintln(w, "=========================")
 }
 
-func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump string) {
+func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump, cfgDump string) {
 	if w == nil {
 		return
 	}
@@ -343,6 +343,11 @@ func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump string) {
 	fmt.Fprintln(w, "\n===== GRAMMAR PACKAGE DEBUG DUMP =====")
 	fmt.Fprintln(w, grammarPackageDump)
 	fmt.Fprintln(w, "=========================")
+	if cfgDump != "" {
+		fmt.Fprintln(w, "\n===== CFG (Contexta) DEBUG DUMP =====")
+		fmt.Fprintln(w, cfgDump)
+		fmt.Fprintln(w, "=========================")
+	}
 }
 
 func renderLexemes(

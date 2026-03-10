@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"autarch/pattern"
 	"fmt"
 	"foundation/system"
 	"io"
@@ -273,7 +274,14 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 		FormatToken: LangSpecLexerTokenType.String,
 	})
 
-	RenderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump)
+	var cfgDump string
+	if grammarPackage.CoreCFG != nil {
+		cfgDump = grammarPackage.CoreCFG.DebugDump(
+			pattern.NewContextaCleanFormatter(LangSpecLexerTokenType.String),
+		)
+	}
+
+	RenderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump, cfgDump)
 }
 
 func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {

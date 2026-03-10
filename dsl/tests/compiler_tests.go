@@ -1,14 +1,12 @@
 package tests
 
 import (
-	"fmt"
 	"foundation/system"
 	"langspec"
 	"langspec/dsl"
 	"langspec/dsl/generator"
 
 	"lexarch"
-	"syntaxa"
 	"testing"
 
 	"memcore"
@@ -47,7 +45,7 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(compiler)
 
-	// dsl.LangSpecCompilerDebugGrammar(compiler)
+	dsl.LangSpecCompilerDebugGrammar(compiler)
 
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 	genCfg := generator.GeneratorConfigCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](
@@ -96,36 +94,36 @@ func TestDSLCompiler(t *testing.T) {
 	session := langspec.LangParserSessionCreate[rune](TestOutput, nil, false)
 	contentRune, _ := system.FileReadAllRunes(TestOutput)
 
-	grammarDump := result.CompiledGrammarPackage.EntryRuleParserRule.GetGrammar().DebugDump(
-		syntaxa.GrammarDebugFormatter[string, string]{
-			FormatKind: syntaxa.GrammarKind.String,
-			FormatToken: func(s string) string {
-				return s
-			},
-			FormatOutputNodeKind: func(s string) string {
-				return s
-			},
-			FormatRange: func(min int, max *int) string {
-				if max == nil {
-					return fmt.Sprintf("[%d..∞]", min)
-				}
-				return fmt.Sprintf("[%d..%d]", min, *max)
-			},
-			FormatGrammarLabel: func(label syntaxa.GrammarLabel) string {
-				return "(" + string(label) + ")"
-			},
-		},
-	)
+	// grammarDump := result.CompiledGrammarPackage.EntryRuleParserRule.GetGrammar().DebugDump(
+	// 	syntaxa.GrammarDebugFormatter[string, string]{
+	// 		FormatKind: syntaxa.GrammarKind.String,
+	// 		FormatToken: func(s string) string {
+	// 			return s
+	// 		},
+	// 		FormatOutputNodeKind: func(s string) string {
+	// 			return s
+	// 		},
+	// 		FormatRange: func(min int, max *int) string {
+	// 			if max == nil {
+	// 				return fmt.Sprintf("[%d..∞]", min)
+	// 			}
+	// 			return fmt.Sprintf("[%d..%d]", min, *max)
+	// 		},
+	// 		FormatGrammarLabel: func(label syntaxa.GrammarLabel) string {
+	// 			return "(" + string(label) + ")"
+	// 		},
+	// 	},
+	// )
 
-	grammarPackageDump := result.CompiledGrammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, string, string, string, string]{
-		FormatToken: func(s string) string {
-			return s
-		},
-	})
+	// grammarPackageDump := result.CompiledGrammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, string, string, string, string]{
+	// 	FormatToken: func(s string) string {
+	// 		return s
+	// 	},
+	// })
 
-	dsl.RenderGrammarDumps(sink.Writer, grammarDump, grammarPackageDump)
+	// dsl.RenderGrammarDumps(sink.Writer, grammarDump, grammarPackageDump, "")
 
-	_, rootNode, syntaxErrors, err := langspec.LangParserParseFile(langParser, session)
+	_, _, syntaxErrors, err := langspec.LangParserParseFile(langParser, session)
 
 	// dsl.RenderParseTrace(sink.Writer, trace, func(t string) string { return t })
 
@@ -144,49 +142,49 @@ func TestDSLCompiler(t *testing.T) {
 		)
 	}
 
-	lstDump := rootNode.DebugDump(
-		syntaxa.LSTDebugFormatter[
-			rune,
-			string,
-			string,
-			string,
-		]{
-			FormatKind: func(k string) string {
-				return k
-			},
+	// lstDump := rootNode.DebugDump(
+	// 	syntaxa.LSTDebugFormatter[
+	// 		rune,
+	// 		string,
+	// 		string,
+	// 		string,
+	// 	]{
+	// 		FormatKind: func(k string) string {
+	// 			return k
+	// 		},
 
-			FormatToken: func(l lexarch.Lexeme[
-				rune,
-				string,
-				string,
-			]) string {
-				return string(l.Raw)
-			},
+	// 		FormatToken: func(l lexarch.Lexeme[
+	// 			rune,
+	// 			string,
+	// 			string,
+	// 		]) string {
+	// 			return string(l.Raw)
+	// 		},
 
-			FormatAttribute: func(k string, v any) string {
-				return fmt.Sprintf("%s=%v", k, v)
-			},
+	// 		FormatAttribute: func(k string, v any) string {
+	// 			return fmt.Sprintf("%s=%v", k, v)
+	// 		},
 
-			/* ───── visual toggles ───── */
+	// 		/* ───── visual toggles ───── */
 
-			ShowTokens:     true,
-			ShowAttributes: true,
+	// 		ShowTokens:     true,
+	// 		ShowAttributes: true,
 
-			ShowByteSpan: true,
-			ShowLineSpan: true,
+	// 		ShowByteSpan: true,
+	// 		ShowLineSpan: true,
 
-			ShowNodeID:   true,
-			ShowRevision: false,
+	// 		ShowNodeID:   true,
+	// 		ShowRevision: false,
 
-			SlotPrefix: "@",
+	// 		SlotPrefix: "@",
 
-			/* colors disabled for now */
-			ColorKind:      nil,
-			ColorToken:     nil,
-			ColorSpan:      nil,
-			ColorAttribute: nil,
-		},
-	)
+	// 		/* colors disabled for now */
+	// 		ColorKind:      nil,
+	// 		ColorToken:     nil,
+	// 		ColorSpan:      nil,
+	// 		ColorAttribute: nil,
+	// 	},
+	// )
 
-	dsl.RenderLSTDump(sink.Writer, lstDump)
+	// dsl.RenderLSTDump(sink.Writer, lstDump)
 }
