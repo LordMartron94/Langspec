@@ -1,10 +1,17 @@
 package editor
 
 import (
+	"autarch/pattern"
+	"foundation/domain"
 	"langspec/dsl"
 	langspeceditor "langspec/editor"
 	"langspec/editor/sublime"
 )
+
+var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
+
+type EditorCtx = langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]
+type EditorOverride = langspeceditor.EditorOverride[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind, SublimeContext]
 
 type SublimeContext struct {
 	Scope     string
@@ -19,6 +26,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	config := langspeceditor.EditorIRConfigurationCreate(
 		dsl.LangSpecLexerTokenType.String,
 		buildContextProducer(scopeMap),
+		buildEditorOverrideProducer(),
 	)
 
 	editorIR := langspeceditor.EditorIRCreate(
@@ -42,7 +50,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 
 func buildContextProducer(
 	scopeMap map[dsl.LangSpecLexerTokenType]string,
-) func(*langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
+) func(*EditorCtx) SublimeContext {
 
 	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
 
@@ -64,7 +72,7 @@ func buildContextProducer(
 }
 
 func resolveBaseScope(
-	ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind],
+	ctx *EditorCtx,
 	scopeMap map[dsl.LangSpecLexerTokenType]string,
 ) string {
 	if ctx.Token == nil {
@@ -74,7 +82,7 @@ func resolveBaseScope(
 }
 
 func applyTokenOverrides(
-	ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind],
+	ctx *EditorCtx,
 	currentScope string,
 ) string {
 	if ctx.Token == nil {
@@ -92,10 +100,50 @@ func applyTokenOverrides(
 }
 
 func applyNodeOverrides(
-	ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind],
+	ctx *EditorCtx,
 	currentScope string,
 ) string {
 	return currentScope
+}
+
+func buildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
+	return func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
+		if editorCtx.Token == nil {
+			return nil, false
+		}
+
+		switch *editorCtx.Token {
+		case dsl.TokLineComment:
+			return lineCommentOverride(), true
+		// case dsl.TokBlockComment:
+		// 	return blockCommentOverride(), true
+		default:
+			return nil, false
+		}
+	}
+}
+
+func lineCommentOverride() *EditorOverride {
+	// Group 1: The slashes
+	slashes := pattern.LiteralString(runeFactory, "//").Capture()
+
+	// Group 2: The actual comment text (not terminator)
+	notTerminator := runeFactory.NegatedClass(
+		runeFactory.Range('\n', '\n'),
+		runeFactory.Range('\r', '\r'),
+	).Star().Capture()
+
+	newPattern := slashes.Then(notTerminator)
+
+	matchCtx := SublimeContext{Scope: "comment.line.double-slash"}
+
+	return &EditorOverride{
+		Pattern:      &newPattern,
+		MatchContext: &matchCtx,
+		Captures: map[int]SublimeContext{
+			1: {Scope: "punctuation.definition.comment"},
+		},
+	}
 }
 
 // ------------------------------------------------------------- NODE BINDING (PRESERVED)
@@ -147,19 +195,6 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 }
 
 // ------------------------------------------------------------- PATTERN BUILDING
-
-// var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
-
-// func buildLineCommentOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
-// 	slashes := pattern.LiteralString(runeFactory, "//").Capture()
-// 	notTerminator := runeFactory.NegatedClass(
-// 		runeFactory.Range('\n', '\n'),
-// 		runeFactory.Range('\r', '\r'),
-// 	).Star().Capture()
-// 	regex, _ := slashes.Then(notTerminator).ToRegEx()
-
-// 	return langspeceditor.TokenOverrideMatchWithCapture(ctx, regex, "comment.line.double-slash", "punctuation.definition.comment")
-// }
 
 // func buildRegexLiteralOverride(ctx *langspeceditor.TokenOverrideContext) (langspeceditor.StateRule, []langspeceditor.State) {
 // 	backtickRegex, _ := pattern.LiteralString(runeFactory, "`").ToRegEx()

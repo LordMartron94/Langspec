@@ -23,11 +23,12 @@ type languageMetadata struct {
 }
 
 type contextEntry struct {
-	Match *string `yaml:"match,omitempty"`
-	Scope string  `yaml:"scope,omitempty"`
-	Push  string  `yaml:"push,omitempty"`
-	Pop   *bool   `yaml:"pop,omitempty"`
-	Set   string  `yaml:"set,omitempty"`
+	Match    *string        `yaml:"match,omitempty"`
+	Scope    string         `yaml:"scope,omitempty"`
+	Push     string         `yaml:"push,omitempty"`
+	Pop      *bool          `yaml:"pop,omitempty"`
+	Set      string         `yaml:"set,omitempty"`
+	Captures map[int]string `yaml:"captures,omitempty"`
 }
 
 type contextsSection struct {
@@ -144,13 +145,30 @@ func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 	}
 
 	entry := contextEntry{
-		Match: &regexStr,
-		Scope: extractScope(t.MatchContext),
+		Match:    &regexStr,
+		Scope:    extractScope(t.MatchContext),
+		Captures: buildCapturesMap(t.Captures, extractScope),
 	}
 
 	applyStackOperation(&entry, t)
 
 	return entry
+}
+
+func buildCapturesMap[TContext any](
+	captures map[int]TContext,
+	extractScope func(TContext) string,
+) map[int]string {
+	if len(captures) == 0 {
+		return nil
+	}
+
+	mapped := make(map[int]string, len(captures))
+	for index, ctx := range captures {
+		mapped[index] = extractScope(ctx)
+	}
+
+	return mapped
 }
 
 // ------------------------------------------------------------------ UTILS

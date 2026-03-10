@@ -19,25 +19,34 @@ type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeK
 	TokenRole *TTokenRole
 }
 
+type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
+	Pattern      *pattern.RegulaAST[TObservation]
+	MatchContext *TContext
+	Captures     map[int]TContext
+}
+
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	tokenFormatter  func(token TToken) string
-	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
+	tokenFormatter   func(token TToken) string
+	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
+	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
 }
 
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	tokenFormatter func(token TToken) string,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
+	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool),
 ) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
-		tokenFormatter:  tokenFormatter,
-		contextProducer: contextProducer,
+		tokenFormatter:   tokenFormatter,
+		contextProducer:  contextProducer,
+		overrideProducer: overrideProducer,
 	}
 }
 
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
 	ID          string
 	Label       string
-	Context     TContext // The scope applied to the environment as a whole (if any)
+	Context     TContext
 	Transitions []EditorTransition[TObservation, TContext]
 }
 
@@ -53,6 +62,7 @@ type EditorTransition[TObservation cmp.Ordered, TContext any] struct {
 	OnPattern    pattern.RegulaAST[TObservation]
 	MatchContext TContext
 	Target       *EditorState[TObservation, TContext]
+	Captures     map[int]TContext
 	Operation    StackOperation
 }
 
@@ -132,7 +142,6 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildTransitions(
 	rules []lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
 ) []EditorTransition[TObservation, TContext] {
-
 	transitions := make([]EditorTransition[TObservation, TContext], len(rules))
 
 	for i, rule := range rules {
@@ -151,12 +160,46 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 		TokenRole: &rule.Role,
 	}
 
+	// 1. Establish Defaults
+	pattern := rule.Pattern
+	matchContext := e.config.contextProducer(ctx)
+	var captures map[int]TContext
+
+	// 2. Apply Overrides (if present)
+	if override, hasOverride := e.config.overrideProducer(ctx); hasOverride {
+		pattern = e.applyPatternOverride(pattern, override)
+		matchContext = e.applyContextOverride(matchContext, override)
+		captures = override.Captures
+	}
+
+	// 3. Construct Transition
 	return EditorTransition[TObservation, TContext]{
-		OnPattern:    rule.Pattern,
-		MatchContext: e.config.contextProducer(ctx),
+		OnPattern:    pattern,
+		MatchContext: matchContext,
+		Captures:     captures,
 		Target:       nil,
 		Operation:    STACK_NONE,
 	}
+}
+
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) applyPatternOverride(
+	base pattern.RegulaAST[TObservation],
+	override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+) pattern.RegulaAST[TObservation] {
+	if override.Pattern != nil {
+		return *override.Pattern
+	}
+	return base
+}
+
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) applyContextOverride(
+	base TContext,
+	override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+) TContext {
+	if override.MatchContext != nil {
+		return *override.MatchContext
+	}
+	return base
 }
 
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) generateID() string {
