@@ -40,17 +40,29 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		[]string{".lspec"},
 		"source.lspec",
 		syntaxFile,
-		sublime.ExtractionConfig[SublimeContext]{
-			ExtractScope: func(sc SublimeContext) string {
-				return sc.Scope
-			},
-			ExtractMetaScope: func(sc SublimeContext) string {
-				return sc.MetaScope
-			},
-		},
+		buildExtractionConfig(".lspec"),
 	)
 
 	return err
+}
+
+func buildExtractionConfig(suffix string) sublime.ExtractionConfig[SublimeContext] {
+	return sublime.ExtractionConfig[SublimeContext]{
+		ExtractScope: func(ctx SublimeContext) string {
+			return applyScopeSuffix(ctx.Scope, suffix)
+		},
+		ExtractMetaScope: func(ctx SublimeContext) string {
+			return applyScopeSuffix(ctx.MetaScope, suffix)
+		},
+	}
+}
+
+func applyScopeSuffix(scope, suffix string) string {
+	if scope == "" {
+		return ""
+	}
+
+	return scope + suffix
 }
 
 // ------------------------------------------------------------- CONTEXT PIPELINE
@@ -155,7 +167,7 @@ func regExOverride() *EditorOverride {
 		MatchContext: &SublimeContext{Scope: "punctuation.definition.string.begin"},
 		ForeignPayload: &langspeceditor.ForeignMachinePayload[rune, SublimeContext]{
 			MachineID:      "scope:source.regexp",
-			MachineContext: SublimeContext{Scope: "meta.embedded.regexp"},
+			MachineContext: SublimeContext{MetaScope: "meta.embedded.regexp"},
 			EscapePattern:  backtick,
 			EscapeCaptures: map[int]SublimeContext{
 				0: {Scope: "punctuation.definition.string.end"},
