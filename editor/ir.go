@@ -32,6 +32,11 @@ const lsMaxKeyDepth = 8
 type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	Token     *TToken
 	TokenRole *TTokenRole
+	// NodeKind is the parser node kind associated with this token, as declared via
+	// the grammar's OutputNodeKind field (e.g. NodeParseRuleName for TokIdentifier
+	// inside expectToken(NodeParseRuleName, TokIdentifier)). Nil when the token
+	// has no named node binding (e.g. virtual/structural tokens).
+	NodeKind *TNodeKind
 }
 
 type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
@@ -162,11 +167,17 @@ type lsStackEntry[TToken, TNodeKind comparable] struct {
 // The transition builder will generate a push to the nest's body context
 // rather than inlining the body into the continuation stack, which prevents
 // recursive grammars (e.g. expressions inside parentheses) from blowing up.
+//
+// nodeKind, when non-nil, carries the OutputNodeKind of the grammar node that
+// produced this terminal (e.g. NodeParseRuleName for TokIdentifier in
+// expectToken(NodeParseRuleName, TokIdentifier)). It is used by the context
+// producer to apply node-specific scopes in the generated syntax.
 type lsTerminal[TToken, TNodeKind comparable] struct {
 	token     TToken
 	remaining []*syntaxa.Grammar[TToken, TNodeKind]
 	stack     []lsStackEntry[TToken, TNodeKind]
 	nestNode  *syntaxa.Grammar[TToken, TNodeKind] // non-nil → open token of this GNest
+	nodeKind  *TNodeKind                          // non-nil → OutputNodeKind from the GToken node
 }
 
 // getLastRemaining returns a pointer to the remaining of the outermost frame.
@@ -196,7 +207,7 @@ func lsLookahead[TToken, TNodeKind comparable](
 
 	switch node.Kind {
 	case syntaxa.GToken:
-		return []lsTerminal[TToken, TNodeKind]{{token: node.Token}}, false
+		return []lsTerminal[TToken, TNodeKind]{{token: node.Token, nodeKind: node.OutputNodeKind}}, false
 
 	case syntaxa.GEpsilon:
 		return nil, true
@@ -585,12 +596,38 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 		bs.processContext(pending)
 	}
 
-	allStates := make([]EditorState[TObservation, TContext], len(bs.states))
+	// Compute ambient transitions: tokens that appear in the lexing ruleset but
+	// NOT in any grammar rule become prototype-level rules in Sublime Text. This
+	// causes them (e.g. whitespace, line/block comments) to be highlighted in
+	// every context without having to be explicitly listed in each one.
+	// This must run before allStates is built so that any delimited body states
+	// created for ambient transitions (e.g. block_comment_inner) are included.
+	ambientTransitions := lsBuildAmbientTransitions(gen, grammarPackage.Grammars, bs)
+
+	// Collect all states. bs.states is the authoritative list; it now includes
+	// any delimited body states registered during ambient transition building.
+	// States created by inline grammar-derived buildTransition calls for
+	// DelimitedPayload overrides are also harvested from gen.delimitedStates to
+	// ensure they appear in the output even when the grammar references them.
+	delimitedStateKeys := make(map[string]bool, len(gen.delimitedStates))
+	for label := range gen.delimitedStates {
+		delimitedStateKeys[label] = true
+	}
+	allStates := make([]EditorState[TObservation, TContext], 0, len(bs.states)+len(gen.delimitedStates))
 	var rootOut EditorState[TObservation, TContext]
-	for i, s := range bs.states {
-		allStates[i] = *s
+	for _, s := range bs.states {
+		allStates = append(allStates, *s)
 		if s.Label == ROOT_LABEL {
 			rootOut = *s
+		}
+		// If this state is a delimited body state we already registered it via
+		// bs.states; remove it from the pending harvest to avoid duplication.
+		delete(delimitedStateKeys, s.Label)
+	}
+	// Add any remaining delimited states not yet in bs.states (grammar-derived).
+	for label := range delimitedStateKeys {
+		if s, ok := gen.delimitedStates[label]; ok {
+			allStates = append(allStates, *s)
 		}
 	}
 
@@ -602,7 +639,7 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 		LanguageMachine: LanguageMachine[TObservation, TContext]{
 			EditorStates:       allStates,
 			RootState:          rootOut,
-			AmbientTransitions: nil,
+			AmbientTransitions: ambientTransitions,
 		},
 	}, nil
 }
@@ -725,7 +762,7 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	cfg := bs.gen.config
 	tokenRule, hasTokenRule := bs.gen.tokenToRule[term.token]
 
-	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{Token: &term.token}
+	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{Token: &term.token, NodeKind: term.nodeKind}
 	override, hasOverride := cfg.overrideProducer(edCtx)
 	matchCtx := cfg.contextProducer(edCtx)
 
@@ -1028,4 +1065,167 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 	}
 	e.delimitedStates[dp.StateLabel] = s
 	return s
+}
+
+// ------------------------------------------------------------- AMBIENT TRANSITIONS
+
+// lsCollectGrammarTokens walks all grammars in the grammar map and returns the
+// set of token types that are explicitly referenced by GToken nodes or as the
+// open/close tokens of GNest nodes. This set is used to identify which lexer
+// rules are "ambient" (not part of the grammar) and should be placed in the
+// Sublime Text prototype context so they fire everywhere.
+func lsCollectGrammarTokens[TToken, TNodeKind comparable](
+	grammars map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+) map[TToken]bool {
+	seen := make(map[*syntaxa.Grammar[TToken, TNodeKind]]bool)
+	result := make(map[TToken]bool)
+	for _, g := range grammars {
+		lsWalkGrammar(g, grammars, seen, result)
+	}
+	return result
+}
+
+// lsWalkGrammar recursively walks a grammar node and its children, collecting
+// all token types into the `tokens` map. Pointer-based cycle detection via
+// `seen` prevents infinite loops in recursive grammars.
+func lsWalkGrammar[TToken, TNodeKind comparable](
+	g *syntaxa.Grammar[TToken, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	seen map[*syntaxa.Grammar[TToken, TNodeKind]]bool,
+	tokens map[TToken]bool,
+) {
+	if g == nil || seen[g] {
+		return
+	}
+	seen[g] = true
+
+	switch g.Kind {
+	case syntaxa.GToken:
+		tokens[g.Token] = true
+	case syntaxa.GNest:
+		if g.OpenToken != nil {
+			tokens[*g.OpenToken] = true
+		}
+		if g.CloseToken != nil {
+			tokens[*g.CloseToken] = true
+		}
+	case syntaxa.GReference:
+		target := g.ResolvedReference
+		if target == nil {
+			target = rules[g.ReferenceTarget]
+		}
+		lsWalkGrammar(target, rules, seen, tokens)
+	}
+
+	for _, child := range g.Children {
+		lsWalkGrammar(child, rules, seen, tokens)
+	}
+}
+
+// lsBuildAmbientTransitions constructs the EditorTransition list for lexer rules
+// that do not appear in any grammar rule. These "ambient" rules (e.g. whitespace,
+// line comments, block comments) are placed in Sublime's prototype context so
+// they are recognised in every highlighting context.
+//
+// Transitions are built using the same override/context producer pipeline as
+// normal grammar-derived transitions so that, for example, block comments
+// correctly produce a delimited push region and line comments produce captures.
+// Ambient transitions are sorted by lexer rule priority (descending) so higher-
+// priority ambient tokens shadow lower-priority ones when patterns overlap.
+func lsBuildAmbientTransitions[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
+	gen *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	grammars map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+	bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+) []EditorTransition[TObservation, TContext] {
+
+	grammarTokens := lsCollectGrammarTokens(grammars)
+
+	// Gather rules for ambient tokens, preserving the original order for stability.
+	type ruleEntry struct {
+		rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+		priority int
+	}
+	var candidates []ruleEntry
+	for _, rule := range gen.lexingRuleset.GetRules() {
+		if grammarTokens[rule.Token] {
+			continue
+		}
+		candidates = append(candidates, ruleEntry{rule: rule, priority: rule.Priority})
+	}
+
+	// Sort by priority descending (highest priority first), stable for equal priorities.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].priority > candidates[j].priority
+	})
+
+	var transitions []EditorTransition[TObservation, TContext]
+	for _, entry := range candidates {
+		token := entry.rule.Token
+		edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{Token: &token}
+		override, hasOverride := gen.config.overrideProducer(edCtx)
+		matchCtx := gen.config.contextProducer(edCtx)
+
+		var pat pattern.RegulaAST[TObservation]
+		if hasOverride && override.Pattern != nil {
+			pat = *override.Pattern
+		} else {
+			pat = entry.rule.Pattern
+		}
+
+		if hasOverride && override.MatchContext != nil {
+			matchCtx = *override.MatchContext
+		}
+
+		var captures map[int]TContext
+		if hasOverride {
+			captures = override.Captures
+		}
+
+		var tr EditorTransition[TObservation, TContext]
+
+		switch {
+		case hasOverride && override.ForeignPayload != nil:
+			tr = EditorTransition[TObservation, TContext]{
+				OnPattern:      pat,
+				MatchContext:   matchCtx,
+				Captures:       captures,
+				Operation:      STACK_EMBED,
+				ForeignPayload: override.ForeignPayload,
+			}
+		case hasOverride && override.DelimitedPayload != nil:
+			bodyState := gen.getOrCreateDelimitedState(override.DelimitedPayload)
+			// Register the body state in bs.states so it is included in the
+			// generated output. Guard against duplicates in case
+			// getOrCreateDelimitedState was already called from a prior
+			// grammar-derived buildTransition for the same token.
+			alreadyInStates := false
+			for _, s := range bs.states {
+				if s.Label == bodyState.Label {
+					alreadyInStates = true
+					break
+				}
+			}
+			if !alreadyInStates {
+				bs.states = append(bs.states, bodyState)
+			}
+			tr = EditorTransition[TObservation, TContext]{
+				OnPattern:    pat,
+				MatchContext: matchCtx,
+				Captures:     captures,
+				Operation:    STACK_PUSH,
+				Targets:      []*EditorState[TObservation, TContext]{bodyState},
+			}
+		default:
+			tr = EditorTransition[TObservation, TContext]{
+				OnPattern:    pat,
+				MatchContext: matchCtx,
+				Captures:     captures,
+				Operation:    STACK_NONE,
+			}
+		}
+
+		transitions = append(transitions, tr)
+	}
+
+	return transitions
 }

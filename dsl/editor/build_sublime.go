@@ -152,6 +152,29 @@ func applyNodeOverrides(
 	ctx *EditorCtx,
 	currentScope string,
 ) string {
+	if ctx.NodeKind == nil || ctx.Token == nil {
+		return currentScope
+	}
+
+	binding, ok := langSpecEditorManifest[*ctx.NodeKind]
+	if !ok {
+		return currentScope
+	}
+
+	// Per-token scope overrides take the highest precedence.
+	// They allow a single node kind to style different token types differently
+	// (e.g. NodeMetaValue styling TokStringLiteral vs. TokKWTrue differently).
+	if len(binding.TokenScopes) > 0 {
+		if tokenScopes, hasTokenOverride := binding.TokenScopes[*ctx.Token]; hasTokenOverride && len(tokenScopes) > 0 {
+			return tokenScopes[0]
+		}
+	}
+
+	// General node scope: applies to all tokens that belong to this node kind.
+	if len(binding.Scopes) > 0 {
+		return binding.Scopes[0]
+	}
+
 	return currentScope
 }
 
