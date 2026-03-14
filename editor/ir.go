@@ -68,10 +68,15 @@ editorPDAAllocFn: editorPDAAllocFn,
 }
 
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
-ID          string
-Label       string
-Context     TContext
-Transitions []EditorTransition[TObservation, TContext]
+ID               string
+Label            string
+Context          TContext
+Transitions      []EditorTransition[TObservation, TContext]
+// HasFallthroughPop, when true, indicates that the Sublime context for this state
+// should include a lookahead-POP fallthrough rule ("(?=\S)" → pop: 1) as its
+// last match rule. This is needed for afterNest continuation contexts whose optional
+// tail tokens (e.g. `;`) would otherwise leave the context permanently on the stack.
+HasFallthroughPop bool
 }
 
 type StackOperation uint8
@@ -202,6 +207,9 @@ for i := range ts {
 ts[i].stack = append(ts[i].stack, lsStackEntry[TToken, TNodeKind]{
 isRepetition: true,
 repeatNode:   node,
+// Carry the node label so lsOwningRule can return a semantic name even
+// when no GReference (Variable) frame wraps the repetition.
+label: node.GrammarLabel,
 })
 }
 return ts, node.Min == 0
@@ -213,6 +221,7 @@ for i := range ts {
 ts[i].stack = append(ts[i].stack, lsStackEntry[TToken, TNodeKind]{
 isRepetition: true,
 repeatNode:   node,
+label:        node.GrammarLabel,
 })
 }
 return ts, true
@@ -439,9 +448,24 @@ return "ST:" + tokenFmt(n.Token)
 return string(n.GrammarLabel)
 }
 
+// lsOwningRule returns the grammar label that best describes the context of terminal t.
+//
+// Priority:
+//  1. Innermost non-Repetition frame (a GReference Variable frame) – most specific.
+//  2. Innermost Repetition frame that carries a label (a GOptional/GRepeat with a
+//     GrammarLabel, e.g. "PRAGMA SECTION") – covers grammars that embed rules directly
+//     (without GReference wrappers) by labelling the enclosing Optional/Repeat node.
+//  3. "anon" – no semantic label found; caller should fall back to the nameHint.
 func lsOwningRule[TToken, TNodeKind comparable](term lsTerminal[TToken, TNodeKind]) syntaxa.GrammarLabel {
+// First pass: innermost non-Repetition (Variable) frame.
 for i := 0; i < len(term.stack); i++ {
-if !term.stack[i].isRepetition {
+if !term.stack[i].isRepetition && term.stack[i].label != "" {
+return term.stack[i].label
+}
+}
+// Second pass: innermost Repetition frame with a non-empty label.
+for i := 0; i < len(term.stack); i++ {
+if term.stack[i].isRepetition && term.stack[i].label != "" {
 return term.stack[i].label
 }
 }
@@ -473,6 +497,10 @@ type lsPendingCtx[TObservation cmp.Ordered, TToken, TNodeKind comparable, TConte
 state     *EditorState[TObservation, TContext]
 ctxKey    string
 terminals []lsTerminal[TToken, TNodeKind]
+// nameHint is the grammar label used as a fallback name when lsOwningRule returns "anon".
+// It is set to the enclosing GNest's GrammarLabel so that states inside a nest body
+// get readable names (e.g. "HEADER__0") instead of "anon__N".
+nameHint  syntaxa.GrammarLabel
 }
 
 // EditorIRCreate generates an EditorIR from a grammar package using the SBNF algorithm.
@@ -563,7 +591,7 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 pending lsPendingCtx[TObservation, TToken, TNodeKind, TContext],
 ) {
 for _, term := range pending.terminals {
-tr := bs.buildTransition(term, pending.ctxKey)
+tr := bs.buildTransition(term, pending.nameHint)
 if tr == nil {
 continue
 }
@@ -573,22 +601,37 @@ pending.state.Transitions = append(pending.state.Transitions, *tr)
 
 // getOrCreateContext returns the EditorState for the given lookahead set,
 // creating and enqueuing it if it does not yet exist.
+//
+// nameHint provides a fallback grammar label when lsOwningRule would return "anon"
+// (i.e. the terminal set has no Variable-frame labels). It is propagated to the
+// queued pending context so child states inherit the same enclosing-rule prefix.
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) getOrCreateContext(
 terminals []lsTerminal[TToken, TNodeKind],
 ownerLabel syntaxa.GrammarLabel,
+nameHint syntaxa.GrammarLabel,
 ) *EditorState[TObservation, TContext] {
 key := lsLookaheadKey(terminals, bs.gen.config.tokenFormatter)
 if s, ok := bs.contextByKey[key]; ok {
 return s
 }
 
-base := bs.gen.sanitizer.Sanitize(string(ownerLabel))
+// Use ownerLabel when meaningful; fall back to the propagated hint otherwise.
+// "anon" is the sentinel returned by lsOwningRule when no Variable frame exists;
+// "" occurs when ownerLabel was "anon" and a prior nameHint was also empty.
+effectiveLabel := ownerLabel
+if (effectiveLabel == "anon" || effectiveLabel == "") && nameHint != "" {
+effectiveLabel = nameHint
+}
+base := bs.gen.sanitizer.Sanitize(string(effectiveLabel))
 if base == "" {
 base = "ctx"
 }
 n := bs.counters[base]
 bs.counters[base] = n + 1
 name := fmt.Sprintf("%s__%d", base, n)
+
+// Inherit the effective label as the hint for all child states of this context.
+childHint := effectiveLabel
 
 s := &EditorState[TObservation, TContext]{ID: name, Label: name}
 bs.contextByKey[key] = s
@@ -597,6 +640,7 @@ bs.queue = append(bs.queue, lsPendingCtx[TObservation, TToken, TNodeKind, TConte
 state:     s,
 ctxKey:    key,
 terminals: terminals,
+nameHint:  childHint,
 })
 return s
 }
@@ -604,16 +648,23 @@ return s
 // buildTransition constructs the EditorTransition for a single terminal.
 //
 // SBNF pop=0 / pop=1 mapping to EditorTransition:
-//   - pop=0 + no contexts  → STACK_NONE
-//   - pop=0 + contexts     → STACK_PUSH  (loop context stays on Sublime stack)
+//   - pop=0 + no contexts  → STACK_NONE  (loop; current context stays on Sublime stack)
+//   - pop=0 + contexts     → STACK_PUSH  (loop context stays, push continuation on top)
 //   - pop=1 + no contexts  → STACK_POP(1)
 //   - pop=1 + contexts     → STACK_SET
 //
-// GNest terminals (term.nestNode != nil) always emit STACK_PUSH to an independent
-// body context so that recursive expression grammars don't cause infinite expansion.
+// GNest push-boundary:
+//   - isRepetition=false (linear sequence) → STACK_SET [afterNest, body]:
+//     the current continuation context is replaced so it cannot linger on the stack
+//     after the nest closes.
+//   - isRepetition=true (inside a ZeroOrMore/Repeat body) → STACK_PUSH [afterNest, body]:
+//     the loop context must stay so the next iteration can fire.
+//
+// nameHint is a fallback label used when lsOwningRule returns "anon"; it is the
+// GrammarLabel of the nearest enclosing GNest or named rule.
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildTransition(
 term lsTerminal[TToken, TNodeKind],
-_ string, // currentKey – reserved for future simple-repetition optimisation
+nameHint syntaxa.GrammarLabel,
 ) *EditorTransition[TObservation, TContext] {
 
 cfg := bs.gen.config
@@ -666,45 +717,65 @@ Targets:       []*EditorState[TObservation, TContext]{bodyState},
 }
 }
 
-// GNest push-boundary: open token → push a self-contained body context.
-// The body context is computed without the outer continuation stack, which
-// terminates recursion for grammars that allow nested expressions.
+// Determine whether this terminal is inside a repetition frame (GRepeat/GOptional).
+// The outermost stack frame being a Repetition distinguishes loop-body tokens
+// (pop=0, stay in loop context) from linear-sequence tokens (pop=1, advance).
+isRepetition := len(term.stack) > 0 && term.stack[len(term.stack)-1].isRepetition
+
+// GNest push-boundary: open token → push an independent body context.
+// The body is computed without the outer continuation stack so that recursive
+// expression grammars (e.g. Pratt parsers) don't blow up the continuation chain.
 if term.nestNode != nil {
 bodyState := bs.getOrCreateNestBodyContext(term.nestNode)
 ownerLabel2 := lsOwningRule(term)
-// Compute the outer continuation (what follows this nest in the parent grammar).
-// nestNode is cleared so advanceTerminal treats remaining/stack normally.
+// nestHint ensures child states are named after the enclosing nest even when
+// the outer terminal has no Variable frame (ownerLabel2 == "anon").
+nestHint := syntaxa.GrammarLabel(string(term.nestNode.GrammarLabel))
+// Compute the continuation after the nest closes (strips nestNode to let
+// advance see the remaining/stack normally).
 noNest := lsTerminal[TToken, TNodeKind]{token: term.token, remaining: term.remaining, stack: term.stack}
 advTerminals := lsAdvanceTerminal(noNest, bs.rules)
+
+// Choose PUSH (loop body) or SET (linear sequence) for the nest open token.
+// SET replaces the current continuation context so it cannot accumulate on the
+// Sublime stack (fixing the "orphan anon__N context after {}" bug).
+nestOp := STACK_SET
+if isRepetition {
+nestOp = STACK_PUSH
+}
+
 if advTerminals == nil {
 return &EditorTransition[TObservation, TContext]{
 OnPattern:   pat,
 MatchContext: matchCtx,
 Captures:     captures,
-Operation:    STACK_PUSH,
+Operation:    nestOp,
 Targets:      []*EditorState[TObservation, TContext]{bodyState},
 }
 }
-afterNest := bs.getOrCreateContext(advTerminals, ownerLabel2)
+// Mark afterNest as needing a fallthrough POP so that optional tail tokens
+// (e.g. the ';' after '}') do not leave the context permanently on the stack.
+afterNest := bs.getOrCreateContext(advTerminals, ownerLabel2, nestHint)
+afterNest.HasFallthroughPop = true
 return &EditorTransition[TObservation, TContext]{
 OnPattern:   pat,
 MatchContext: matchCtx,
 Captures:     captures,
-Operation:    STACK_PUSH,
-// afterNest pushed first (goes deeper), bodyState on top (processed first).
+Operation:    nestOp,
+// afterNest pushed deeper, bodyState on top (processed first).
 Targets:      []*EditorState[TObservation, TContext]{afterNest, bodyState},
 }
 }
 
 // SBNF repetition / continuation logic.
 ownerLabel := lsOwningRule(term)
-isRepetition := len(term.stack) > 0 && term.stack[len(term.stack)-1].isRepetition
 
 var advTerminals []lsTerminal[TToken, TNodeKind]
 
 if isRepetition {
 // Advance without the outermost Repetition frame (iteration continuation only).
-// The loop context remains on the Sublime stack via PUSH (pop=0).
+// The loop context stays on the Sublime stack via PUSH (pop=0) so further
+// iterations are visible.
 stripped := lsTerminal[TToken, TNodeKind]{
 token:     term.token,
 remaining: term.remaining,
@@ -725,7 +796,7 @@ Captures:      captures,
 Operation:     STACK_NONE,
 }
 }
-next := bs.getOrCreateContext(advTerminals, ownerLabel)
+next := bs.getOrCreateContext(advTerminals, ownerLabel, nameHint)
 return &EditorTransition[TObservation, TContext]{
 OnPattern:    pat,
 MatchContext:  matchCtx,
@@ -745,7 +816,7 @@ Operation:     STACK_POP,
 PopAmount:     1,
 }
 }
-next := bs.getOrCreateContext(advTerminals, ownerLabel)
+next := bs.getOrCreateContext(advTerminals, ownerLabel, nameHint)
 return &EditorTransition[TObservation, TContext]{
 OnPattern:    pat,
 MatchContext:  matchCtx,
@@ -790,6 +861,9 @@ bs.queue = append(bs.queue, lsPendingCtx[TObservation, TToken, TNodeKind, TConte
 state:     s,
 ctxKey:    nestKey,
 terminals: bodyTerminals,
+// Propagate the nest label as the naming hint for all child states in the body,
+// giving them readable names like "HEADER__0" instead of "anon__N".
+nameHint:  nestNode.GrammarLabel,
 })
 }
 

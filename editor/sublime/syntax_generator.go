@@ -141,6 +141,14 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 			entries = append([]contextEntry{metaEntry}, entries...)
 		}
 
+		// HasFallthroughPop: afterNest continuation contexts must eventually pop even
+		// when their optional tail tokens (e.g. ';') are absent. A lookahead-POP rule
+		// "(?=\S) → pop: 1" fires on any non-whitespace character that no earlier rule
+		// consumed, causing the context to exit cleanly rather than getting stuck.
+		if state.HasFallthroughPop {
+			entries = append(entries, fallthroughPopEntry())
+		}
+
 		contextsMap[label] = entries
 	}
 
@@ -247,6 +255,21 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	entry.EmbedScope = config.ExtractMetaScope(payload.MachineContext)
 	entry.Escape = &escapeStr
 	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, config.ExtractScope)
+}
+
+// fallthroughPopEntry returns the last-resort context entry that pops the current
+// Sublime context when no earlier match rule fires. It uses a zero-width lookahead
+// for any non-whitespace character ("(?=\S)") so that the context exits without
+// consuming the character, letting the parent context re-process it.
+// This is only attached to afterNest continuation contexts (HasFallthroughPop=true)
+// that would otherwise stay on the stack indefinitely when their optional tail tokens
+// (e.g. ';') are absent.
+func fallthroughPopEntry() contextEntry {
+	regex := `(?=\S)`
+	return contextEntry{
+		Match: &regex,
+		Pop:   1,
+	}
 }
 
 func determineContextLabels[TObservation cmp.Ordered, TContext any](targets []*editor.EditorState[TObservation, TContext]) []string {
