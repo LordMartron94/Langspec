@@ -20,17 +20,19 @@ func TestBuildSublimeSyntaxForDSL(t *testing.T) {
 	})
 	defer memforge.DynamicLinearAllocatorDestroy(scratchAllocator)
 
+	scratchAllocationFn := func(sizeBytes, alignment uint64) memcore.MarkRaw {
+		return memforge.DynamicLinearAllocatorMallocUnsafe(scratchAllocator, sizeBytes, alignment)
+	}
+
 	compilerConfig := dsl.LangSpecCompilerConfigurationCreate(
-		func(sizeBytes, alignment uint64) memcore.MarkRaw {
-			return memforge.DynamicLinearAllocatorMallocUnsafe(scratchAllocator, sizeBytes, alignment)
-		},
+		scratchAllocationFn,
 		nil,
 	).WithDiagnosticSink(dsl.DefaultLangSpecDiagnosticSink())
 
 	compiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(compiler)
 
-	if err := editor.BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile); err != nil {
+	if err := editor.BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile, scratchAllocationFn); err != nil {
 		t.Fatalf("Sublime Syntax generation failed with error: %s", err.Error())
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"langspec/dsl"
 	langspeceditor "langspec/editor"
 	"langspec/editor/sublime"
+	"memarch"
 )
 
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
@@ -20,22 +21,31 @@ type SublimeContext struct {
 
 // ------------------------------------------------------------- ORCHESTRATOR
 
-func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
+func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string, pdaAllocationFn memarch.AllocationFn) error {
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	config := langspeceditor.EditorIRConfigurationCreate(
 		dsl.LangSpecLexerTokenType.String,
 		buildContextProducer(scopeMap),
 		buildEditorOverrideProducer(),
+		func(left, right SublimeContext) bool {
+			return left.Scope == right.Scope && left.MetaScope == right.MetaScope
+		},
+		// runeFactory,
+		pdaAllocationFn,
 	)
 
-	editorIR := langspeceditor.EditorIRCreate(
+	editorIR, err := langspeceditor.EditorIRCreate(
 		dsl.LangSpecCompilerLexingRuleSet(compiler),
-		*dsl.LangSpecCompilerGrammarPackage(compiler),
+		dsl.LangSpecCompilerGrammarPackage(compiler),
 		config,
 	)
 
-	err := sublime.GenerateSyntaxFile(
+	if err != nil {
+		return err
+	}
+
+	err = sublime.GenerateSyntaxFile(
 		editorIR,
 		[]string{".lspec"},
 		"source.lspec",

@@ -41,11 +41,29 @@ func getTrimmedIdentifierNodeContent(node *Node) string {
 /*
 getRefName returns the trimmed identifier content of a reference node, or empty string if nil or no tokens.
 */
-func getRefName(refNode *Node) string {
-	if refNode == nil || len(refNode.Tokens()) == 0 {
+func getRefName(node *Node) string {
+	if node == nil || len(node.Tokens()) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(getIdentifierValue(refNode))
+
+	kind := node.Kind()
+	if kind == NodeParseExpressionReference || kind == NodeParseTokenReference {
+		return strings.TrimSpace(getIdentifierValue(node))
+	}
+
+	if kind == NodeParseNodeName {
+		parent := node.Parent()
+		if parent != nil && parent.Kind() == NodeParseSegment {
+			hasTokenTail := parent.FindFirstKind(NodeParseTokenReference) != nil
+			hasGroupTail := parent.FindFirstKind(NodeParseGroup) != nil
+
+			if !hasTokenTail && !hasGroupTail {
+				return strings.TrimSpace(getIdentifierValue(node))
+			}
+		}
+	}
+
+	return ""
 }
 
 /*

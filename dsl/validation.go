@@ -38,16 +38,16 @@ const (
 	VALIDATION_UNREFERENCED_PARSE_RULE   ValidationCode = "V_PAR003"
 	VALIDATION_PROGRAM_RULE_REQUIRED     ValidationCode = "V_PAR004"
 
-	VALIDATION_PARSE_LEFT_RECURSION                ValidationCode = "V_PAR005"
-	VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION ValidationCode = "V_PAR006"
-	VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION       ValidationCode = "V_PAR007"
+	VALIDATION_PARSE_LEFT_RECURSION                  ValidationCode = "V_PAR005"
+	VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION   ValidationCode = "V_PAR006"
+	VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION        ValidationCode = "V_PAR007"
 	VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT ValidationCode = "V_PAR008"
 
-	VALIDATION_DUPLICATE_PRATT_EXPR     ValidationCode = "V_PRA001"
-	VALIDATION_PRATT_UNRESOLVED_TOKEN   ValidationCode = "V_PRA002"
-	VALIDATION_PRATT_UNRESOLVED_PATTERN ValidationCode = "V_PRA003"
-	VALIDATION_PRATT_UNRESOLVED_RULE    ValidationCode = "V_PRA004"
-	VALIDATION_PRATT_LOCAL_LEAK         ValidationCode = "V_PRA005"
+	VALIDATION_DUPLICATE_PRATT_EXPR             ValidationCode = "V_PRA001"
+	VALIDATION_PRATT_UNRESOLVED_TOKEN           ValidationCode = "V_PRA002"
+	VALIDATION_PRATT_UNRESOLVED_PATTERN         ValidationCode = "V_PRA003"
+	VALIDATION_PRATT_UNRESOLVED_RULE            ValidationCode = "V_PRA004"
+	VALIDATION_PRATT_LOCAL_LEAK                 ValidationCode = "V_PRA005"
 	VALIDATION_PRATT_UNRESOLVED_OPERATOR_TARGET ValidationCode = "V_PRA006"
 
 	VALIDATION_SYMBOL_NAME_COLLISION ValidationCode = "V_SYM001"
@@ -206,22 +206,24 @@ func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 }
 
 func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
-	for _, ref := range ctx.RootNode.FindAllKind(NodeParseTokenReference) {
-		name := getRefName(ref)
-		if name == "" {
-			continue
+	ctx.RootNode.FindFirstKind(NodeParseSection).WalkPre(func(node *Node) (bool, bool) {
+		if node.Kind() == NodeParseTokenReference || node.Kind() == NodeParseNestOpenToken || node.Kind() == NodeParseNestCloseToken {
+			name := getIdentifierValue(node)
+			if name == "" {
+				return false, false
+			}
+
+			kind := resolveParseRefSymbolKind(env, name)
+			if kind == parseRefSymbolToken {
+				used[name] = true
+			} else {
+				msg := fmt.Sprintf("cannot map expression '%s' here; a token is required", name)
+				ctx.ReportError(VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT.String(), msg, node)
+			}
 		}
-		kind := resolveParseRefSymbolKind(env, name)
-		switch kind {
-		case parseRefSymbolToken:
-			validateAndMarkToken(ctx, env, used, ref)
-		case parseRefSymbolRule, parseRefSymbolPratt:
-			msg := fmt.Sprintf("cannot map expression '%s' directly to a node output. Expressions define their own outputs.", name)
-			ctx.ReportError(VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT.String(), msg, ref)
-		default:
-			reportUnresolvedToken(ctx, ref, name)
-		}
-	}
+
+		return false, false
+	})
 }
 
 func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
@@ -239,14 +241,19 @@ func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, use
 		if name == "" {
 			continue
 		}
+
 		kind := resolveParseRefSymbolKind(env, name)
 		switch kind {
 		case parseRefSymbolToken:
 			used[name] = true
 		case parseRefSymbolRule, parseRefSymbolPratt:
-			break
+			// No-op: valid targets that aren't tokens don't need to be marked 'used'
 		default:
-			ctx.ReportError(VALIDATION_PRATT_UNRESOLVED_OPERATOR_TARGET.String(), fmt.Sprintf("unresolved pratt operator target '%s' (must be a token or a parse/pratt rule)", name), ref)
+			ctx.ReportError(
+				VALIDATION_PRATT_UNRESOLVED_OPERATOR_TARGET.String(),
+				fmt.Sprintf("unresolved pratt operator target '%s'", name),
+				ref,
+			)
 		}
 	}
 }
@@ -462,28 +469,22 @@ func validateNegationNodes(ctx *ValidationCtx) {
 }
 
 func validateRepetitionBounds(ctx *ValidationCtx) {
-	for _, repNode := range ctx.RootNode.FindAllKind(NodeRepetition) {
-		children := repNode.Children()
-		if len(children) < 2 {
-			continue
-		}
-
-		boundsNode := children[1]
+	for _, boundsNode := range ctx.RootNode.FindAllKind(NodeRepetitionBounds) {
 		minNode := boundsNode.FindFirstKind(NodeRepetitionMin)
 		maxNode := boundsNode.FindFirstKind(NodeRepetitionMax)
 
 		minVal, minOK := parseIntFromNode(minNode)
 		maxVal, maxOK := parseIntFromNode(maxNode)
 
-		if minNode != nil && (!minOK || minVal < 0) {
-			ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition min must be a valid non-negative integer", minNode)
+		if minNode == nil && maxNode == nil {
+			ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(),
+				"Repetition bounds cannot be empty (e.g., use '{n}' or '{min, max}')", boundsNode)
+			continue
 		}
-		if maxNode != nil && (!maxOK || maxVal < 0) {
-			ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(), "repetition max must be a valid non-negative integer", maxNode)
-		}
-		if minOK && maxOK && minNode != nil && maxNode != nil && minVal > maxVal {
-			msg := fmt.Sprintf("repetition min (%d) must not be greater than max (%d)", minVal, maxVal)
-			ctx.ReportError(VALIDATION_REPETITION_MIN_GT_MAX.String(), msg, boundsNode)
+
+		if minOK && maxOK && minVal > maxVal && maxVal != -1 {
+			ctx.ReportError(VALIDATION_REPETITION_MIN_GT_MAX.String(),
+				fmt.Sprintf("Range error: min (%d) is greater than max (%d)", minVal, maxVal), boundsNode)
 		}
 	}
 }
@@ -660,17 +661,25 @@ func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]s
 
 func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	var refs []string
-	for _, refNode := range container.FindAllKind(NodeParseExpressionReference) {
-		name := getRefName(refNode)
+
+	container.WalkPre(func(node *Node) (bool, bool) {
+		name := getRefName(node)
 		if name == "" {
-			continue
+			return false, false
 		}
-		if env.Rules[name] != nil || env.Pratt[name] != nil {
+
+		if _, isRule := env.Rules[name]; isRule {
+			refs = append(refs, name)
+		} else if _, isPratt := env.Pratt[name]; isPratt {
 			refs = append(refs, name)
 		}
-	}
+
+		return false, false
+	})
+
 	return refs
 }
+
 func computeReachablePatterns(root *Node, deps map[string][]string) map[string]bool {
 	entryPoints := make(map[string]bool)
 	if lexSection := root.FindFirstKind(NodeLexSection); lexSection != nil {
@@ -761,30 +770,6 @@ func formatCycle(cycle []string) string {
 		return ""
 	}
 	return strings.Join(cycle, " -> ")
-}
-
-func lexRuleSectionCollectEOFTrueMetaValues(lexSection *Node) []*Node {
-	var out []*Node
-	for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
-		metaSection := ruleNode.FindFirstKind(NodeMetaSection)
-		if metaSection == nil {
-			continue
-		}
-
-		for _, pair := range metaSection.FindAllKind(NodeMetaKeyValuePair) {
-			keyNode := pair.FindFirstKind(NodeMetaKey)
-			valueNode := pair.FindFirstKind(NodeMetaValue)
-			if keyNode == nil || valueNode == nil || len(keyNode.Tokens()) == 0 || len(valueNode.Tokens()) == 0 {
-				continue
-			}
-
-			key := strings.TrimSpace(string(keyNode.Tokens()[0].Raw))
-			if strings.EqualFold(key, "EOF") && valueNode.Tokens()[0].Token == TokKWTrue {
-				out = append(out, valueNode)
-			}
-		}
-	}
-	return out
 }
 
 type lexRuleInfo struct {

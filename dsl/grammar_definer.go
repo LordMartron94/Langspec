@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"fmt"
 	"syntaxa"
 	"syntaxa/rule"
 )
@@ -12,7 +13,8 @@ Syntaxa remains generic; this layer is langspec-specific.
 */
 
 type GrammarDefiner struct {
-	rb *RuleBuilder
+	rb    *RuleBuilder
+	cache map[syntaxa.GrammarLabel]Rule
 }
 
 /*
@@ -20,7 +22,19 @@ grammarDefinerCreate returns a new GrammarDefiner that uses the given RuleBuilde
 LangSpecGrammarIDFromNode / VirtualGrammarIDToGrammarID for resolving IDs.
 */
 func grammarDefinerCreate(rb *RuleBuilder) *GrammarDefiner {
-	return &GrammarDefiner{rb: rb}
+	return &GrammarDefiner{
+		rb:    rb,
+		cache: make(map[syntaxa.GrammarLabel]Rule),
+	}
+}
+
+func (g *GrammarDefiner) memoize(id syntaxa.GrammarLabel, creator func() Rule) Rule {
+	if r, ok := g.cache[id]; ok {
+		return r
+	}
+	r := creator()
+	g.cache[id] = r
+	return r
 }
 
 /*
@@ -62,7 +76,10 @@ using the same GrammarID as the enclosing rule (derived from node). Use for
 punctuation slots inside a sequence (e.g. semicolon after a lex rule).
 */
 func (g *GrammarDefiner) expectVirtualInRule(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
-	return g.rb.Token.ExpectVirtual(LangSpecGrammarIDFromNode(node), tok)
+	baseID := string(LangSpecGrammarIDFromNode(node))
+	uniqueID := syntaxa.GrammarLabel(fmt.Sprintf("%s_VIRTUAL_%v", baseID, tok))
+
+	return g.rb.Token.ExpectVirtual(uniqueID, tok)
 }
 
 /*
@@ -101,7 +118,9 @@ TransparentNestByNode creates a transparent nest (open ... close) with grammar I
 */
 func (g *GrammarDefiner) TransparentNestByNode(node LangSpecParserNodeKind, suffix string, open, close LangSpecLexerTokenType, body Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
-	return g.rb.Rule.TransparentNest(grammarID, open, close, body)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.TransparentNest(grammarID, open, close, body)
+	})
 }
 
 /*
@@ -109,7 +128,9 @@ RootByNode builds a root rule with grammar ID derived from node (suffix "").
 */
 func (g *GrammarDefiner) RootByNode(node LangSpecParserNodeKind, transparent bool, rules ...Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Rule.Root(grammarID, node, transparent, rules...)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Root(grammarID, node, transparent, rules...)
+	})
 }
 
 /*
@@ -117,7 +138,9 @@ TransparentZeroOrMoreByNode builds zero-or-more repetition with grammar ID deriv
 */
 func (g *GrammarDefiner) TransparentZeroOrMoreByNode(node LangSpecParserNodeKind, suffix string, rule Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
-	return g.rb.Rule.TransparentZeroOrMore(grammarID, rule)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.TransparentZeroOrMore(grammarID, rule)
+	})
 }
 
 /*
@@ -125,7 +148,9 @@ NestByNode builds a nest (open ... close) with grammar ID derived from node (suf
 */
 func (g *GrammarDefiner) NestByNode(node LangSpecParserNodeKind, open, close LangSpecLexerTokenType, body Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Rule.Nest(grammarID, node, open, close, body)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Nest(grammarID, node, open, close, body)
+	})
 }
 
 /*
@@ -133,7 +158,19 @@ ChoiceByNode builds a choice over rules with grammar ID derived from node (suffi
 */
 func (g *GrammarDefiner) ChoiceByNode(node LangSpecParserNodeKind, rules ...Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Rule.Choice(grammarID, rules...)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Choice(grammarID, rules...)
+	})
+}
+
+/*
+ChoiceByNodeWithSuffix builds a choice over rules using an explicit suffix to prevent ID collisions.
+*/
+func (g *GrammarDefiner) ChoiceByNodeWithSuffix(node LangSpecParserNodeKind, suffix string, rules ...Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Choice(grammarID, rules...)
+	})
 }
 
 /*
@@ -141,12 +178,13 @@ OptionalSuffixByNode builds an optional-suffix rule (rule followed by optional t
 */
 func (g *GrammarDefiner) OptionalSuffixByNode(node LangSpecParserNodeKind, rule Rule, tok LangSpecLexerTokenType) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Rule.OptionalSuffix(grammarID, node, rule, tok)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.OptionalSuffix(grammarID, node, rule, tok)
+	})
 }
 
 /*
 InfixOp returns a Pratt infix operator descriptor with TokenGrammarLabel and NodeKind derived from node (suffix "").
-Use when building PrattConfig.InfixOps so call sites pass only (tok, leftBP, rightBP, node).
 */
 func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int, node LangSpecParserNodeKind) rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
 	return rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
@@ -178,7 +216,6 @@ func (g *GrammarDefiner) PostfixOp(tok LangSpecLexerTokenType, leftBP int, node 
 
 /*
 PostfixRuleOp returns a Pratt postfix rule operator descriptor.
-It binds a trigger token to an executable sub-rule (e.g., for composite bounds like {min,max}).
 */
 func (g *GrammarDefiner) PostfixRuleOp(
 	leftBP int,
@@ -204,24 +241,24 @@ func (g *GrammarDefiner) block(
 	bodyRule Rule,
 ) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Rule.Sequence(
-		grammarID,
-		node,
-		g.expectToken(kwNode, kwTok),
-		g.rb.Rule.TransparentNest(
-			LangSpecGrammarIDFromNodeWithSuffix(node, "BODY"),
-			TokBraceOpen,
-			TokBraceClose,
-			bodyRule,
-		),
-		g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
-	)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Sequence(
+			grammarID,
+			node,
+			g.expectToken(kwNode, kwTok),
+			g.rb.Rule.TransparentNest(
+				LangSpecGrammarIDFromNodeWithSuffix(node, "BLOCK_NEST"),
+				TokBraceOpen,
+				TokBraceClose,
+				bodyRule,
+			),
+			g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
+		)
+	})
 }
 
 /*
-blockByRule creates a standard delimited section:
-keywordRule -> { -> Body -> } -> [;]
-Semicolon after the closing brace is optional (consumed if present). GrammarID is derived from node.
+blockByRule creates a standard delimited section.
 */
 func (g *GrammarDefiner) blockByRule(
 	node LangSpecParserNodeKind,
@@ -229,18 +266,20 @@ func (g *GrammarDefiner) blockByRule(
 	bodyRule Rule,
 ) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Rule.Sequence(
-		grammarID,
-		node,
-		kwRule,
-		g.rb.Rule.TransparentNest(
-			LangSpecGrammarIDFromNodeWithSuffix(node, "BODY"),
-			TokBraceOpen,
-			TokBraceClose,
-			bodyRule,
-		),
-		g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
-	)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Sequence(
+			grammarID,
+			node,
+			kwRule,
+			g.rb.Rule.TransparentNest(
+				LangSpecGrammarIDFromNodeWithSuffix(node, "BLOCK_NEST"),
+				TokBraceOpen,
+				TokBraceClose,
+				bodyRule,
+			),
+			g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
+		)
+	})
 }
 
 // ----------------------------------------------------------- SequenceBuilder
@@ -256,63 +295,40 @@ type SequenceBuilder struct {
 	rules     []Rule
 }
 
-/*
-expect appends a rule that expects the token and creates an LST node. GrammarID is derived from (node, suffix).
-Use suffix "" for the default slot.
-*/
 func (s *SequenceBuilder) expect(node LangSpecParserNodeKind, suffix string, tok LangSpecLexerTokenType) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.Expect(node, suffix, tok))
 	return s
 }
 
-/*
-expectToken appends a rule that expects the token and creates an LST node. Shorthand for expect(node, "", tok).
-*/
 func (s *SequenceBuilder) expectToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) *SequenceBuilder {
 	return s.expect(node, "", tok)
 }
 
-/*
-expectVirtual appends a rule that consumes the token without creating a node (virtual ID).
-*/
 func (s *SequenceBuilder) expectVirtual(v VirtualGrammarID, tok LangSpecLexerTokenType) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.expectVirtual(v, tok))
 	return s
 }
 
-/*
-expectVirtualInRule appends a rule that consumes the token using the sequence's derived ID.
-*/
 func (s *SequenceBuilder) expectVirtualInRule(tok LangSpecLexerTokenType) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.expectVirtualInRule(s.nodeKind, tok))
 	return s
 }
 
-/*
-optionalToken appends an optional expectation of the token (derived GrammarID).
-*/
 func (s *SequenceBuilder) optionalToken(node LangSpecParserNodeKind, tok LangSpecLexerTokenType) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.rb.Rule.Optional(s.g.expectToken(node, tok)))
 	return s
 }
 
-/*
-optionalRule appends an optional sub-rule.
-*/
 func (s *SequenceBuilder) optionalRule(rule Rule) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.rb.Rule.Optional(rule))
 	return s
 }
 
-/*
-requiredRule appends a required sub-rule; on FailureNoMatch the given message is reported.
-*/
 func (s *SequenceBuilder) requiredRule(rule Rule, msg string) *SequenceBuilder {
 	s.rules = append(s.rules, s.g.rb.Rule.Required(rule, msg))
 	return s
 }
 
-/* rule just appends a rule as-is. */
 func (s *SequenceBuilder) rule(rule Rule) *SequenceBuilder {
 	s.rules = append(s.rules, rule)
 	return s
@@ -322,5 +338,7 @@ func (s *SequenceBuilder) rule(rule Rule) *SequenceBuilder {
 build returns the Sequence rule with the accumulated rules. The builder must not be used after build.
 */
 func (s *SequenceBuilder) build() Rule {
-	return s.g.rb.Rule.Sequence(s.grammarID, s.nodeKind, s.rules...)
+	return s.g.memoize(s.grammarID, func() Rule {
+		return s.g.rb.Rule.Sequence(s.grammarID, s.nodeKind, s.rules...)
+	})
 }

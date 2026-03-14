@@ -370,23 +370,19 @@ func optionalToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[run
 }
 
 func repetitionToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
-
-	if len(children) != 2 {
-		panic("compiler error: repetition node must have exactly 2 children (pattern and settings)")
-	}
-
-	childPattern := compilePatternExpression(ctx, children[0])
-	repetitionSettings := children[1]
+	childPattern := compilePatternExpression(ctx, node.Children()[0])
+	boundsNode := node.Children()[1]
 
 	minVal := 0
-	maxVal := -1
+	maxVal := -1 // Unbounded
 
-	if minNode, ok := nodeContains(repetitionSettings, NodeRepetitionMin); ok {
+	// Query for Min
+	if minNode := boundsNode.FindFirstKind(NodeRepetitionMin); minNode != nil {
 		minVal = extractIntContent(minNode)
 	}
 
-	if maxNode, ok := nodeContains(repetitionSettings, NodeRepetitionMax); ok {
+	// Query for Max
+	if maxNode := boundsNode.FindFirstKind(NodeRepetitionMax); maxNode != nil {
 		maxVal = extractIntContent(maxNode)
 	}
 
@@ -426,19 +422,53 @@ func (c *compiler) extractNegationRanges(node *Node, out *[]pattern.CharRange[ru
 }
 
 func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]) {
-	for _, itemNode := range node.Children() {
-		if itemNode.Kind() != NodePatternClassItem {
-			continue
-		}
+	for _, child := range node.Children() {
+		item := child.Unwrap(NodePatternClassItem)
 
-		if rangeNode := itemNode.FindFirstKind(NodePatternRange); rangeNode != nil {
-			*out = append(*out, c.extractPatternRange(rangeNode))
-		} else if charNode := itemNode.FindFirstKind(NodeCharLiteral); charNode != nil {
-			*out = append(*out, c.extractCharRange(charNode))
-		} else {
-			panic("compiler error: pattern class item must contain either a character literal or a range")
+		switch item.Kind() {
+		case NodeCharLiteral:
+			lo := c.extractCharLiteralValue(item)
+			*out = append(*out, c.factory.Range(lo, lo))
+
+		case NodePatternClassItem:
+			children := item.Children()
+			if len(children) == 2 && children[1].Kind() == NodePatternRange {
+
+				lo := c.extractCharLiteralValue(children[0])
+
+				// The range tail itself only has 1 child (the RHS char)
+				rhsNode := children[1].RequireSingleChild()
+				hi := c.extractCharLiteralValue(rhsNode)
+
+				*out = append(*out, c.factory.Range(lo, hi))
+
+			} else {
+				panic(fmt.Sprintf("engine error: unexpected class item structure with %d children", len(children)))
+			}
+
+		default:
+			panic(fmt.Sprintf("engine error: unexpected node kind in class item: %v", item.Kind()))
 		}
 	}
+}
+
+func (c *compiler) extractCharLiteralValue(node *Node) rune {
+
+	// Cleanly drill through any Pratt expression wrappers (Segments or Groups)
+	coreNode := node.Unwrap(NodePatternSegment, NodePatternGroup)
+
+	if coreNode.Kind() != NodeCharLiteral {
+		panic(fmt.Sprintf("semantic error: expected character literal, got %v", coreNode.Kind()))
+	}
+
+	content := nodeFormattedContent(coreNode, ATTRIBUTE_CHAR_LITERAL_VALUE)
+	runes := []rune(content)
+
+	if len(runes) != 1 {
+		panic("semantic error: character literal must resolve to exactly 1 rune")
+	}
+
+	return runes[0]
 }
 
 func (c *compiler) extractGroupRanges(node *Node, out *[]pattern.CharRange[rune]) {
@@ -465,20 +495,13 @@ func (c *compiler) extractCharRange(node *Node) pattern.CharRange[rune] {
 func (c *compiler) extractPatternRange(node *Node) pattern.CharRange[rune] {
 	children := node.Children()
 	if len(children) != 2 {
-		panic("engine error: range node must have exactly 2 children")
+		panic(fmt.Sprintf("engine error: infix range node must have exactly 2 children (LHS, RHS), got %d", len(children)))
 	}
 
-	loContent := nodeFormattedContent(children[0], ATTRIBUTE_CHAR_LITERAL_VALUE)
-	hiContent := nodeFormattedContent(children[1], ATTRIBUTE_CHAR_LITERAL_VALUE)
+	lo := c.extractCharLiteralValue(children[0])
+	hi := c.extractCharLiteralValue(children[1])
 
-	loRunes := []rune(loContent)
-	hiRunes := []rune(hiContent)
-
-	if len(loRunes) != 1 || len(hiRunes) != 1 {
-		panic("semantic error: bounds in pattern range must resolve to exactly 1 rune each")
-	}
-
-	return c.factory.Range(loRunes[0], hiRunes[0])
+	return c.factory.Range(lo, hi)
 }
 
 func classToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
@@ -687,16 +710,14 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return compilePlus(ctx, node)
 	case NodeParseStar:
 		return compileStar(ctx, node)
-	case NodeParseOpEmit:
-		return compileEmit(ctx, node)
-	case NodeParseOpEmitOneOf:
-		return compileEmitOneOf(ctx, node)
 	case NodeParseOpSuppress:
 		return compileVirtual(ctx, node)
 	case NodeParseOpNest:
 		return compileNest(ctx, node)
 	case NodeParseGroup:
 		return compileGroup(ctx, node)
+	case NodeParseSegment:
+		return compileParseSegment(ctx, node)
 	default:
 		panic(fmt.Errorf("compiler error: unsupported parse expression kind: '%s'", kind))
 	}
@@ -817,31 +838,54 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), outputNodeKind, targetToken)
 }
 
-func compileEmitOneOf(ctx *parseCompileCtx, node *Node) CompiledRule {
-	outputNodeKind := nodeSingleTokenContent(node.FindFirstKind(NodeParseNodeName))
-	groupNode := node.FindFirstKind(NodeParseGroup)
-	if groupNode == nil {
-		panic("compiler error: emit-one-of node missing group")
-	}
-	groupChildren := groupNode.Children()
-	if len(groupChildren) != 1 {
-		panic("compiler error: emit-one-of group must have exactly one expression")
-	}
-	innerExpr := groupChildren[0]
+func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, customNodeKind string) CompiledRule {
+	innerExpr := groupNode.RequireSingleChild()
+
 	flatAlts := innerExpr.FlattenByKind(NodeParseAlternation)
+
 	tokens := make([]string, 0, len(flatAlts))
 	for _, alt := range flatAlts {
 		refNode := alt.FindFirstKind(NodeParseTokenReference)
 		if refNode == nil {
-			panic("compiler error: emit-one-of choice alternatives must be token references")
+			if alt.Kind() == NodeParseTokenReference || alt.Kind() == NodeParseExpressionReference {
+				refNode = alt
+			}
 		}
-		tok := nodeSingleTokenContent(refNode)
-		tokens = append(tokens, tok)
+
+		if refNode == nil {
+			panic(fmt.Sprintf("compiler error: emit-one-of alternatives for '%s' must be token references", customNodeKind))
+		}
+
+		tokens = append(tokens, getIdentifierValue(refNode))
 	}
+
 	if len(tokens) == 0 {
-		panic("compiler error: emit-one-of choice must have at least one alternative")
+		panic(fmt.Sprintf("compiler error: emit-one-of for '%s' has no valid tokens", customNodeKind))
 	}
-	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), outputNodeKind, tokens...)
+
+	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), customNodeKind, tokens...)
+}
+
+func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
+	nameNode := node.FindFirstKind(NodeParseNodeName)
+	if nameNode == nil {
+		return compileParseExpression(ctx, node.RequireSingleChild())
+	}
+
+	targetName := getIdentifierValue(nameNode)
+
+	tokenRef := node.FindFirstKind(NodeParseTokenReference)
+	groupRef := node.FindFirstKind(NodeParseGroup)
+
+	if tokenRef != nil {
+		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), targetName, getIdentifierValue(tokenRef))
+	}
+
+	if groupRef != nil {
+		return compileEmitOneOfWithCustomName(ctx, groupRef, targetName)
+	}
+
+	return compileRuleReference(ctx, nameNode, targetName)
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {

@@ -176,8 +176,6 @@ const (
 	NodeParseNodeName
 	NodeParseRuleBody
 	NodeParseOpSuppress
-	NodeParseOpEmit
-	NodeParseOpEmitOneOf
 	NodeParseAlternation
 	NodeParseConcat
 	NodeParseOptional
@@ -203,6 +201,7 @@ const (
 
 	NodeRuleModifierTransparent
 	NodeRuleModifierSync
+	NodeSyncBlock
 	NodeSyncToken
 
 	NodeParseModifierPredict
@@ -323,6 +322,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 	spec.Tokens = append(spec.Tokens,
 		DefineToken(TokEOF).
 			Scope("meta.eof").
+			Pattern(f.Class()).
 			Build(),
 
 		DefineToken(TokWhitespace).
@@ -416,6 +416,7 @@ func (b *dslGrammarBuilder) program() Rule {
 		b.g.rb.Rule.Required(b.lexSection(), "must have lex ruleset"),
 		b.g.rb.Rule.OptionalPrefix(b.prattSection(), TokKWPratt),
 		b.g.rb.Rule.Required(b.parseSection(), "must have parse ruleset"),
+		b.g.expectVirtualInRule(NodeProgram, TokEOF),
 	)
 }
 
@@ -519,32 +520,27 @@ func (b *dslGrammarBuilder) patternDefinition() Rule {
 
 func (b *dslGrammarBuilder) patternExpr() Rule {
 	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
-		// PRIMARY: Only the base units (literals, groups, var refs)
 		Primary: b.patternSegment(),
 
-		// PREFIX: Bindings that happen BEFORE the expression
 		PrefixOps: []rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-			b.g.PrefixOp(TokNegation, 40, NodePatternNegation), // High precedence
+			b.g.PrefixOp(TokNegation, 40, NodePatternNegation),
 		},
 
-		// POSTFIX: Bindings that happen AFTER the expression (Star, Plus)
 		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokStar, 30, NodePatternStar),
 			b.g.PostfixOp(TokPlus, 30, NodePatternPlus),
 			b.g.PostfixOp(TokOptional, 30, NodePatternOptional),
 		},
 
-		// POSTFIX RULES: Composite postfix bindings that require full sub-rule execution
 		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
 			b.g.PostfixRuleOp(30, NodeRepetition, b.patternRepetition()),
 		},
 
-		// INFIX: Bindings BETWEEN expressions
 		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			b.g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
+			b.g.InfixOp(TokRange, 60, 61, NodePatternRange),
 		},
 
-		// IMPLICIT: Handling 'a' 'b' (Concat)
 		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecLexerTokenType, LangSpecParserNodeKind]{
 			LeftBP:   20,
 			RightBP:  19,
@@ -558,15 +554,9 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 }
 
 func (b *dslGrammarBuilder) patternSegment() Rule {
-	rangeRule := b.g.rb.Rule.PredictLookahead(
-		b.patternRange(),
-		[]syntaxa.Lookahead[LangSpecLexerTokenType]{{Offset: 1, Expected: TokRange}},
-	)
-
 	return b.g.ChoiceByNode(NodePatternSegment,
 		b.patternRefReference(),
 		b.patternClass(),
-		rangeRule,
 		b.charLiteral(),
 		b.g.expectToken(NodePatternAny, TokDot),
 		b.g.expectToken(NodePatternRegEx, TokRegexLiteral),
@@ -586,24 +576,19 @@ func (b *dslGrammarBuilder) patternClass() Rule {
 }
 
 func (b *dslGrammarBuilder) patternClassItem() Rule {
-	rangeRule := b.g.rb.Rule.PredictLookahead(
-		b.patternRange(),
-		[]syntaxa.Lookahead[LangSpecLexerTokenType]{{Offset: 1, Expected: TokRange}},
-	)
-
-	itemChoice := b.g.ChoiceByNode(NodePatternClassItem, rangeRule, b.charLiteral())
-
-	return b.g.sequence(NodePatternClassItem, "").
-		rule(itemChoice).
-		optionalRule(b.g.expectVirtualInRule(NodePatternClassItem, TokComma)).
-		build()
-}
-
-func (b *dslGrammarBuilder) patternRange() Rule {
-	return b.g.sequence(NodePatternRange, "").
-		expectToken(NodeCharLiteral, TokCharLiteral).
+	rangeTail := b.g.sequence(NodePatternRange, "TAIL").
 		expectVirtualInRule(TokRange).
 		expectToken(NodeCharLiteral, TokCharLiteral).
+		build()
+
+	item := b.g.sequence(NodePatternClassItem, "SEQ").
+		rule(b.charLiteral()).
+		optionalRule(rangeTail).
+		build()
+
+	return b.g.sequence(NodePatternClassItem, "COMMA").
+		rule(item).
+		optionalRule(b.g.expectVirtualInRule(NodePatternClassItem, TokComma)).
 		build()
 }
 
@@ -617,25 +602,26 @@ func (b *dslGrammarBuilder) patternRepetition() Rule {
 }
 
 func (b *dslGrammarBuilder) repetitionBounds() Rule {
-	return b.g.ChoiceByNode(
-		NodeRepetitionBounds,
-		b.rangedRepetition(),
-		b.exactRepetition(),
-	)
-}
-
-func (b *dslGrammarBuilder) rangedRepetition() Rule {
-	return b.g.sequence(NodeRepetitionBounds, "RANGED").
-		optionalToken(NodeRepetitionMin, TokInteger).
+	tail := b.g.sequence(NodeRepetitionBounds, "TAIL").
 		expectVirtualInRule(TokComma).
 		optionalToken(NodeRepetitionMax, TokInteger).
 		build()
-}
 
-func (b *dslGrammarBuilder) exactRepetition() Rule {
-	return b.g.sequence(NodeRepetitionBounds, "EXACT").
+	startsWithMin := b.g.sequence(NodeRepetitionBounds, "STARTS_WITH_MIN").
 		expectToken(NodeRepetitionMin, TokInteger).
+		optionalRule(tail).
 		build()
+
+	startsWithComma := b.g.sequence(NodeRepetitionBounds, "STARTS_WITH_COMMA").
+		expectVirtualInRule(TokComma).
+		expectToken(NodeRepetitionMax, TokInteger).
+		build()
+
+	return b.g.ChoiceByNode(
+		NodeRepetitionBounds,
+		startsWithMin,
+		startsWithComma,
+	)
 }
 
 // ----------------------------------------------------------- LEX SECTION
@@ -929,51 +915,34 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 
 func (b *dslGrammarBuilder) parseSegment() Rule {
 	return b.g.ChoiceByNode(NodeParseSegment,
-		b.emitOneOfMapping(),
-		b.emitMapping(),
 		b.virtualMapping(),
 		b.nestMapping(),
-		b.g.expectToken(NodeParseExpressionReference, TokIdentifier),
 		b.parseGroup(),
+		b.identifierMapping(),
 	)
 }
 
-func (b *dslGrammarBuilder) emitOneOfMapping() Rule {
-	emitOneOf := b.g.sequence(NodeParseOpEmitOneOf, "").
-		expectToken(NodeParseNodeName, TokIdentifier).
+func (b *dslGrammarBuilder) identifierMapping() Rule {
+	groupRule := b.g.NestByNode(
+		NodeParseGroup,
+		TokParenOpen,
+		TokParenClose,
+		b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
+	)
+
+	tokenRefRule := b.g.expectToken(NodeParseTokenReference, TokIdentifier)
+
+	tailChoice := b.g.ChoiceByNodeWithSuffix(NodeParseSegment, "TAIL_CHOICE", groupRule, tokenRefRule)
+
+	tailSeq := b.g.sequence(NodeParseSegment, "TAIL").
 		expectVirtualInRule(TokAssignment).
-		rule(b.g.NestByNode(
-			NodeParseGroup,
-			TokParenOpen,
-			TokParenClose,
-			b.g.rb.Rule.Reference("PARSE EXPR REF", VirtualGrammarIDToGrammarID(VirtualParseExpression)),
-		)).
+		rule(tailChoice).
 		build()
 
-	return b.g.rb.Rule.PredictLookahead(
-		emitOneOf,
-		[]syntaxa.Lookahead[LangSpecLexerTokenType]{
-			{Offset: 0, Expected: TokIdentifier},
-			{Offset: 1, Expected: TokAssignment},
-			{Offset: 2, Expected: TokParenOpen},
-		},
-	)
-}
-
-func (b *dslGrammarBuilder) emitMapping() Rule {
-	emit := b.g.sequence(NodeParseOpEmit, "").
+	return b.g.sequence(NodeParseSegment, "IDENT_MAPPING").
 		expectToken(NodeParseNodeName, TokIdentifier).
-		expectVirtualInRule(TokAssignment).
-		expectToken(NodeParseTokenReference, TokIdentifier).
+		optionalRule(tailSeq).
 		build()
-
-	return b.g.rb.Rule.PredictLookahead(
-		emit,
-		[]syntaxa.Lookahead[LangSpecLexerTokenType]{
-			{Offset: 0, Expected: TokIdentifier},
-			{Offset: 1, Expected: TokAssignment},
-		},
-	)
 }
 
 func (b *dslGrammarBuilder) virtualMapping() Rule {
@@ -1018,7 +987,12 @@ func (b *dslGrammarBuilder) parseGroup() Rule {
 func (b *dslGrammarBuilder) syncModifier() Rule {
 	return b.g.sequence(NodeRuleModifierSync, "").
 		expectVirtualInRule(TokKWSync).
-		rule(b.g.TransparentZeroOrMoreByNode(NodeSyncToken, "LIST", b.g.expectToken(NodeSyncToken, TokIdentifier))).
+		rule(b.g.NestByNode(
+			NodeSyncBlock,
+			TokParenOpen,
+			TokParenClose,
+			b.g.TransparentZeroOrMoreByNode(NodeSyncToken, "LIST", b.g.expectToken(NodeSyncToken, TokIdentifier)),
+		)).
 		build()
 }
 
@@ -1031,7 +1005,7 @@ func (b *dslGrammarBuilder) predictModifier() Rule {
 			NodePredictLookaheadList,
 			TokParenOpen,
 			TokParenClose,
-			b.g.TransparentZeroOrMoreByNode(NodePredictLookahead, "LIST", b.predictLookahead()),
+			b.g.TransparentZeroOrMoreByNode(NodePredictLookahead, "ITEMS", b.predictLookahead()),
 		)).
 		build()
 }

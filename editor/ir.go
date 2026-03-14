@@ -1,12 +1,14 @@
 package editor
 
 import (
+	"autarch"
 	"autarch/pattern"
 	"cmp"
 	"essence"
-	"foundation/extensions"
+	"fmt"
 	"foundation/text"
 	"lexarch"
+	"memarch"
 	"syntaxa"
 )
 
@@ -31,17 +33,24 @@ type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerS
 	tokenFormatter   func(token TToken) string
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
+	contextsEqual    func(left, right TContext) bool
+
+	editorPDAAllocFn memarch.AllocationFn
 }
 
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	tokenFormatter func(token TToken) string,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool),
+	contextsEqual func(left, right TContext) bool,
+	editorPDAAllocFn memarch.AllocationFn,
 ) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
 		tokenFormatter:   tokenFormatter,
 		contextProducer:  contextProducer,
 		overrideProducer: overrideProducer,
+		contextsEqual:    contextsEqual,
+		editorPDAAllocFn: editorPDAAllocFn,
 	}
 }
 
@@ -55,10 +64,11 @@ type EditorState[TObservation cmp.Ordered, TContext any] struct {
 type StackOperation uint8
 
 const (
-	STACK_NONE StackOperation = iota // Token matched, no state change
-	STACK_PUSH                       // Token matched, enter new Target state
-	STACK_POP                        // Token matched, exit current state
+	STACK_NONE StackOperation = iota
+	STACK_PUSH
+	STACK_POP
 	STACK_EMBED
+	STACK_SET
 )
 
 type DelimitedPayload[TObservation cmp.Ordered, TContext any] struct {
@@ -78,10 +88,12 @@ type ForeignMachinePayload[TObservation cmp.Ordered, TContext any] struct {
 type EditorTransition[TObservation cmp.Ordered, TContext any] struct {
 	OnPattern      pattern.RegulaAST[TObservation]
 	MatchContext   TContext
-	Target         *EditorState[TObservation, TContext]
+	Targets        []*EditorState[TObservation, TContext]
 	Captures       map[int]TContext
 	Operation      StackOperation
 	ForeignPayload *ForeignMachinePayload[TObservation, TContext]
+	PopAmount      int
+	IsLookahead    bool
 }
 
 type LanguageMeta struct {
@@ -90,8 +102,9 @@ type LanguageMeta struct {
 }
 
 type LanguageMachine[TObservation cmp.Ordered, TContext any] struct {
-	EditorStates []EditorState[TObservation, TContext]
-	RootState    EditorState[TObservation, TContext]
+	EditorStates       []EditorState[TObservation, TContext]
+	RootState          EditorState[TObservation, TContext]
+	AmbientTransitions []EditorTransition[TObservation, TContext]
 }
 
 type EditorIR[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
@@ -103,28 +116,49 @@ type EditorIR[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKi
 
 type editorIRGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
 	lexingRuleset  *lexarch.LexingRuleset[TObservation, TToken, TTokenRole]
-	grammarPackage syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
+	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 	config         *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
 	sanitizer      *text.Sanitizer
+
+	tokenToRule    map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+	compiledStates map[autarch.StackSymbolID]*EditorState[TObservation, TContext]
+
+	delimitedStates map[string]*EditorState[TObservation, TContext]
 }
 
 func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
-	grammarPackage syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-) *EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
+	pdaConfig syntaxa.NPDAConfig,
+) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {
 
 	generator := &editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
-		lexingRuleset:  lexingRuleset,
-		grammarPackage: grammarPackage,
-		config:         config,
-		sanitizer:      text.NewIdentifierSanitizer(),
+		lexingRuleset:   lexingRuleset,
+		grammarPackage:  grammarPackage,
+		config:          config,
+		sanitizer:       text.NewIdentifierSanitizer(),
+		tokenToRule:     make(map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]),
+		compiledStates:  make(map[autarch.StackSymbolID]*EditorState[TObservation, TContext]),
+		delimitedStates: make(map[string]*EditorState[TObservation, TContext]),
 	}
 
-	states, rootState := generator.buildRootState()
+	generator.buildTokenMap()
 
-	editorStates := []EditorState[TObservation, TContext]{rootState}
-	editorStates = append(editorStates, states...)
+	engine, err := syntaxa.CompileEngine[TObservation, TToken, TTokenRole, TNodeKind, TLexerState, TContext](
+		grammarPackage, config.editorPDAAllocFn, pdaConfig,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if !engine.IsDPDA {
+		autarch.NPDADestroy(engine.NPDA)
+		panic(fmt.Sprintf(
+			"EditorIR generator currently requires a strict LL(1) DPDA.\nResolve grammar ambiguities:\n%v",
+			engine.DPDAError,
+		))
+	}
 
 	return &EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
 		LanguageMeta: LanguageMeta{
@@ -132,129 +166,41 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 			LanguageVersion: grammarPackage.Version,
 		},
 		LanguageMachine: LanguageMachine[TObservation, TContext]{
-			EditorStates: editorStates,
-			RootState:    rootState,
+			EditorStates:       finalStates,
+			RootState:          *rootState,
+			AmbientTransitions: ambientTransitions,
 		},
-	}
+	}, nil
 }
 
 // ------------------------------------------------------------- Private Helpers
 
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildRootState() ([]EditorState[TObservation, TContext], EditorState[TObservation, TContext]) {
-	sortedRules := e.getSortedLexerRules()
-	transitions, extraStates := e.buildTransitions(sortedRules)
-
-	rootState := EditorState[TObservation, TContext]{
-		ID:          e.generateID(),
-		Label:       ROOT_LABEL,
-		Context:     *new(TContext),
-		Transitions: transitions,
-	}
-
-	return extraStates, rootState
-}
-
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) getSortedLexerRules() []lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole] {
-	rules := e.lexingRuleset.GetRules()
-
-	return extensions.SortedCopyShallow(rules, func(a, b lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]) int {
-		return cmp.Compare(b.Priority, a.Priority)
-	})
-}
-
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildTransitions(
-	rules []lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
-) ([]EditorTransition[TObservation, TContext], []EditorState[TObservation, TContext]) {
-
-	var transitions []EditorTransition[TObservation, TContext]
-	var extraStates []EditorState[TObservation, TContext]
-
-	for _, rule := range rules {
-		t, targetState := e.buildSingleTransition(rule)
-		transitions = append(transitions, t)
-		if targetState != nil {
-			extraStates = append(extraStates, *targetState)
-		}
-	}
-
-	return transitions, extraStates
-}
-
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildSingleTransition(
-	rule lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
-) (EditorTransition[TObservation, TContext], *EditorState[TObservation, TContext]) {
-
-	ctx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		Token:     &rule.Token,
-		TokenRole: &rule.Role,
-	}
-
-	pattern := rule.Pattern
-	matchCtx := e.config.contextProducer(ctx)
-
-	t := EditorTransition[TObservation, TContext]{
-		Operation: STACK_NONE,
-	}
-	var spawnedState *EditorState[TObservation, TContext]
-
-	if override, hasOverride := e.config.overrideProducer(ctx); hasOverride {
-		pattern = e.applyPatternOverride(pattern, override)
-		matchCtx = e.applyContextOverride(matchCtx, override)
-		t.Captures = override.Captures
-
-		if override.ForeignPayload != nil {
-			t.ForeignPayload = override.ForeignPayload
-			t.Operation = STACK_EMBED
-		} else if override.DelimitedPayload != nil {
-			spawnedState = e.constructDelimitedTargetState(override.DelimitedPayload)
-			t.Target = spawnedState
-			t.Operation = STACK_PUSH
-		}
-	}
-
-	t.OnPattern = pattern
-	t.MatchContext = matchCtx
-
-	return t, spawnedState
-}
-
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) constructDelimitedTargetState(
-	payload *DelimitedPayload[TObservation, TContext],
-) *EditorState[TObservation, TContext] {
-
-	return &EditorState[TObservation, TContext]{
-		ID:      e.generateID(),
-		Label:   payload.StateLabel,
-		Context: payload.BodyContext,
-		Transitions: []EditorTransition[TObservation, TContext]{
-			{
-				OnPattern:    payload.ClosePattern,
-				MatchContext: payload.CloseContext,
-				Target:       nil,
-				Operation:    STACK_POP,
-			},
-		},
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildTokenMap() {
+	for _, rule := range e.lexingRuleset.GetRules() {
+		e.tokenToRule[rule.Token] = rule
 	}
 }
 
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) applyPatternOverride(
-	base pattern.RegulaAST[TObservation],
-	override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-) pattern.RegulaAST[TObservation] {
-	if override.Pattern != nil {
-		return *override.Pattern
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) resolveLabel(
+	stackTop autarch.StackSymbolID,
+	engine *syntaxa.PDAEngine[TToken, TContext],
+) string {
+	debugName, exists := engine.DebugMap[stackTop]
+	if !exists {
+		return e.generateID()
 	}
-	return base
-}
 
-func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) applyContextOverride(
-	base TContext,
-	override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-) TContext {
-	if override.MatchContext != nil {
-		return *override.MatchContext
+	cleanName := e.sanitizer.Sanitize(debugName)
+
+	if nodeKey, hasKey := engine.StackToNode[stackTop]; hasKey {
+		cleanPath := e.sanitizer.Sanitize(string(nodeKey))
+		return fmt.Sprintf("%s__%s", cleanName, cleanPath)
 	}
-	return base
+
+	if cleanName != "" {
+		return cleanName
+	}
+	return e.generateID()
 }
 
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) generateID() string {

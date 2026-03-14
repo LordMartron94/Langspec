@@ -45,7 +45,7 @@ func TestDSLCompiler(t *testing.T) {
 	compiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(compiler)
 
-	dsl.LangSpecCompilerDebugGrammar(compiler)
+	// dsl.LangSpecCompilerDebugGrammar(compiler)
 
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 	genCfg := generator.GeneratorConfigCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](

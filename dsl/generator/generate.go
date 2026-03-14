@@ -433,6 +433,9 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRo
 	if baseScope, ok := g.baseScopes[rule.Token]; ok {
 		attributes = append(attributes, fmt.Sprintf("scope=\"%s\"", baseScope))
 	}
+	if g.eofToken != nil && rule.Token == *g.eofToken {
+		attributes = append(attributes, "EOF=true")
+	}
 
 	meta := ""
 	if len(attributes) > 0 {
@@ -526,12 +529,13 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 	}
 
 	// 2. Build Standard Rules
-	labels := g.getSortedGrammarLabels(rules)
-	for i, labelStr := range labels {
+	labels := g.grammarPackage.SortedGrammarLabels
+	for i, label := range labels {
+		labelStr := string(label)
 		if i > 0 {
 			sectionDocs = append(sectionDocs, line(), line())
 		}
-		sectionDocs = append(sectionDocs, g.buildParseRuleDoc(labelStr, rules[syntaxa.GrammarLabel(labelStr)]))
+		sectionDocs = append(sectionDocs, g.buildParseRuleDoc(labelStr, rules[label]))
 	}
 
 	return concat(
@@ -540,15 +544,6 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 		line(),
 		doctext("}"),
 	)
-}
-
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) getSortedGrammarLabels(rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind]) []string {
-	labels := make([]string, 0, len(rules))
-	for label := range rules {
-		labels = append(labels, string(label))
-	}
-	slices.Sort(labels)
-	return labels
 }
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[TToken, TNodeKind]) Doc {
@@ -625,10 +620,14 @@ func (d *parseDecompiler[TToken, TNodeKind]) buildHeaderDoc(labelStr string, rul
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) buildSyncDoc(tokens []TToken) Doc {
-	docs := []Doc{doctext(" sync")}
-	for _, t := range tokens {
-		docs = append(docs, space(), doctext(d.tokenFormatter(t)))
+	docs := []Doc{doctext(" sync (")}
+	for i, t := range tokens {
+		if i > 0 {
+			docs = append(docs, space())
+		}
+		docs = append(docs, doctext(d.tokenFormatter(t)))
 	}
+	docs = append(docs, doctext(")"))
 	return concat(docs...)
 }
 

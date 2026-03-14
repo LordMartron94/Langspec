@@ -34,9 +34,9 @@ type contextEntry struct {
 	MetaScope      *string        `yaml:"meta_scope,omitempty"`
 	Match          *string        `yaml:"match,omitempty"`
 	Scope          string         `yaml:"scope,omitempty"`
-	Push           string         `yaml:"push,omitempty"`
-	Pop            *bool          `yaml:"pop,omitempty"`
-	Set            string         `yaml:"set,omitempty"`
+	Push           any            `yaml:"push,omitempty"`
+	Pop            any            `yaml:"pop,omitempty"`
+	Set            any            `yaml:"set,omitempty"`
 	Captures       map[int]string `yaml:"captures,omitempty"`
 	Embed          string         `yaml:"embed,omitempty"`
 	EmbedScope     string         `yaml:"embed_scope,omitempty"`
@@ -65,7 +65,8 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 		return err
 	}
 
-	if err := writeContexts(sb, ir.EditorStates, config); err != nil {
+	// Pass the entire LanguageMachine instead of just the EditorStates
+	if err := writeContexts(sb, ir.LanguageMachine, config); err != nil {
 		return err
 	}
 
@@ -110,12 +111,12 @@ func writeMetadata(sb *strings.Builder, name string, exts []string, baseScope st
 
 func writeContexts[TObservation cmp.Ordered, TContext any](
 	sb *strings.Builder,
-	states []editor.EditorState[TObservation, TContext],
+	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
 ) error {
 	writeSectionHeader(sb, "Contexts & Rules")
 
-	contextsMap := buildContextsMap(states, config)
+	contextsMap := buildContextsMap(machine, config)
 	section := contextsSection{Contexts: contextsMap}
 
 	return encodeAndWriteYAML(sb, section)
@@ -124,13 +125,14 @@ func writeContexts[TObservation cmp.Ordered, TContext any](
 // ------------------------------------------------------------------ BUILDERS
 
 func buildContextsMap[TObservation cmp.Ordered, TContext any](
-	states []editor.EditorState[TObservation, TContext],
+	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
 ) map[string][]contextEntry {
 
 	contextsMap := make(map[string][]contextEntry)
 
-	for _, state := range states {
+	// Map structural PDA states to Sublime Contexts
+	for _, state := range machine.EditorStates {
 		label := determineContextLabel(state.Label)
 		entries := buildTransitions(state.Transitions, config)
 
@@ -140,6 +142,11 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 		}
 
 		contextsMap[label] = entries
+	}
+
+	// Map ambient transitions into Sublime's native prototype context
+	if len(machine.AmbientTransitions) > 0 {
+		contextsMap["prototype"] = buildTransitions(machine.AmbientTransitions, config)
 	}
 
 	return contextsMap
@@ -168,6 +175,10 @@ func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 	regexStr, err := t.OnPattern.ToRegEx()
 	if err != nil {
 		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+	}
+
+	if t.IsLookahead {
+		regexStr = fmt.Sprintf("(?=%s)", regexStr)
 	}
 
 	entry := contextEntry{
@@ -206,10 +217,11 @@ func applyStackOperation[TObservation cmp.Ordered, TContext any](
 ) {
 	switch t.Operation {
 	case editor.STACK_PUSH:
-		entry.Push = determineContextLabel(t.Target.Label)
+		entry.Push = determineContextLabels(t.Targets)
 	case editor.STACK_POP:
-		b := true
-		entry.Pop = &b
+		entry.Pop = t.PopAmount
+	case editor.STACK_SET:
+		entry.Set = determineContextLabels(t.Targets)
 	case editor.STACK_EMBED:
 		applyEmbedOperation(entry, t.ForeignPayload, config)
 	case editor.STACK_NONE:
@@ -235,6 +247,16 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	entry.EmbedScope = config.ExtractMetaScope(payload.MachineContext)
 	entry.Escape = &escapeStr
 	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, config.ExtractScope)
+}
+
+func determineContextLabels[TObservation cmp.Ordered, TContext any](targets []*editor.EditorState[TObservation, TContext]) []string {
+	out := make([]string, len(targets))
+
+	for i, target := range targets {
+		out[i] = determineContextLabel(target.Label)
+	}
+
+	return out
 }
 
 func determineContextLabel(label string) string {
