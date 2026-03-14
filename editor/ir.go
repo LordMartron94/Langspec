@@ -869,9 +869,6 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		// advance see the remaining/stack normally).
 		noNest := lsTerminal[TToken, TNodeKind]{token: term.token, remaining: term.remaining, stack: term.stack}
 		advTerminals := lsAdvanceTerminal(noNest, bs.rules)
-		// Propagate the pop offset into the afterNest continuation so that all
-		// states derived from it also use the correct pop depth.
-		lsPropagatePopOffset(advTerminals, term.popOffset)
 
 		// Choose PUSH (loop body) or SET (linear sequence) for the nest open token.
 		// SET replaces the current continuation context so it cannot accumulate on the
@@ -879,6 +876,15 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		nestOp := STACK_SET
 		if isZeroOrMore {
 			nestOp = STACK_PUSH
+		}
+
+		// Propagate popOffset only for SET (non-ZeroOrMore) nests.  For PUSH
+		// (ZeroOrMore) nests the afterNest state sits on top of COMPANION on the
+		// Sublime stack; it must pop back to COMPANION (pop:1), not past it.
+		// For SET nests the afterNest state has replaced COMPANION on the stack
+		// and still needs pop:2 to exit both itself and the wrapper.
+		if nestOp == STACK_SET {
+			lsPropagatePopOffset(advTerminals, term.popOffset)
 		}
 
 		if advTerminals == nil {
@@ -894,9 +900,9 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		// (e.g. the ';' after '}') do not leave the context permanently on the stack.
 		afterNest := bs.getOrCreateContext(advTerminals, ownerLabel2, nestHint)
 		afterNest.HasFallthroughPop = true
-		// If the continuation is inside a wrapped nest body, ensure the fallthrough
-		// pop depth is also updated to exit both the companion state and the wrapper.
-		if term.popOffset > 0 && afterNest.FallthroughPopAmount == 0 {
+		// For SET nests inside a wrapped body, also update the fallthrough pop depth
+		// so it exits both the afterNest state and the wrapper state.
+		if nestOp == STACK_SET && term.popOffset > 0 && afterNest.FallthroughPopAmount == 0 {
 			afterNest.FallthroughPopAmount = 1 + term.popOffset
 		}
 		return &EditorTransition[TObservation, TContext]{
@@ -924,13 +930,20 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 			stack:     term.stack[:len(term.stack)-1],
 		}
 		advTerminals = lsAdvanceTerminal(stripped, bs.rules)
+		// Do NOT propagate popOffset for push continuations.  The pushed state
+		// sits on top of COMPANION on the Sublime stack and must pop back to
+		// COMPANION (pop:1) when done.  Propagating popOffset=1 would cause
+		// pop:2 fallthroughs that skip past COMPANION to WRAPPER, leaving
+		// subsequent tokens in the wrong context and appearing source-only.
 	} else {
 		// GOptional (pop=1) or non-rep: advance including the full stack
 		// so the continuation knows what follows the optional element.
 		advTerminals = lsAdvanceTerminal(term, bs.rules)
+		// Propagate popOffset so SET continuations (which replace COMPANION on
+		// the stack) exit both themselves and the wrapper with the correct
+		// pop depth.
+		lsPropagatePopOffset(advTerminals, term.popOffset)
 	}
-	// Propagate the pop offset so continuation states use the same pop depth.
-	lsPropagatePopOffset(advTerminals, term.popOffset)
 
 	if isZeroOrMore {
 		// pop=0: keep the loop context (current state) on the Sublime stack.
