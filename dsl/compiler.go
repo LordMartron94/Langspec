@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syntaxa"
+	"syntaxa/lowering"
 	"syntaxa/rule"
 )
 
@@ -107,12 +108,14 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	grammarPkg := new(syntaxa.GrammarPackage[rune, string, string, string, string])
 	*grammarPkg = grammarPackage
 
+	getAnalysis := func() *syntaxa.GrammarAnalysis[string] { return lowering.GetAnalysis(grammarPkg) }
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,
 		ruleRegistry,
 		rootNodeKind,
 		"ERROR_NODE",
 		false, // TODO allow configuration of this flag inside LSpec
+		getAnalysis,
 	)
 	parserSpec.WithSkipRoles(skipRoles...)
 

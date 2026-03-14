@@ -118,6 +118,9 @@ type ParserSpec[
 	defaultSkipRoles []TTokenRole
 
 	freezeAfterParse bool
+
+	// getAnalysis supplies nullable/first/follow for the parser; optional (e.g. lowering.GetAnalysis(grammarPackage)).
+	getAnalysis func() *syntaxa.GrammarAnalysis[TToken]
 }
 
 /*
@@ -126,6 +129,8 @@ type ParserSpec[
 The package must have been produced with an entry rule (ProducePackage(..., &programRule)).
 The registry maps grammar labels to parser rules for context-boundary productions; typically
 obtained from the same RuleBuilder used to build the grammar (RuleBuilderGetRegistry).
+getAnalysis is optional; pass syntaxa/lowering.GetAnalysis(grammarPackage) when the parser
+needs nullable/first/follow (e.g. for Predict or Pratt), or nil.
 */
 func ParserSpecCreate[
 	TObservation cmp.Ordered,
@@ -138,6 +143,7 @@ func ParserSpecCreate[
 	registry syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
+	getAnalysis func() *syntaxa.GrammarAnalysis[TToken],
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		grammarPackage:    grammarPackage,
@@ -148,6 +154,7 @@ func ParserSpecCreate[
 		nodePostProcessor: nil,
 		errorHook:         nil,
 		defaultSkipRoles:  make([]TTokenRole, 0),
+		getAnalysis:       getAnalysis,
 	}
 }
 
@@ -646,6 +653,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		config.spec.Parser.rootNodeKind,
 		config.spec.Parser.errorNodeKind,
 		config.spec.Parser.freezeAfterParse,
+		config.spec.Parser.getAnalysis,
 	)
 	parser.SetDefaultSkips(config.spec.Parser.defaultSkipRoles...)
 	parser.EnableTrace(true)

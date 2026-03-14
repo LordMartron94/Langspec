@@ -4,6 +4,7 @@ import (
 	"foundation/text"
 	"langspec"
 	"syntaxa"
+	"syntaxa/lowering"
 )
 
 const (
@@ -30,12 +31,14 @@ func buildLangSpecDSLParserSpec(
 		"0.0.0",
 		&programRule,
 	)
+	getAnalysis := func() *syntaxa.GrammarAnalysis[LangSpecLexerTokenType] { return lowering.GetAnalysis(grammarPkg) }
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,
 		registry,
 		NodeProgram,
 		NodeError,
 		true, // freeze LST after parse
+		getAnalysis,
 	)
 	parserSpec.WithSkipRoles(
 		LANG_SPEC_WHITESPACE_ROLE,
