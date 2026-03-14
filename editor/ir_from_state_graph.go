@@ -2,6 +2,7 @@ package editor
 
 import (
 	"cmp"
+	"foundation/text"
 	"sort"
 
 	"autarch/pattern"
@@ -57,6 +58,8 @@ func EditorIRFromStateGraph[
 		return nil, nil
 	}
 
+	sanitizer := text.NewIdentifierSanitizer()
+
 	tokenToRule := make(map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole])
 	tokenToPriority := make(map[TToken]int)
 	for _, rule := range lexingRuleset.GetRules() {
@@ -66,8 +69,12 @@ func EditorIRFromStateGraph[
 
 	stateByID := make(map[string]*EditorState[TObservation, TContext])
 	for _, c := range sg.Contexts {
-		s := &EditorState[TObservation, TContext]{ID: c.ID, Label: c.Label}
+		sanitizedID := sanitizer.Sanitize(c.ID)
+		s := &EditorState[TObservation, TContext]{ID: sanitizedID, Label: c.Label}
+
+		// Map by ORIGINAL ID to maintain graph link resolution from targets
 		stateByID[c.ID] = s
+
 		if meta, ok := sg.ContextMeta[c.ID]; ok && meta.HasOptionalContinuation {
 			s.HasFallthroughPop = true
 			s.FallthroughPopAmount = meta.FallthroughPopAmount
@@ -121,6 +128,7 @@ func EditorIRFromStateGraph[
 				tokenToRule,
 				config,
 				delimitedStates,
+				sanitizer,
 			)
 			if edTr != nil {
 				s.Transitions = append(s.Transitions, *edTr)
@@ -134,9 +142,10 @@ func EditorIRFromStateGraph[
 		grammarTokens,
 		config,
 		delimitedStates,
+		sanitizer,
 	)
 
-	splitNestBodiesAndWireImmediatePush(stateByID, nestLabelByContextID, sg.RootContextID)
+	splitNestBodiesAndWireImmediatePush(stateByID, nestLabelByContextID, sg.RootContextID, sanitizer)
 
 	finalStateIDs := make([]string, 0, len(stateByID))
 	for id := range stateByID {
@@ -150,7 +159,7 @@ func EditorIRFromStateGraph[
 	for _, id := range finalStateIDs {
 		s := stateByID[id]
 		allStates = append(allStates, *s)
-		if s.ID == sg.RootContextID {
+		if id == sg.RootContextID {
 			rootOut = *s
 		}
 	}
@@ -182,6 +191,7 @@ func splitNestBodiesAndWireImmediatePush[TObservation cmp.Ordered, TContext any]
 	stateByID map[string]*EditorState[TObservation, TContext],
 	nestLabelByContextID map[string]syntaxa.GrammarLabel,
 	rootContextID string,
+	sanitizer *text.Sanitizer,
 ) {
 	originalIDs := make([]string, 0, len(stateByID))
 	for id := range stateByID {
@@ -197,15 +207,15 @@ func splitNestBodiesAndWireImmediatePush[TObservation cmp.Ordered, TContext any]
 			continue
 		}
 
-		contentID := id + "__content"
+		contentID := sanitizer.Sanitize(s.ID + "_content")
 		contentState := &EditorState[TObservation, TContext]{
 			ID:          contentID,
-			Label:       s.Label + " content",
+			Label:       sanitizer.Sanitize(s.Label + "_content"),
 			Context:     s.Context,
 			Transitions: s.Transitions,
 		}
 
-		stateByID[contentID] = contentState
+		stateByID[id+"__content"] = contentState
 
 		s.Transitions = nil
 		s.ImmediatePushTarget = contentState
@@ -225,6 +235,7 @@ func buildEditorTransitionFromGeneric[
 	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
+	sanitizer *text.Sanitizer,
 ) *EditorTransition[TObservation, TContext] {
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:    &tr.Token,
@@ -266,7 +277,7 @@ func buildEditorTransitionFromGeneric[
 	}
 
 	if hasOverride && override.DelimitedPayload != nil {
-		bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates)
+		bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
 		return &EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
 			MatchContext: matchCtx,
@@ -304,12 +315,14 @@ func getOrCreateDelimitedState[
 ](
 	dp *DelimitedPayload[TObservation, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
+	sanitizer *text.Sanitizer,
 ) *EditorState[TObservation, TContext] {
-	if s, ok := delimitedStates[dp.StateLabel]; ok {
+	sanitizedID := sanitizer.Sanitize(dp.StateLabel)
+	if s, ok := delimitedStates[sanitizedID]; ok {
 		return s
 	}
 	s := &EditorState[TObservation, TContext]{
-		ID:      dp.StateLabel,
+		ID:      sanitizedID,
 		Label:   dp.StateLabel,
 		Context: dp.BodyContext,
 		Transitions: []EditorTransition[TObservation, TContext]{
@@ -321,7 +334,7 @@ func getOrCreateDelimitedState[
 			},
 		},
 	}
-	delimitedStates[dp.StateLabel] = s
+	delimitedStates[sanitizedID] = s
 	return s
 }
 
@@ -382,6 +395,7 @@ func buildAmbientFromStateGraph[
 	grammarTokens map[TToken]bool,
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
+	sanitizer *text.Sanitizer,
 ) []EditorTransition[TObservation, TContext] {
 	type ruleEntry struct {
 		rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
@@ -426,7 +440,7 @@ func buildAmbientFromStateGraph[
 			continue
 		}
 		if hasOverride && override.DelimitedPayload != nil {
-			bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates)
+			bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
 			out = append(out, EditorTransition[TObservation, TContext]{
 				OnPattern:    pat,
 				MatchContext: matchCtx,
