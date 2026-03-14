@@ -288,11 +288,13 @@ func fallthroughPopEntry(popAmount int) contextEntry {
 	}
 }
 
-// buildImmediatePushEntry creates a zero-width "match: (?=[\s\S]*)" → push entry
-// used by wrapper states (from the meta-scope wrapper pattern). The lookahead
-// pattern matches at every position (including before any character and at EOF),
-// so the companion content state is activated instantly when the wrapper becomes
-// the top context, without consuming any input.
+// buildImmediatePushEntry creates a zero-width lookahead → push entry used by
+// wrapper states (from the meta-scope wrapper pattern). The lookahead pattern
+// `(?=[\s\S]*)` matches at every position including EOF: `[\s\S]` matches any
+// character (including newlines, unlike `.` which excludes them), and `*` allows
+// zero repetitions, making the whole assertion vacuously true even at end-of-file.
+// This causes the companion content state to be pushed instantly when the wrapper
+// becomes the top context, without consuming any input.
 func buildImmediatePushEntry(targetLabel string) contextEntry {
 	pattern := `(?=[\s\S]*)`
 	return contextEntry{
