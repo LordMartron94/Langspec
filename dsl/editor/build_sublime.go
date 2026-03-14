@@ -23,11 +23,12 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	config := langspeceditor.EditorIRConfigurationCreate(
+		runeFactory,
 		dsl.LangSpecLexerTokenType.String,
 		buildContextProducer(scopeMap),
 		buildEditorOverrideProducer(),
 		func(left, right SublimeContext) bool {
-			return left.Scope == right.Scope && left.MetaScope == right.MetaScope
+			return left == right
 		},
 	)
 

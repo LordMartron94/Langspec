@@ -119,9 +119,7 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	for _, state := range machine.EditorStates {
 		label := determineContextLabel(state.Label)
 		entries := buildTransitions(state.Transitions, config)
-		entries = processImmediatePushTarget(state, entries)
 		entries = processMetaScope(state, entries, config)
-		entries = processFallthroughPop(state, entries)
 		contextsMap[label] = entries
 	}
 
@@ -132,16 +130,6 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	return contextsMap
 }
 
-func processImmediatePushTarget[TObservation cmp.Ordered, TContext any](
-	state editor.EditorState[TObservation, TContext],
-	entries []contextEntry,
-) []contextEntry {
-	if state.ImmediatePushTarget != nil {
-		return append(entries, buildImmediatePushEntry(state.ImmediatePushTarget.Label))
-	}
-	return entries
-}
-
 func processMetaScope[TObservation cmp.Ordered, TContext any](
 	state editor.EditorState[TObservation, TContext],
 	entries []contextEntry,
@@ -150,20 +138,6 @@ func processMetaScope[TObservation cmp.Ordered, TContext any](
 	if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 		metaEntry := contextEntry{MetaScope: &metaScope}
 		return append([]contextEntry{metaEntry}, entries...)
-	}
-	return entries
-}
-
-func processFallthroughPop[TObservation cmp.Ordered, TContext any](
-	state editor.EditorState[TObservation, TContext],
-	entries []contextEntry,
-) []contextEntry {
-	if state.HasFallthroughPop {
-		popAmount := 1
-		if state.FallthroughPopAmount > 0 {
-			popAmount = state.FallthroughPopAmount
-		}
-		return append(entries, fallthroughPopEntry(popAmount))
 	}
 	return entries
 }
@@ -253,22 +227,6 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	entry.EmbedScope = config.ExtractMetaScope(payload.MachineContext)
 	entry.Escape = &escapeStr
 	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, config.ExtractScope)
-}
-
-func fallthroughPopEntry(popAmount int) contextEntry {
-	regex := `(?=\S)`
-	return contextEntry{
-		Match: &regex,
-		Pop:   popAmount,
-	}
-}
-
-func buildImmediatePushEntry(targetLabel string) contextEntry {
-	pattern := `(?=[\s\S]*)`
-	return contextEntry{
-		Match: &pattern,
-		Push:  []string{determineContextLabel(targetLabel)},
-	}
 }
 
 func determineContextLabels[TObservation cmp.Ordered, TContext any](targets []*editor.EditorState[TObservation, TContext]) []string {
