@@ -3,6 +3,7 @@ package editor
 import (
 	"autarch/pattern"
 	"cmp"
+	"foundation/hash"
 	"lexarch"
 	"syntaxa"
 	"syntaxa/lowering"
@@ -49,7 +50,9 @@ an EditorOverride to replace pattern/context or use delimited/foreign payloads.
 contextsEqual is used to deduplicate states by context.
 */
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	tokenFormatter   func(token TToken) string
+	hasher *hash.XXH3Hasher
+
+	tokenHasher      func(token TToken) uint64
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
 	contextsEqual    func(left, right TContext) bool
@@ -61,13 +64,15 @@ EditorIRConfigurationCreate allocates and returns an EditorIRConfiguration with 
 All parameters must be non-nil when the configuration is used to build EditorIR.
 */
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
-	tokenFormatter func(token TToken) string,
+	hasher *hash.XXH3Hasher,
+	tokenHasher func(token TToken) uint64,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool),
 	contextsEqual func(left, right TContext) bool,
 ) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
-		tokenFormatter:   tokenFormatter,
+		hasher:           hasher,
+		tokenHasher:      tokenHasher,
 		contextProducer:  contextProducer,
 		overrideProducer: overrideProducer,
 		contextsEqual:    contextsEqual,
@@ -207,7 +212,7 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 ) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {
-	sg, err := lowering.BuildStateGraph(grammarPackage, config.tokenFormatter)
+	sg, err := lowering.BuildStateGraph(grammarPackage, config.tokenHasher, config.hasher)
 	if err != nil {
 		return nil, err
 	}
