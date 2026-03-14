@@ -14,21 +14,6 @@ import (
 
 const ROOT_LABEL = "root"
 
-// lsMaxKeyDepth is the maximum stack depth encoded in a context key.
-// Stack frames beyond this depth are omitted, which bounds context-key space
-// for recursive grammars (e.g. Pratt parsers) at the cost of merging
-// semantically-identical deep contexts — acceptable for syntax highlighting.
-//
-// The LangSpec Pratt expression has up to 6 BP levels plus GReference frames,
-// pushing the outer-continuation token (e.g. `;` or `)`) to stack depth ≥ 9.
-// With depth 8 those frames were truncated: states whose only difference is the
-// outer continuation (`;` vs `)`) were incorrectly merged, causing the semicolon
-// at the end of single-element pattern definitions to have no scope in the
-// generated Sublime syntax file (it fell through every context as source-only).
-// Raising the limit to 16 keeps all relevant frames within the key window while
-// remaining well within safe bounds for the LangSpec grammar.
-const lsMaxKeyDepth = 16
-
 // ------------------------------------------------------------- PUBLIC TYPES
 
 type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
@@ -412,8 +397,8 @@ func lsAdvanceTerminal[TToken, TNodeKind comparable](
 // ------------------------------------------------------------- CONTEXT KEY
 
 // lsLookaheadKey produces a stable canonical key for a lookahead set.
-// Stack frames beyond lsMaxKeyDepth are omitted so that recursive grammars
-// converge (context count is bounded) rather than diverging.
+// Recursive grammars are bounded via cycle detection inside lsTerminalKey
+// rather than an absolute depth cap.
 func lsLookaheadKey[TToken, TNodeKind comparable](
 	terms []lsTerminal[TToken, TNodeKind],
 	tokenFmt func(TToken) string,
@@ -426,6 +411,16 @@ func lsLookaheadKey[TToken, TNodeKind comparable](
 	return strings.Join(keys, "|")
 }
 
+// lsTerminalKey encodes a terminal (token + continuation) into a stable string
+// key used to memoize contexts.
+//
+// The stack is encoded in full for non-recursive grammars.  For recursive
+// grammars (where a GReference label appears more than once in the stack) the
+// encoding is truncated at the first repeated non-repetition frame label and
+// a ":..." sentinel is appended.  This bounds context-key space and ensures BFS
+// convergence while still producing distinct keys for any non-recursive path —
+// unlike the old fixed-depth cap that merged semantically different contexts
+// once the stack exceeded the hard limit.
 func lsTerminalKey[TToken, TNodeKind comparable](
 	t lsTerminal[TToken, TNodeKind],
 	tokenFmt func(TToken) string,
@@ -445,16 +440,26 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 	sb.WriteString(lsGrammarNodesKey(t.remaining, tokenFmt))
 	sb.WriteString(")")
 
-	depth := len(t.stack)
-	if depth > lsMaxKeyDepth {
-		depth = lsMaxKeyDepth
-	}
-	for _, e := range t.stack[:depth] {
+	// Encode the stack using cycle detection.  Repetition frames (GRepeat /
+	// GOptional) are always included.  For non-repetition (GReference variable)
+	// frames, the first time a label is seen it is encoded normally; the second
+	// time the same label appears we know the grammar is recursive and truncate
+	// there to prevent unbounded key growth.
+	seenLabels := make(map[syntaxa.GrammarLabel]bool)
+	truncated := false
+	for _, e := range t.stack {
 		if e.isRepetition {
 			sb.WriteString(":R[")
 			sb.WriteString(lsGrammarNodesKey(e.remaining, tokenFmt))
 			sb.WriteString("]")
 		} else {
+			if e.label != "" && seenLabels[e.label] {
+				truncated = true
+				break
+			}
+			if e.label != "" {
+				seenLabels[e.label] = true
+			}
 			sb.WriteString(":V(")
 			sb.WriteString(string(e.label))
 			sb.WriteString(",")
@@ -462,7 +467,7 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 			sb.WriteString(")")
 		}
 	}
-	if len(t.stack) > lsMaxKeyDepth {
+	if truncated {
 		sb.WriteString(":...")
 	}
 	// Include popOffset so that states inside a wrapped nest body companion
@@ -575,7 +580,9 @@ type lsPendingCtx[TObservation cmp.Ordered, TToken, TNodeKind comparable, TConte
 //     Emit POP when nothing follows.
 //  6. GNest push-boundary: open tokens carry nestNode; buildTransition creates a
 //     dedicated body context and emits PUSH, preventing recursive expansion.
-//  7. All contexts are memoised by their lookahead key (bounded by lsMaxKeyDepth).
+//  7. All contexts are memoised by their lookahead key; recursive grammars are
+//     bounded by cycle detection in lsTerminalKey (repeated GReference labels
+//     trigger truncation) rather than a fixed-depth cap.
 //  8. Terminals within a context are sorted by token lexer priority (descending)
 //     so higher-priority tokens (e.g. keywords) always appear before lower-priority
 //     tokens (e.g. identifiers) in the generated Sublime syntax file.
