@@ -31,7 +31,6 @@ type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 }
 
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	patternFactory   *pattern.RegulaASTFactory[TObservation]
 	tokenFormatter   func(token TToken) string
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
@@ -39,14 +38,12 @@ type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerS
 }
 
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
-	patternFactory *pattern.RegulaASTFactory[TObservation],
 	tokenFormatter func(token TToken) string,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool),
 	contextsEqual func(left, right TContext) bool,
 ) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
-		patternFactory:   patternFactory,
 		tokenFormatter:   tokenFormatter,
 		contextProducer:  contextProducer,
 		overrideProducer: overrideProducer,
@@ -55,10 +52,13 @@ func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, T
 }
 
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
-	ID          string
-	Label       string
-	Context     TContext
-	Transitions []EditorTransition[TObservation, TContext]
+	ID                   string
+	Label                string
+	Context              TContext
+	Transitions          []EditorTransition[TObservation, TContext]
+	HasFallthroughPop    bool
+	FallthroughPopAmount int
+	ImmediatePushTarget  *EditorState[TObservation, TContext]
 }
 
 type StackOperation uint8
@@ -311,10 +311,6 @@ func lsAdvanceTerminal[TToken, TNodeKind comparable](
 		remaining, isRep, repNode := extractFrameDetails(term, i)
 
 		if len(remaining) == 0 && !isRep {
-			result = appendSelfRecursiveLookahead(term, i, rules, result)
-			continue
-		}
-		if isRep && len(remaining) == 0 {
 			continue
 		}
 
@@ -341,30 +337,6 @@ func extractFrameDetails[TToken, TNodeKind comparable](
 	}
 	entry := term.stack[level-1]
 	return entry.remaining, entry.isRepetition, entry.repeatNode
-}
-
-func appendSelfRecursiveLookahead[TToken, TNodeKind comparable](
-	term lsTerminal[TToken, TNodeKind],
-	level int,
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	result []lsTerminal[TToken, TNodeKind],
-) []lsTerminal[TToken, TNodeKind] {
-	if level == 0 {
-		return result
-	}
-	frameLabel := term.stack[level-1].label
-	if frameLabel == "" || !lsIsSelfRecursive(frameLabel, rules) {
-		return result
-	}
-
-	selfRule := rules[frameLabel]
-	if selfRule == nil {
-		return result
-	}
-
-	visiting := make(lsVisiting)
-	selfLa, _ := lsLookaheadConcat([]*syntaxa.Grammar[TToken, TNodeKind]{selfRule}, rules, visiting)
-	return appendLookaheadWithStack(selfLa, term.stack[level:], result)
 }
 
 func computeLookaheadForFrame[TToken, TNodeKind comparable](
@@ -425,8 +397,15 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 	sb.WriteString(")")
 
 	seenLabels := make(map[syntaxa.GrammarLabel]bool)
+	seenReps := make(map[*syntaxa.Grammar[TToken, TNodeKind]]bool)
+
 	for _, e := range t.stack {
 		if e.isRepetition {
+			if seenReps[e.repeatNode] {
+				break
+			}
+			seenReps[e.repeatNode] = true
+
 			sb.WriteString(":R[")
 			sb.WriteString(lsGrammarNodesKey(e.remaining, tokenFmt))
 			sb.WriteString("]")
@@ -437,6 +416,7 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 			if e.label != "" {
 				seenLabels[e.label] = true
 			}
+
 			sb.WriteString(":V(")
 			sb.WriteString(string(e.label))
 			sb.WriteString(",")
@@ -501,13 +481,12 @@ type editorIRGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState
 }
 
 type lsBuildState[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	gen               *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
-	rules             map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind]
-	contextByKey      map[string]*EditorState[TObservation, TContext]
-	states            []*EditorState[TObservation, TContext]
-	fallthroughStates map[string]int
-	counters          map[string]int
-	queue             []lsPendingCtx[TObservation, TToken, TNodeKind, TContext]
+	gen          *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
+	rules        map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind]
+	contextByKey map[string]*EditorState[TObservation, TContext]
+	states       []*EditorState[TObservation, TContext]
+	counters     map[string]int
+	queue        []lsPendingCtx[TObservation, TToken, TNodeKind, TContext]
 }
 
 type lsPendingCtx[TObservation cmp.Ordered, TToken, TNodeKind comparable, TContext any] struct {
@@ -532,20 +511,6 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 
 	processQueue(bs)
 	ambientTransitions := lsBuildAmbientTransitions(gen, grammarPackage.Grammars, bs)
-
-	// Inject synthetic fallthrough transitions directly into the IR states.
-	// This ensures the backend doesn't have to guess or generate regex patterns.
-	for _, s := range bs.states {
-		if popAmt, ok := bs.fallthroughStates[s.ID]; ok {
-			s.Transitions = append(s.Transitions, EditorTransition[TObservation, TContext]{
-				OnPattern:   gen.config.patternFactory.NegatedClass(), // Matches any token natively
-				Operation:   STACK_POP,
-				PopAmount:   popAmt,
-				IsLookahead: true,
-			})
-		}
-	}
-
 	allStates, rootOut := collectStates(bs, gen)
 
 	return &EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
@@ -583,11 +548,10 @@ func buildState[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNode
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 ) *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
-		gen:               gen,
-		rules:             grammarPackage.Grammars,
-		contextByKey:      make(map[string]*EditorState[TObservation, TContext]),
-		fallthroughStates: make(map[string]int),
-		counters:          make(map[string]int),
+		gen:          gen,
+		rules:        grammarPackage.Grammars,
+		contextByKey: make(map[string]*EditorState[TObservation, TContext]),
+		counters:     make(map[string]int),
 	}
 }
 
@@ -694,11 +658,10 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
 
 	if lsAllOptionalTerminals(terminals) {
-		popAmt := 1
+		s.HasFallthroughPop = true
 		if len(terminals) > 0 && terminals[0].popOffset > 0 {
-			popAmt = 1 + terminals[0].popOffset
+			s.FallthroughPopAmount = 1 + terminals[0].popOffset
 		}
-		bs.fallthroughStates[s.ID] = popAmt
 	}
 
 	bs.contextByKey[key] = s
@@ -841,14 +804,9 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	}
 
 	afterNest := bs.getOrCreateContext(advTerminals, ownerLabel2, nestHint)
-
-	popAmt := 1
-	if nestOp == STACK_SET && term.popOffset > 0 {
-		popAmt = 1 + term.popOffset
-	}
-
-	if existing, ok := bs.fallthroughStates[afterNest.ID]; !ok || popAmt > existing {
-		bs.fallthroughStates[afterNest.ID] = popAmt
+	afterNest.HasFallthroughPop = true
+	if nestOp == STACK_SET && term.popOffset > 0 && afterNest.FallthroughPopAmount == 0 {
+		afterNest.FallthroughPopAmount = 1 + term.popOffset
 	}
 
 	return &EditorTransition[TObservation, TContext]{
@@ -998,18 +956,8 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	s.Context = nestCtx
 	contentName := s.ID + "_CONTENT"
 	cs := &EditorState[TObservation, TContext]{ID: contentName, Label: contentName}
+	s.ImmediatePushTarget = cs
 	bs.states = append(bs.states, cs)
-
-	// Inject the synthetic immediate push transition directly.
-	// We use an empty Literal, which produces an epsilon zero-width lookahead.
-	s.Transitions = []EditorTransition[TObservation, TContext]{
-		{
-			OnPattern:   bs.gen.config.patternFactory.Literal(),
-			Operation:   STACK_PUSH,
-			Targets:     []*EditorState[TObservation, TContext]{cs},
-			IsLookahead: true,
-		},
-	}
 
 	lsPropagatePopOffset(bodyTerminals, 1)
 

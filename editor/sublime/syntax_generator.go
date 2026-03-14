@@ -118,8 +118,32 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 
 	for _, state := range machine.EditorStates {
 		label := determineContextLabel(state.Label)
+
 		entries := buildTransitions(state.Transitions, config)
-		entries = processMetaScope(state, entries, config)
+
+		if state.ImmediatePushTarget != nil {
+			entries = append(entries, contextEntry{
+				Match: stringPtr(`(?=[\s\S]*)`),
+				Push:  []string{determineContextLabel(state.ImmediatePushTarget.Label)},
+			})
+		}
+
+		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
+			metaEntry := contextEntry{MetaScope: &metaScope}
+			entries = append([]contextEntry{metaEntry}, entries...)
+		}
+
+		if state.HasFallthroughPop {
+			popAmount := 1
+			if state.FallthroughPopAmount > 0 {
+				popAmount = state.FallthroughPopAmount
+			}
+			entries = append(entries, contextEntry{
+				Match: stringPtr(`(?=\S)`),
+				Pop:   popAmount,
+			})
+		}
+
 		contextsMap[label] = entries
 	}
 
@@ -128,6 +152,11 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	}
 
 	return contextsMap
+}
+
+// Helper to easily get a pointer to a string literal
+func stringPtr(s string) *string {
+	return &s
 }
 
 func processMetaScope[TObservation cmp.Ordered, TContext any](

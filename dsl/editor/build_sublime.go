@@ -23,7 +23,6 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	config := langspeceditor.EditorIRConfigurationCreate(
-		runeFactory,
 		dsl.LangSpecLexerTokenType.String,
 		buildContextProducer(scopeMap),
 		buildEditorOverrideProducer(),
