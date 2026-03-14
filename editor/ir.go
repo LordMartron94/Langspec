@@ -195,6 +195,53 @@ func (t *lsTerminal[TToken, TNodeKind]) getLastRemaining() *[]*syntaxa.Grammar[T
 
 type lsVisiting map[syntaxa.GrammarLabel]bool
 
+// lsIsSelfRecursive reports whether the grammar rule for label directly
+// contains a GReference back to label anywhere in its tree (i.e., it is
+// self-recursive without going through another named rule). This is used
+// by lsAdvanceTerminal to detect implicit-concat / Pratt rules that need
+// their own first-token lookahead injected when their continuation is
+// exhausted.
+func lsIsSelfRecursive[TToken, TNodeKind comparable](
+	label syntaxa.GrammarLabel,
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
+) bool {
+	if label == "" {
+		return false
+	}
+	root := rules[label]
+	if root == nil {
+		return false
+	}
+	return lsNodeContainsRef(root, label)
+}
+
+// lsNodeContainsRef reports whether the grammar subtree rooted at node
+// contains a direct GReference to target (without recursing into other
+// named rules). Only one level of named-rule indirection is skipped.
+func lsNodeContainsRef[TToken, TNodeKind comparable](
+	node *syntaxa.Grammar[TToken, TNodeKind],
+	target syntaxa.GrammarLabel,
+) bool {
+	if node == nil {
+		return false
+	}
+	switch node.Kind {
+	case syntaxa.GReference:
+		return node.ReferenceTarget == target
+	case syntaxa.GConcat, syntaxa.GChoice:
+		for _, child := range node.Children {
+			if lsNodeContainsRef(child, target) {
+				return true
+			}
+		}
+	case syntaxa.GRepeat, syntaxa.GOptional:
+		if len(node.Children) > 0 {
+			return lsNodeContainsRef(node.Children[0], target)
+		}
+	}
+	return false
+}
+
 // ------------------------------------------------------------- SBNF LOOKAHEAD
 
 // lsLookahead computes the set of first terminals reachable from node.
@@ -329,6 +376,13 @@ func lsLookaheadConcat[TToken, TNodeKind comparable](
 // For repetition frames (outermost frame is a Repetition), the caller strips that
 // frame first (see buildTransition). This function only sees the stripped terminal.
 //
+// For non-repetition stack frames whose grammar is self-recursive (see
+// lsIsSelfRecursive), the function also injects the rule's own first-token
+// lookahead when the frame's remaining is exhausted (empty). This ensures that
+// a third or subsequent element in an implicit-concat Pratt chain is visible in
+// the continuation context; without it, only the first two elements would be
+// recognized.
+//
 // Returns nil if nothing follows (caller should emit STACK_POP).
 func lsAdvanceTerminal[TToken, TNodeKind comparable](
 	term lsTerminal[TToken, TNodeKind],
@@ -353,6 +407,42 @@ func lsAdvanceTerminal[TToken, TNodeKind comparable](
 		}
 
 		if len(remaining) == 0 && !isRep {
+			// For self-recursive non-repetition frames (e.g. a Pratt expression
+			// rule that references itself for implicit concatenation), inject the
+			// grammar's own first-token lookahead so that a third or subsequent
+			// element in the implicit concat chain is visible in the continuation.
+			// Without this injection, lsAdvanceTerminal skips the exhausted frame
+			// and the next outer frame only contributes postfix/alternation options,
+			// leaving item N+2 onward as "source-only" in the generated syntax.
+			//
+			// The cycle detection in lsTerminalKey (truncation without the ":..."
+			// sentinel) ensures that the injected terminals converge to the same
+			// context key as the already-processed depth, preventing BFS blow-up.
+			//
+			// We always fall through to `continue` after injecting the self-la so
+			// that outer frames (which provide exit tokens like | and }) are also
+			// included in the resulting context alongside the primary tokens.
+			if i > 0 {
+				frameLabel := term.stack[i-1].label
+				if frameLabel != "" && lsIsSelfRecursive(frameLabel, rules) {
+					selfRule := rules[frameLabel]
+					if selfRule != nil {
+						visiting2 := make(lsVisiting)
+						selfLa, _ := lsLookaheadConcat(
+							[]*syntaxa.Grammar[TToken, TNodeKind]{selfRule},
+							rules, visiting2,
+						)
+						outerStack2 := term.stack[i:]
+						for j := range selfLa {
+							newStack := make([]lsStackEntry[TToken, TNodeKind], len(selfLa[j].stack)+len(outerStack2))
+							copy(newStack, selfLa[j].stack)
+							copy(newStack[len(selfLa[j].stack):], outerStack2)
+							selfLa[j].stack = newStack
+						}
+						result = append(result, selfLa...)
+					}
+				}
+			}
 			continue
 		}
 		if isRep && len(remaining) == 0 {
@@ -445,8 +535,14 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 	// frames, the first time a label is seen it is encoded normally; the second
 	// time the same label appears we know the grammar is recursive and truncate
 	// there to prevent unbounded key growth.
+	//
+	// Crucially, no sentinel is appended when truncation fires.  The absence of
+	// a sentinel means that the truncated key is identical to the non-truncated
+	// key produced the first time this label was seen at depth N-1.  This
+	// identity is the convergence mechanism: the context for "item N" and "item
+	// N+1" in an implicit-concat chain map to the same BFS context key, so BFS
+	// terminates rather than generating unboundedly many distinct contexts.
 	seenLabels := make(map[syntaxa.GrammarLabel]bool)
-	truncated := false
 	for _, e := range t.stack {
 		if e.isRepetition {
 			sb.WriteString(":R[")
@@ -454,7 +550,6 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 			sb.WriteString("]")
 		} else {
 			if e.label != "" && seenLabels[e.label] {
-				truncated = true
 				break
 			}
 			if e.label != "" {
@@ -466,9 +561,6 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 			sb.WriteString(lsGrammarNodesKey(e.remaining, tokenFmt))
 			sb.WriteString(")")
 		}
-	}
-	if truncated {
-		sb.WriteString(":...")
 	}
 	// Include popOffset so that states inside a wrapped nest body companion
 	// (popOffset > 0) are never shared with states outside it (popOffset = 0).
