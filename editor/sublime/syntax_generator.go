@@ -136,6 +136,14 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 		label := determineContextLabel(state.Label)
 		entries := buildTransitions(state.Transitions, config)
 
+		// ImmediatePushTarget: wrapper states (from the meta-scope wrapper pattern)
+		// have no regular transitions but immediately push a companion content state.
+		// Emit a zero-width "match: ''" → push entry so the companion is activated
+		// instantly, while the wrapper stays on the stack to keep the meta_scope live.
+		if state.ImmediatePushTarget != nil {
+			entries = append(entries, buildImmediatePushEntry(state.ImmediatePushTarget.Label))
+		}
+
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 			metaEntry := contextEntry{MetaScope: &metaScope}
 			entries = append([]contextEntry{metaEntry}, entries...)
@@ -143,10 +151,16 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 
 		// HasFallthroughPop: afterNest continuation contexts must eventually pop even
 		// when their optional tail tokens (e.g. ';') are absent. A lookahead-POP rule
-		// "(?=\S) → pop: 1" fires on any non-whitespace character that no earlier rule
+		// "(?=\S) → pop: N" fires on any non-whitespace character that no earlier rule
 		// consumed, causing the context to exit cleanly rather than getting stuck.
+		// FallthroughPopAmount > 0 overrides the default pop depth of 1; this is used
+		// for companion content states in wrapped nest bodies that need pop: 2.
 		if state.HasFallthroughPop {
-			entries = append(entries, fallthroughPopEntry())
+			popAmount := 1
+			if state.FallthroughPopAmount > 0 {
+				popAmount = state.FallthroughPopAmount
+			}
+			entries = append(entries, fallthroughPopEntry(popAmount))
 		}
 
 		contextsMap[label] = entries
@@ -264,11 +278,26 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 // This is only attached to afterNest continuation contexts (HasFallthroughPop=true)
 // that would otherwise stay on the stack indefinitely when their optional tail tokens
 // (e.g. ';') are absent.
-func fallthroughPopEntry() contextEntry {
+// popAmount controls how many context levels are popped; typically 1, but may be
+// higher (e.g. 2) for companion content states in wrapped nest bodies.
+func fallthroughPopEntry(popAmount int) contextEntry {
 	regex := `(?=\S)`
 	return contextEntry{
 		Match: &regex,
-		Pop:   1,
+		Pop:   popAmount,
+	}
+}
+
+// buildImmediatePushEntry creates a zero-width "match: (?=[\s\S]*)" → push entry
+// used by wrapper states (from the meta-scope wrapper pattern). The lookahead
+// pattern matches at every position (including before any character and at EOF),
+// so the companion content state is activated instantly when the wrapper becomes
+// the top context, without consuming any input.
+func buildImmediatePushEntry(targetLabel string) contextEntry {
+	pattern := `(?=[\s\S]*)`
+	return contextEntry{
+		Match: &pattern,
+		Push:  []string{determineContextLabel(targetLabel)},
 	}
 }
 

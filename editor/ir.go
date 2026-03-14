@@ -83,10 +83,20 @@ type EditorState[TObservation cmp.Ordered, TContext any] struct {
 	Context     TContext
 	Transitions []EditorTransition[TObservation, TContext]
 	// HasFallthroughPop, when true, indicates that the Sublime context for this state
-	// should include a lookahead-POP fallthrough rule ("(?=\S)" → pop: 1) as its
+	// should include a lookahead-POP fallthrough rule ("(?=\S)" → pop: N) as its
 	// last match rule. This is needed for afterNest continuation contexts whose optional
 	// tail tokens (e.g. `;`) would otherwise leave the context permanently on the stack.
-	HasFallthroughPop bool
+	// When FallthroughPopAmount is zero, a pop depth of 1 is used.
+	HasFallthroughPop    bool
+	FallthroughPopAmount int
+
+	// ImmediatePushTarget, when non-nil, causes the syntax generator to emit a
+	// zero-width "match: ''" → push: [ImmediatePushTarget] entry as the very first
+	// transition (after any meta_scope). This is used by the nest-body wrapper
+	// pattern: the wrapper state carries only the meta_scope and immediately pushes
+	// the companion content state, which performs all actual token matching.
+	// The wrapper state itself has no regular Transitions.
+	ImmediatePushTarget *EditorState[TObservation, TContext]
 }
 
 type StackOperation uint8
@@ -172,12 +182,19 @@ type lsStackEntry[TToken, TNodeKind comparable] struct {
 // produced this terminal (e.g. NodeParseRuleName for TokIdentifier in
 // expectToken(NodeParseRuleName, TokIdentifier)). It is used by the context
 // producer to apply node-specific scopes in the generated syntax.
+//
+// popOffset accumulates an extra pop depth when this terminal lives inside the
+// companion content state of a meta-scope wrapper nest body. A value of 1 means
+// "pop one extra level" so that the close-token pop removes both the companion
+// content state AND the wrapper state from the Sublime stack. The offset
+// propagates through lsAdvanceTerminal so all states in the chain inherit it.
 type lsTerminal[TToken, TNodeKind comparable] struct {
 	token     TToken
 	remaining []*syntaxa.Grammar[TToken, TNodeKind]
 	stack     []lsStackEntry[TToken, TNodeKind]
 	nestNode  *syntaxa.Grammar[TToken, TNodeKind] // non-nil → open token of this GNest
 	nodeKind  *TNodeKind                          // non-nil → OutputNodeKind from the GToken node
+	popOffset int                                 // extra pop depth for wrapped nest body chains
 }
 
 // getLastRemaining returns a pointer to the remaining of the outermost frame.
@@ -445,6 +462,13 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 	}
 	if len(t.stack) > lsMaxKeyDepth {
 		sb.WriteString(":...")
+	}
+	// Include popOffset so that states inside a wrapped nest body companion
+	// (popOffset > 0) are never shared with states outside it (popOffset = 0).
+	// Without this, two contexts could end up using the same state but one
+	// needs pop:2 while the other needs pop:1.
+	if t.popOffset > 0 {
+		fmt.Fprintf(&sb, ":PO%d", t.popOffset)
 	}
 	return sb.String()
 }
@@ -720,6 +744,11 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	// fallthrough.)
 	if lsAllOptionalTerminals(terminals) {
 		s.HasFallthroughPop = true
+		// Propagate the pop depth from the terminals so that wrapped nest body
+		// chains pop both the companion content state and the wrapper state.
+		if len(terminals) > 0 && terminals[0].popOffset > 0 {
+			s.FallthroughPopAmount = 1 + terminals[0].popOffset
+		}
 	}
 
 	bs.contextByKey[key] = s
@@ -747,6 +776,12 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 //   - No rep frame (non-repetition) → pop=1:
 //     - pop=1 + no contexts  → STACK_POP(1)
 //     - pop=1 + contexts     → STACK_SET
+//
+// When term.popOffset > 0 (inside a wrapped nest body's companion content state),
+// all STACK_POP operations use PopAmount = 1 + term.popOffset so that they exit
+// both the companion content state and the wrapper state. The popOffset is
+// propagated to continuation terminals via lsAdvanceTerminal so the entire chain
+// within the companion state consistently uses the extra pop depth.
 //
 // GNest push-boundary:
 //   - isZeroOrMore=false (linear sequence) → STACK_SET [afterNest, body]:
@@ -834,6 +869,9 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		// advance see the remaining/stack normally).
 		noNest := lsTerminal[TToken, TNodeKind]{token: term.token, remaining: term.remaining, stack: term.stack}
 		advTerminals := lsAdvanceTerminal(noNest, bs.rules)
+		// Propagate the pop offset into the afterNest continuation so that all
+		// states derived from it also use the correct pop depth.
+		lsPropagatePopOffset(advTerminals, term.popOffset)
 
 		// Choose PUSH (loop body) or SET (linear sequence) for the nest open token.
 		// SET replaces the current continuation context so it cannot accumulate on the
@@ -856,6 +894,11 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		// (e.g. the ';' after '}') do not leave the context permanently on the stack.
 		afterNest := bs.getOrCreateContext(advTerminals, ownerLabel2, nestHint)
 		afterNest.HasFallthroughPop = true
+		// If the continuation is inside a wrapped nest body, ensure the fallthrough
+		// pop depth is also updated to exit both the companion state and the wrapper.
+		if term.popOffset > 0 && afterNest.FallthroughPopAmount == 0 {
+			afterNest.FallthroughPopAmount = 1 + term.popOffset
+		}
 		return &EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
 			MatchContext: matchCtx,
@@ -886,6 +929,8 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		// so the continuation knows what follows the optional element.
 		advTerminals = lsAdvanceTerminal(term, bs.rules)
 	}
+	// Propagate the pop offset so continuation states use the same pop depth.
+	lsPropagatePopOffset(advTerminals, term.popOffset)
 
 	if isZeroOrMore {
 		// pop=0: keep the loop context (current state) on the Sublime stack.
@@ -907,14 +952,14 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		}
 	}
 
-	// pop=1 (GOptional or non-rep): replace current context with continuation, or pop.
+	// pop=1+popOffset (GOptional or non-rep): replace current context with continuation, or pop.
 	if advTerminals == nil {
 		return &EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
 			MatchContext: matchCtx,
 			Captures:     captures,
 			Operation:    STACK_POP,
-			PopAmount:    1,
+			PopAmount:    1 + term.popOffset,
 		}
 	}
 	next := bs.getOrCreateContext(advTerminals, ownerLabel, nameHint)
@@ -932,9 +977,19 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 // reused at different call sites always maps to the same Sublime context
 // (allowing correct push/pop for balanced delimiters at any nesting depth).
 //
-// If config.nestContextProducer is set, the nest body state's Context field is
-// populated with its return value, which typically carries a MetaScope so that
-// Sublime Text applies a block-level scope to all tokens inside the delimited region.
+// If config.nestContextProducer is set and returns a non-zero context, the
+// function implements the "meta-scope wrapper" pattern to ensure the meta_scope
+// persists across all tokens inside the nest body:
+//
+//  1. A wrapper state (with the meta_scope context) is created and keyed by the
+//     nest label.  It carries no regular transitions; instead its ImmediatePushTarget
+//     is set to a companion content state.
+//  2. A companion content state (no meta_scope) holds all actual terminal
+//     transitions.  Its body terminals carry popOffset=1 so that every STACK_POP
+//     they generate uses pop:2, exiting both the companion and the wrapper.
+//
+// Without the wrapper, a nest body context that uses set: for its first transition
+// would immediately replace itself on the Sublime stack, losing the meta_scope.
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) getOrCreateNestBodyContext(
 	nestNode *syntaxa.Grammar[TToken, TNodeKind],
 ) *EditorState[TObservation, TContext] {
@@ -948,15 +1003,6 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		name = "nest_body"
 	}
 
-	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
-	// Apply nest-specific context (e.g. meta_scope) if the configuration provides one.
-	if bs.gen.config.nestContextProducer != nil {
-		s.Context = bs.gen.config.nestContextProducer(nestNode.GrammarLabel)
-	}
-	// Register BEFORE computing body so recursive nests find this state and reuse it.
-	bs.contextByKey[nestKey] = s
-	bs.states = append(bs.states, s)
-
 	// Compute body lookahead FRESH (no outer continuation), appending the close
 	// token so the natural end of the body chain emits a POP for the close token.
 	// This prevents recursive expression grammars from expanding infinitely while
@@ -964,6 +1010,53 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	closeTokenNode := &syntaxa.Grammar[TToken, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
 	bodyAndClose := []*syntaxa.Grammar[TToken, TNodeKind]{nestNode.Children[0], closeTokenNode}
 	bodyTerminals, _ := lsLookaheadConcat[TToken, TNodeKind](bodyAndClose, bs.rules, make(lsVisiting))
+
+	// Determine whether the nest body produces a non-empty meta-scope context.
+	// If yes, we use the wrapper pattern so the meta_scope persists across set:
+	// transitions inside the body.
+	var nestCtx TContext
+	var useWrapper bool
+	if bs.gen.config.nestContextProducer != nil {
+		nestCtx = bs.gen.config.nestContextProducer(nestNode.GrammarLabel)
+		var zero TContext
+		useWrapper = !bs.gen.config.contextsEqual(nestCtx, zero)
+	}
+
+	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
+	// Register BEFORE computing body so recursive nests find this state and reuse it.
+	bs.contextByKey[nestKey] = s
+	bs.states = append(bs.states, s)
+
+	if useWrapper {
+		// Wrapper pattern: s carries only the meta_scope; a companion content state
+		// cs holds all actual transitions.  Body terminals get popOffset=1 so that
+		// every STACK_POP they (or their descendants) generate pops both cs and s.
+		s.Context = nestCtx
+
+		contentName := name + "_CONTENT"
+		cs := &EditorState[TObservation, TContext]{ID: contentName, Label: contentName}
+		s.ImmediatePushTarget = cs
+		bs.states = append(bs.states, cs)
+
+		lsPropagatePopOffset(bodyTerminals, 1)
+
+		if len(bodyTerminals) > 0 {
+			bs.queue = append(bs.queue, lsPendingCtx[TObservation, TToken, TNodeKind, TContext]{
+				state:     cs,
+				ctxKey:    "NEST_BODY_CONTENT:" + string(nestNode.GrammarLabel),
+				terminals: bodyTerminals,
+				nameHint:  nestNode.GrammarLabel,
+			})
+		}
+		return s
+	}
+
+	// No wrapper needed: nestContextProducer is nil or returned an empty (zero)
+	// context for this nest, so there is no meta_scope to keep alive. Process the
+	// body terminals directly in s without any wrapper indirection.
+	if bs.gen.config.nestContextProducer != nil {
+		s.Context = nestCtx
+	}
 
 	if len(bodyTerminals) > 0 {
 		bs.queue = append(bs.queue, lsPendingCtx[TObservation, TToken, TNodeKind, TContext]{
@@ -980,6 +1073,17 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 }
 
 // ------------------------------------------------------------- HELPERS
+
+// lsPropagatePopOffset sets the popOffset field on every terminal in the slice
+// to the given value.  This is used to propagate the extra pop depth from a
+// wrapped nest body's companion content state into all continuation terminals
+// so that every STACK_POP in the chain correctly exits both the companion state
+// and the meta-scope wrapper state.
+func lsPropagatePopOffset[TToken, TNodeKind comparable](terminals []lsTerminal[TToken, TNodeKind], offset int) {
+	for i := range terminals {
+		terminals[i].popOffset = offset
+	}
+}
 
 func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) buildTokenMap() {
 	for _, rule := range e.lexingRuleset.GetRules() {
