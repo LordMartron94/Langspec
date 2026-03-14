@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"foundation/text"
 	"lexarch"
-	"memarch"
 	"sort"
 	"strings"
 	"syntaxa"
@@ -18,6 +17,9 @@ type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeK
 	Token     *TToken
 	TokenRole *TTokenRole
 	NodeKind  *TNodeKind
+
+	IsNest    bool
+	NestLabel syntaxa.GrammarLabel
 }
 
 type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
@@ -29,12 +31,10 @@ type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 }
 
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
-	tokenFormatter      func(token TToken) string
-	contextProducer     func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
-	overrideProducer    func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
-	contextsEqual       func(left, right TContext) bool
-	nestContextProducer func(nestLabel syntaxa.GrammarLabel) TContext
-	editorPDAAllocFn    memarch.AllocationFn
+	tokenFormatter   func(token TToken) string
+	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
+	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
+	contextsEqual    func(left, right TContext) bool
 }
 
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
@@ -42,22 +42,13 @@ func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, T
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool),
 	contextsEqual func(left, right TContext) bool,
-	editorPDAAllocFn memarch.AllocationFn,
 ) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
 		tokenFormatter:   tokenFormatter,
 		contextProducer:  contextProducer,
 		overrideProducer: overrideProducer,
 		contextsEqual:    contextsEqual,
-		editorPDAAllocFn: editorPDAAllocFn,
 	}
-}
-
-func (c *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) WithNestContextProducer(
-	fn func(nestLabel syntaxa.GrammarLabel) TContext,
-) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
-	c.nestContextProducer = fn
-	return c
 }
 
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
@@ -917,35 +908,16 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		return s
 	}
 
-	name := bs.gen.sanitizer.Sanitize(string(nestNode.GrammarLabel))
-	if name == "" {
-		name = "nest_body"
+	s := bs.initNestState(nestNode.GrammarLabel, nestKey)
+	bodyTerminals := bs.computeNestBodyTerminals(nestNode)
+	nestCtx := bs.produceNestContext(nestNode)
+
+	var zero TContext
+	if !bs.gen.config.contextsEqual(nestCtx, zero) {
+		return bs.setupWrapperContext(s, s.ID, nestCtx, bodyTerminals, nestNode)
 	}
 
-	closeTokenNode := &syntaxa.Grammar[TToken, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
-	bodyAndClose := []*syntaxa.Grammar[TToken, TNodeKind]{nestNode.Children[0], closeTokenNode}
-	bodyTerminals, _ := lsLookaheadConcat[TToken, TNodeKind](bodyAndClose, bs.rules, make(lsVisiting))
-
-	var nestCtx TContext
-	var useWrapper bool
-	if bs.gen.config.nestContextProducer != nil {
-		nestCtx = bs.gen.config.nestContextProducer(nestNode.GrammarLabel)
-		var zero TContext
-		useWrapper = !bs.gen.config.contextsEqual(nestCtx, zero)
-	}
-
-	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
-	bs.contextByKey[nestKey] = s
-	bs.states = append(bs.states, s)
-
-	if useWrapper {
-		return bs.setupWrapperContext(s, name, nestCtx, bodyTerminals, nestNode)
-	}
-
-	if bs.gen.config.nestContextProducer != nil {
-		s.Context = nestCtx
-	}
-
+	s.Context = nestCtx
 	if len(bodyTerminals) > 0 {
 		bs.queue = append(bs.queue, lsPendingCtx[TObservation, TToken, TNodeKind, TContext]{
 			state:     s,
@@ -956,6 +928,43 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	}
 
 	return s
+}
+
+func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) initNestState(
+	label syntaxa.GrammarLabel,
+	nestKey string,
+) *EditorState[TObservation, TContext] {
+	name := bs.gen.sanitizer.Sanitize(string(label))
+	if name == "" {
+		name = "nest_body"
+	}
+
+	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
+	bs.contextByKey[nestKey] = s
+	bs.states = append(bs.states, s)
+
+	return s
+}
+
+func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) computeNestBodyTerminals(
+	nestNode *syntaxa.Grammar[TToken, TNodeKind],
+) []lsTerminal[TToken, TNodeKind] {
+	closeTokenNode := &syntaxa.Grammar[TToken, TNodeKind]{Kind: syntaxa.GToken, Token: *nestNode.CloseToken}
+	bodyAndClose := []*syntaxa.Grammar[TToken, TNodeKind]{nestNode.Children[0], closeTokenNode}
+	terminals, _ := lsLookaheadConcat[TToken, TNodeKind](bodyAndClose, bs.rules, make(lsVisiting))
+
+	return terminals
+}
+
+func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) produceNestContext(
+	nestNode *syntaxa.Grammar[TToken, TNodeKind],
+) TContext {
+	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+		IsNest:    true,
+		NestLabel: nestNode.GrammarLabel,
+	}
+
+	return bs.gen.config.contextProducer(edCtx)
 }
 
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) setupWrapperContext(

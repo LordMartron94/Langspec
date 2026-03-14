@@ -6,9 +6,7 @@ import (
 	"langspec/dsl"
 	langspeceditor "langspec/editor"
 	"langspec/editor/sublime"
-	"memarch"
 	"strings"
-	"syntaxa"
 )
 
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
@@ -21,7 +19,7 @@ type SublimeContext struct {
 	MetaScope string
 }
 
-func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string, pdaAllocationFn memarch.AllocationFn) error {
+func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	config := langspeceditor.EditorIRConfigurationCreate(
@@ -31,8 +29,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string,
 		func(left, right SublimeContext) bool {
 			return left.Scope == right.Scope && left.MetaScope == right.MetaScope
 		},
-		pdaAllocationFn,
-	).WithNestContextProducer(buildNestContextProducer())
+	)
 
 	editorIR, err := langspeceditor.EditorIRCreate(
 		dsl.LangSpecCompilerLexingRuleSet(compiler),
@@ -71,9 +68,17 @@ func applyScopeSuffix(scope, suffix string) string {
 	return scope + suffix
 }
 
-func buildNestContextProducer() func(syntaxa.GrammarLabel) SublimeContext {
-	return func(label syntaxa.GrammarLabel) SublimeContext {
-		return SublimeContext{MetaScope: nestLabelToMetaScope(string(label))}
+func buildContextProducer(
+	scopeMap map[dsl.LangSpecLexerTokenType]string,
+) func(*EditorCtx) SublimeContext {
+	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
+		if ctx.IsNest {
+			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
+		}
+
+		baseScope := resolveBaseScope(ctx, scopeMap)
+		baseScope = applyNodeOverrides(ctx, baseScope)
+		return SublimeContext{Scope: baseScope}
 	}
 }
 
@@ -87,16 +92,6 @@ func nestLabelToMetaScope(label string) string {
 	lower = strings.ReplaceAll(lower, " ", "-")
 	lower = strings.ReplaceAll(lower, "_", "-")
 	return "meta." + lower + ".body"
-}
-
-func buildContextProducer(
-	scopeMap map[dsl.LangSpecLexerTokenType]string,
-) func(*EditorCtx) SublimeContext {
-	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
-		baseScope := resolveBaseScope(ctx, scopeMap)
-		baseScope = applyNodeOverrides(ctx, baseScope)
-		return SublimeContext{Scope: baseScope}
-	}
 }
 
 func resolveBaseScope(
