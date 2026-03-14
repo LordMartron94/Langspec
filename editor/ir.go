@@ -47,6 +47,11 @@ type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerS
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
 	contextsEqual    func(left, right TContext) bool
+	// nestContextProducer, when non-nil, is called for each GNest body state and
+	// returns the TContext whose MetaScope (if any) is emitted as the Sublime
+	// meta_scope for that context. This is the primary hook for adding a
+	// semantically-named meta-scope to every delimited block (e.g. a PARSE block).
+	nestContextProducer func(nestLabel syntaxa.GrammarLabel) TContext
 
 	editorPDAAllocFn memarch.AllocationFn
 }
@@ -130,7 +135,16 @@ type EditorIR[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKi
 	LanguageMachine[TObservation, TContext]
 }
 
-// ------------------------------------------------------------- SBNF LOOKAHEAD TYPES
+// WithNestContextProducer sets a function that derives the TContext for each
+// GNest body state from its GrammarLabel. Use this to assign a meta_scope to
+// every delimited block in the generated Sublime syntax file.
+func (c *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) WithNestContextProducer(
+	fn func(nestLabel syntaxa.GrammarLabel) TContext,
+) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
+	c.nestContextProducer = fn
+	return c
+}
+
 
 // lsStackEntry mirrors SBNF's StackEntry: one frame in a terminal's continuation stack.
 // Stack grows outermost-last: index 0 = innermost, last = outermost.
@@ -509,15 +523,22 @@ type lsPendingCtx[TObservation cmp.Ordered, TToken, TNodeKind comparable, TConte
 //
 //  1. Compute the first-token lookahead set (with continuation stacks) for the entry rule.
 //  2. For each terminal in a context, compute advance_terminal to find the next state.
-//  3. Repetition frames (outermost stack frame is GRepeat/GOptional):
-//     - Strip the rep frame; advance covers only the current iteration.
-//     - Emit PUSH (pop=0): the loop context stays on the Sublime stack so later
-//     iterations can occur naturally.
-//  4. Non-repetition continuations: emit SET (pop=1 + push continuation).
+//  3. GRepeat (ZeroOrMore/Repeat) frames use pop=0: the loop context stays on the Sublime
+//     stack so later iterations can occur naturally.
+//     - Emit STACK_NONE when nothing follows the loop body token.
+//     - Emit STACK_PUSH when a continuation context is needed.
+//  4. GOptional frames use pop=1: optional elements advance without keeping the current
+//     context, which prevents dangling continuation contexts.
+//     - Emit STACK_POP when nothing follows the optional.
+//     - Emit STACK_SET when a continuation context is needed.
+//  5. Non-repetition continuations: emit SET (pop=1 + push continuation).
 //     Emit POP when nothing follows.
-//  5. GNest push-boundary: open tokens carry nestNode; buildTransition creates a
+//  6. GNest push-boundary: open tokens carry nestNode; buildTransition creates a
 //     dedicated body context and emits PUSH, preventing recursive expansion.
-//  6. All contexts are memoised by their lookahead key (bounded by lsMaxKeyDepth).
+//  7. All contexts are memoised by their lookahead key (bounded by lsMaxKeyDepth).
+//  8. Terminals within a context are sorted by token lexer priority (descending)
+//     so higher-priority tokens (e.g. keywords) always appear before lower-priority
+//     tokens (e.g. identifiers) in the generated Sublime syntax file.
 func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
@@ -587,9 +608,21 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 }
 
 // processContext generates all transitions for one pending context.
+// Terminals are sorted by token lexer priority (descending) before building
+// transitions, ensuring higher-priority tokens (e.g. keyword literals with
+// priority 2) appear before lower-priority tokens (e.g. the identifier regex
+// with priority 1) in the generated Sublime syntax file.
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) processContext(
 	pending lsPendingCtx[TObservation, TToken, TNodeKind, TContext],
 ) {
+	// Sort terminals by priority descending so higher-priority tokens (keywords)
+	// appear before lower-priority tokens (identifiers) in the generated context.
+	// sort.SliceStable preserves the grammar-order tie-breaking between equal priorities.
+	sort.SliceStable(pending.terminals, func(i, j int) bool {
+		return bs.gen.tokenPriority(pending.terminals[i].token) >
+			bs.gen.tokenPriority(pending.terminals[j].token)
+	})
+
 	for _, term := range pending.terminals {
 		tr := bs.buildTransition(term, pending.nameHint)
 		if tr == nil {
@@ -605,6 +638,11 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 // nameHint provides a fallback grammar label when lsOwningRule would return "anon"
 // (i.e. the terminal set has no Variable-frame labels). It is propagated to the
 // queued pending context so child states inherit the same enclosing-rule prefix.
+//
+// A context is automatically marked HasFallthroughPop when ALL of its terminals
+// have a GOptional outermost rep frame. Such contexts consist entirely of optional
+// elements that may be absent from the input; without a fallthrough pop the context
+// would be left permanently on the Sublime stack when none of its rules fire.
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) getOrCreateContext(
 	terminals []lsTerminal[TToken, TNodeKind],
 	ownerLabel syntaxa.GrammarLabel,
@@ -634,6 +672,16 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	childHint := effectiveLabel
 
 	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
+
+	// A context whose entire terminal set consists of GOptional-typed outermost
+	// frames needs a fallthrough-pop so Sublime can escape the context when none
+	// of the optional elements are present in the input. (GRepeat outermost frames
+	// represent ZeroOrMore loops that must stay on the stack; they do not need the
+	// fallthrough.)
+	if lsAllOptionalTerminals(terminals) {
+		s.HasFallthroughPop = true
+	}
+
 	bs.contextByKey[key] = s
 	bs.states = append(bs.states, s)
 	bs.queue = append(bs.queue, lsPendingCtx[TObservation, TToken, TNodeKind, TContext]{
@@ -647,17 +695,24 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 
 // buildTransition constructs the EditorTransition for a single terminal.
 //
-// SBNF pop=0 / pop=1 mapping to EditorTransition:
-//   - pop=0 + no contexts  → STACK_NONE  (loop; current context stays on Sublime stack)
-//   - pop=0 + contexts     → STACK_PUSH  (loop context stays, push continuation on top)
-//   - pop=1 + no contexts  → STACK_POP(1)
-//   - pop=1 + contexts     → STACK_SET
+// GRepeat vs GOptional pop=0 / pop=1 mapping to EditorTransition:
+//   - GRepeat (ZeroOrMore/Repeat) outermost frame → pop=0:
+//     The loop context stays on the Sublime stack for subsequent iterations.
+//     - pop=0 + no contexts  → STACK_NONE  (loop; current context stays)
+//     - pop=0 + contexts     → STACK_PUSH  (push continuation, loop stays)
+//   - GOptional outermost frame → pop=1:
+//     Optional elements must not keep their pushed context alive indefinitely.
+//     - pop=1 + no contexts  → STACK_POP(1)
+//     - pop=1 + contexts     → STACK_SET
+//   - No rep frame (non-repetition) → pop=1:
+//     - pop=1 + no contexts  → STACK_POP(1)
+//     - pop=1 + contexts     → STACK_SET
 //
 // GNest push-boundary:
-//   - isRepetition=false (linear sequence) → STACK_SET [afterNest, body]:
+//   - isZeroOrMore=false (linear sequence) → STACK_SET [afterNest, body]:
 //     the current continuation context is replaced so it cannot linger on the stack
 //     after the nest closes.
-//   - isRepetition=true (inside a ZeroOrMore/Repeat body) → STACK_PUSH [afterNest, body]:
+//   - isZeroOrMore=true (inside a ZeroOrMore/Repeat body) → STACK_PUSH [afterNest, body]:
 //     the loop context must stay so the next iteration can fire.
 //
 // nameHint is a fallback label used when lsOwningRule returns "anon"; it is the
@@ -717,10 +772,14 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		}
 	}
 
-	// Determine whether this terminal is inside a repetition frame (GRepeat/GOptional).
-	// The outermost stack frame being a Repetition distinguishes loop-body tokens
-	// (pop=0, stay in loop context) from linear-sequence tokens (pop=1, advance).
-	isRepetition := len(term.stack) > 0 && term.stack[len(term.stack)-1].isRepetition
+	// Determine the outermost stack frame's repetition kind.
+	//
+	// - isZeroOrMore: outermost frame is GRepeat (ZeroOrMore/Repeat) → pop=0
+	//   The loop context stays on the Sublime stack for subsequent iterations.
+	// - isOptional:   outermost frame is GOptional → pop=1
+	//   Optional elements are treated as single-use; they must advance or pop.
+	// - neither:      no rep frame → pop=1 (non-repetition continuation).
+	isZeroOrMore, _ := lsOuterFrameKind(term)
 
 	// GNest push-boundary: open token → push an independent body context.
 	// The body is computed without the outer continuation stack so that recursive
@@ -740,7 +799,7 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		// SET replaces the current continuation context so it cannot accumulate on the
 		// Sublime stack (fixing the "orphan anon__N context after {}" bug).
 		nestOp := STACK_SET
-		if isRepetition {
+		if isZeroOrMore {
 			nestOp = STACK_PUSH
 		}
 
@@ -772,10 +831,10 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 
 	var advTerminals []lsTerminal[TToken, TNodeKind]
 
-	if isRepetition {
-		// Advance without the outermost Repetition frame (iteration continuation only).
-		// The loop context stays on the Sublime stack via PUSH (pop=0) so further
-		// iterations are visible.
+	if isZeroOrMore {
+		// GRepeat (pop=0): advance without the outermost Repetition frame
+		// (iteration continuation only).  The loop context stays on the Sublime
+		// stack via PUSH so further iterations are visible.
 		stripped := lsTerminal[TToken, TNodeKind]{
 			token:     term.token,
 			remaining: term.remaining,
@@ -783,10 +842,12 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		}
 		advTerminals = lsAdvanceTerminal(stripped, bs.rules)
 	} else {
+		// GOptional (pop=1) or non-rep: advance including the full stack
+		// so the continuation knows what follows the optional element.
 		advTerminals = lsAdvanceTerminal(term, bs.rules)
 	}
 
-	if isRepetition {
+	if isZeroOrMore {
 		// pop=0: keep the loop context (current state) on the Sublime stack.
 		if advTerminals == nil {
 			return &EditorTransition[TObservation, TContext]{
@@ -806,7 +867,7 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 		}
 	}
 
-	// pop=1: replace current context with continuation, or just pop.
+	// pop=1 (GOptional or non-rep): replace current context with continuation, or pop.
 	if advTerminals == nil {
 		return &EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
@@ -830,6 +891,10 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 // The context is keyed by the nest node's GrammarLabel so that the same nest
 // reused at different call sites always maps to the same Sublime context
 // (allowing correct push/pop for balanced delimiters at any nesting depth).
+//
+// If config.nestContextProducer is set, the nest body state's Context field is
+// populated with its return value, which typically carries a MetaScope so that
+// Sublime Text applies a block-level scope to all tokens inside the delimited region.
 func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) getOrCreateNestBodyContext(
 	nestNode *syntaxa.Grammar[TToken, TNodeKind],
 ) *EditorState[TObservation, TContext] {
@@ -844,6 +909,10 @@ func (bs *lsBuildState[TObservation, TToken, TTokenRole, TLexerState, TNodeKind,
 	}
 
 	s := &EditorState[TObservation, TContext]{ID: name, Label: name}
+	// Apply nest-specific context (e.g. meta_scope) if the configuration provides one.
+	if bs.gen.config.nestContextProducer != nil {
+		s.Context = bs.gen.config.nestContextProducer(nestNode.GrammarLabel)
+	}
 	// Register BEFORE computing body so recursive nests find this state and reuse it.
 	bs.contextByKey[nestKey] = s
 	bs.states = append(bs.states, s)
@@ -876,6 +945,64 @@ func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeK
 	for _, rule := range e.lexingRuleset.GetRules() {
 		e.tokenToRule[rule.Token] = rule
 	}
+}
+
+// tokenPriority returns the lexer rule priority for the given token.
+// Terminals with higher priority (e.g. keyword literals at priority 2) are
+// placed before lower-priority terminals (e.g. the identifier regex at priority 1)
+// in the generated Sublime context so that keywords are not shadowed.
+func (e *editorIRGenerator[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) tokenPriority(token TToken) int {
+	if rule, ok := e.tokenToRule[token]; ok {
+		return rule.Priority
+	}
+	return 0
+}
+
+// lsOuterFrameKind inspects the outermost stack frame of a terminal and reports
+// whether it represents a ZeroOrMore/Repeat loop (isZeroOrMore) or a single
+// optional occurrence (isOptional).  Both are false when the terminal carries no
+// repetition frame (non-repetition continuation).
+//
+// The distinction drives pop=0 vs pop=1 in buildTransition:
+//   - GRepeat  → pop=0: loop context must stay on the Sublime stack.
+//   - GOptional → pop=1: optional element must not keep a dangling context.
+//
+// Note: lsLookahead marks GOptional stack frames with isRepetition=true (consistent
+// with SBNF's internal model that treats optional and repeat uniformly as "rep frames"
+// for purposes of lsOwningRule and lsLookaheadKey). The Kind-based check here is the
+// correct place to distinguish optional from loop semantics.
+func lsOuterFrameKind[TToken, TNodeKind comparable](term lsTerminal[TToken, TNodeKind]) (isZeroOrMore, isOptional bool) {
+	if len(term.stack) == 0 {
+		return false, false
+	}
+	outer := term.stack[len(term.stack)-1]
+	if outer.repeatNode == nil {
+		return false, false
+	}
+	if outer.repeatNode.Kind == syntaxa.GRepeat {
+		return true, false
+	}
+	if outer.repeatNode.Kind == syntaxa.GOptional {
+		return false, true
+	}
+	return false, false
+}
+
+// lsAllOptionalTerminals reports whether every terminal in the set has a GOptional
+// outermost frame. Such a set means the context consists entirely of optional
+// elements; if none of them fire, Sublime would be stuck unless a fallthrough
+// pop is present.
+func lsAllOptionalTerminals[TToken, TNodeKind comparable](terminals []lsTerminal[TToken, TNodeKind]) bool {
+	if len(terminals) == 0 {
+		return false
+	}
+	for _, t := range terminals {
+		_, isOpt := lsOuterFrameKind(t)
+		if !isOpt {
+			return false
+		}
+	}
+	return true
 }
 
 // getOrCreateDelimitedState returns (creating if needed) the EditorState
