@@ -116,67 +116,81 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
 ) map[string][]contextEntry {
+	representatives, labelToRepresentative := minimizeStatesForEmission(machine, config)
+
 	contextsMap := make(map[string][]contextEntry)
+	baseEntriesByLabel := make(map[string][]contextEntry)
+	baseSignatureToLabels := make(map[string][]string)
 
-	stateBaseEntries := make(map[string][]contextEntry)
-	stateSignatures := make(map[string]string)
-	sigCounts := make(map[string]int)
+	repLabels := make([]string, 0, len(representatives))
+	for label := range representatives {
+		repLabels = append(repLabels, label)
+	}
+	sort.Strings(repLabels)
 
-	// PASS 1: Generate base entries (the raw regex matches) and build signatures
-	for _, state := range machine.EditorStates {
-		label := determineContextLabel(state.Label)
-		baseEntries := buildTransitions(state.Transitions, config)
-		stateBaseEntries[label] = baseEntries
+	for _, label := range repLabels {
+		state := representatives[label]
+		baseEntries := buildTransitionsRemapped(state.Transitions, config, labelToRepresentative)
+		baseEntriesByLabel[label] = baseEntries
 
-		// We only compress blocks with 2 or more transitions to avoid overhead
-		if len(baseEntries) > 1 {
-			sig := generateEntriesSignature(baseEntries)
-			stateSignatures[label] = sig
-			sigCounts[sig]++
-		}
+		sig := generateEntriesSignature(baseEntries)
+		baseSignatureToLabels[sig] = append(baseSignatureToLabels[sig], label)
 	}
 
-	// PASS 2: Deterministically assign shared context names to duplicates
-	sharedGroups := make(map[string]string) // signature -> shared_name
+	usedNames := make(map[string]bool, len(repLabels))
+	for _, label := range repLabels {
+		usedNames[label] = true
+	}
+	usedNames["prototype"] = true
+
+	sharedNameBySignature := make(map[string]string)
 	sharedPool := make(map[string][]contextEntry)
-	sharedCounter := 0
 
-	for _, state := range machine.EditorStates {
-		label := determineContextLabel(state.Label)
-		sig, hasSig := stateSignatures[label]
+	baseSigs := make([]string, 0, len(baseSignatureToLabels))
+	for sig := range baseSignatureToLabels {
+		baseSigs = append(baseSigs, sig)
+	}
+	sort.Strings(baseSigs)
 
-		if hasSig && sigCounts[sig] > 1 {
-			if _, alreadyCreated := sharedGroups[sig]; !alreadyCreated {
-				sharedName := fmt.Sprintf("shared_%d", sharedCounter)
-				sharedCounter++
-				sharedGroups[sig] = sharedName
-				sharedPool[sharedName] = stateBaseEntries[label]
+	for _, sig := range baseSigs {
+		labels := baseSignatureToLabels[sig]
+		sort.Strings(labels)
+
+		entries := baseEntriesByLabel[labels[0]]
+		if !shouldExtractSharedInclude(entries, len(labels)) {
+			continue
+		}
+
+		sharedName := makeUniqueContextName(buildSharedContextName(labels, entries), usedNames)
+		usedNames[sharedName] = true
+		sharedNameBySignature[sig] = sharedName
+		sharedPool[sharedName] = entries
+	}
+
+	for _, label := range repLabels {
+		state := representatives[label]
+		entries := baseEntriesByLabel[label]
+
+		baseSig := generateEntriesSignature(entries)
+		if sharedName, ok := sharedNameBySignature[baseSig]; ok {
+			entries = []contextEntry{
+				{Include: stringPtr(sharedName)},
 			}
 		}
-	}
 
-	// PASS 3: Apply the includes, then re-attach the structural wrappers (Push/Pop/MetaScope)
-	for _, state := range machine.EditorStates {
-		label := determineContextLabel(state.Label)
-		baseEntries := stateBaseEntries[label]
-
-		// Swap raw transitions for an include pointer if it belongs to a shared group
-		if sig, hasSig := stateSignatures[label]; hasSig && sigCounts[sig] > 1 {
-			sharedName := sharedGroups[sig]
-			baseEntries = []contextEntry{{Include: stringPtr(sharedName)}}
-		}
-
-		// Now apply the editor-specific wrapper mechanics around the base logic
 		if state.ImmediatePushTarget != nil {
-			baseEntries = append(baseEntries, contextEntry{
+			pushTarget := determineContextLabel(state.ImmediatePushTarget.Label)
+			if remapped, ok := labelToRepresentative[pushTarget]; ok {
+				pushTarget = remapped
+			}
+			entries = append(entries, contextEntry{
 				Match: stringPtr(`(?=[\s\S]*)`),
-				Push:  []string{determineContextLabel(state.ImmediatePushTarget.Label)},
+				Push:  []string{pushTarget},
 			})
 		}
 
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
-			metaEntry := contextEntry{MetaScope: &metaScope}
-			baseEntries = append([]contextEntry{metaEntry}, baseEntries...)
+			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}
 
 		if state.HasFallthroughPop {
@@ -184,25 +198,576 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 			if state.FallthroughPopAmount > 0 {
 				popAmount = state.FallthroughPopAmount
 			}
-			baseEntries = append(baseEntries, contextEntry{
+			entries = append(entries, contextEntry{
 				Match: stringPtr(`(?=\S)`),
 				Pop:   popAmount,
 			})
 		}
 
-		contextsMap[label] = baseEntries
+		contextsMap[label] = entries
 	}
 
-	// Merge the shared transition blocks into the final output
-	for sharedName, entries := range sharedPool {
-		contextsMap[sharedName] = entries
+	sharedNames := make([]string, 0, len(sharedPool))
+	for name := range sharedPool {
+		sharedNames = append(sharedNames, name)
+	}
+	sort.Strings(sharedNames)
+	for _, name := range sharedNames {
+		contextsMap[name] = sharedPool[name]
 	}
 
 	if len(machine.AmbientTransitions) > 0 {
-		contextsMap["prototype"] = buildTransitions(machine.AmbientTransitions, config)
+		contextsMap["prototype"] = buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
 	}
 
 	return contextsMap
+}
+
+func minimizeStatesForEmission[TObservation cmp.Ordered, TContext any](
+	machine editor.LanguageMachine[TObservation, TContext],
+	config ExtractionConfig[TContext],
+) (map[string]editor.EditorState[TObservation, TContext], map[string]string) {
+	stateByLabel := make(map[string]editor.EditorState[TObservation, TContext], len(machine.EditorStates))
+	labels := make([]string, 0, len(machine.EditorStates))
+
+	for _, state := range machine.EditorStates {
+		label := determineContextLabel(state.Label)
+		stateByLabel[label] = state
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+
+	partitions := make(map[string]int, len(labels))
+	initialSigToPartition := map[string]int{}
+	nextPartitionID := 0
+
+	for _, label := range labels {
+		sig := localStateEmissionSignature(stateByLabel[label], config)
+		id, ok := initialSigToPartition[sig]
+		if !ok {
+			id = nextPartitionID
+			initialSigToPartition[sig] = id
+			nextPartitionID++
+		}
+		partitions[label] = id
+	}
+
+	for {
+		nextPartitions := make(map[string]int, len(labels))
+		fullSigToPartition := map[string]int{}
+		nextPartitionID = 0
+		changed := false
+
+		for _, label := range labels {
+			sig := fullStateEmissionSignature(stateByLabel[label], partitions, config)
+			id, ok := fullSigToPartition[sig]
+			if !ok {
+				id = nextPartitionID
+				fullSigToPartition[sig] = id
+				nextPartitionID++
+			}
+			nextPartitions[label] = id
+			if nextPartitions[label] != partitions[label] {
+				changed = true
+			}
+		}
+
+		partitions = nextPartitions
+		if !changed {
+			break
+		}
+	}
+
+	rootLabel := determineContextLabel(machine.RootState.Label)
+	repByPartition := make(map[int]string)
+
+	for _, label := range labels {
+		pid := partitions[label]
+		currentRep, exists := repByPartition[pid]
+		if !exists || shouldPreferRepresentative(label, currentRep, rootLabel) {
+			repByPartition[pid] = label
+		}
+	}
+
+	labelToRepresentative := make(map[string]string, len(labels))
+	representatives := make(map[string]editor.EditorState[TObservation, TContext], len(repByPartition))
+
+	for _, label := range labels {
+		rep := repByPartition[partitions[label]]
+		labelToRepresentative[label] = rep
+	}
+
+	for _, rep := range repByPartition {
+		representatives[rep] = stateByLabel[rep]
+	}
+
+	return representatives, labelToRepresentative
+}
+
+func shouldPreferRepresentative(candidate, current, rootLabel string) bool {
+	if candidate == rootLabel {
+		return true
+	}
+	if current == rootLabel {
+		return false
+	}
+	if len(candidate) < len(current) {
+		return true
+	}
+	if len(candidate) > len(current) {
+		return false
+	}
+	return candidate < current
+}
+
+func localStateEmissionSignature[TObservation cmp.Ordered, TContext any](
+	state editor.EditorState[TObservation, TContext],
+	config ExtractionConfig[TContext],
+) string {
+	var sb strings.Builder
+
+	metaScope := config.ExtractMetaScope(state.Context)
+	sb.WriteString("meta=")
+	sb.WriteString(metaScope)
+	sb.WriteString("||")
+
+	if state.ImmediatePushTarget != nil {
+		sb.WriteString("imm=1||")
+	} else {
+		sb.WriteString("imm=0||")
+	}
+
+	fmt.Fprintf(&sb, "fall=%t:%d||", state.HasFallthroughPop, state.FallthroughPopAmount)
+
+	for _, tr := range state.Transitions {
+		sb.WriteString(localTransitionEmissionSignature(tr, config))
+		sb.WriteString("###")
+	}
+
+	return sb.String()
+}
+
+func fullStateEmissionSignature[TObservation cmp.Ordered, TContext any](
+	state editor.EditorState[TObservation, TContext],
+	partitions map[string]int,
+	config ExtractionConfig[TContext],
+) string {
+	var sb strings.Builder
+
+	metaScope := config.ExtractMetaScope(state.Context)
+	sb.WriteString("meta=")
+	sb.WriteString(metaScope)
+	sb.WriteString("||")
+
+	if state.ImmediatePushTarget != nil {
+		targetLabel := determineContextLabel(state.ImmediatePushTarget.Label)
+		fmt.Fprintf(&sb, "imm=%d||", partitions[targetLabel])
+	} else {
+		sb.WriteString("imm=-1||")
+	}
+
+	fmt.Fprintf(&sb, "fall=%t:%d||", state.HasFallthroughPop, state.FallthroughPopAmount)
+
+	for _, tr := range state.Transitions {
+		sb.WriteString(fullTransitionEmissionSignature(tr, partitions, config))
+		sb.WriteString("###")
+	}
+
+	return sb.String()
+}
+
+func localTransitionEmissionSignature[TObservation cmp.Ordered, TContext any](
+	tr editor.EditorTransition[TObservation, TContext],
+	config ExtractionConfig[TContext],
+) string {
+	var sb strings.Builder
+
+	regexStr, err := tr.OnPattern.ToRegEx()
+	if err != nil {
+		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+	}
+	if tr.IsLookahead {
+		regexStr = "(?=" + regexStr + ")"
+	}
+
+	sb.WriteString(regexStr)
+	sb.WriteString("||")
+	sb.WriteString(config.ExtractScope(tr.MatchContext))
+	sb.WriteString("||")
+	sb.WriteString(capturesEmissionSignature(tr.Captures, config.ExtractScope))
+	sb.WriteString("||")
+	fmt.Fprintf(&sb, "op=%v||pop=%d||", tr.Operation, tr.PopAmount)
+
+	if tr.ForeignPayload != nil {
+		sb.WriteString(foreignPayloadEmissionSignature(tr.ForeignPayload, config))
+	}
+	sb.WriteString("||")
+
+	return sb.String()
+}
+
+func fullTransitionEmissionSignature[TObservation cmp.Ordered, TContext any](
+	tr editor.EditorTransition[TObservation, TContext],
+	partitions map[string]int,
+	config ExtractionConfig[TContext],
+) string {
+	var sb strings.Builder
+	sb.WriteString(localTransitionEmissionSignature(tr, config))
+	sb.WriteString("targets=")
+
+	for _, target := range tr.Targets {
+		targetLabel := determineContextLabel(target.Label)
+		fmt.Fprintf(&sb, "%d,", partitions[targetLabel])
+	}
+
+	return sb.String()
+}
+
+func capturesEmissionSignature[TContext any](
+	captures map[int]TContext,
+	extractScope func(TContext) string,
+) string {
+	if len(captures) == 0 {
+		return ""
+	}
+
+	keys := make([]int, 0, len(captures))
+	for k := range captures {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+
+	var sb strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&sb, "%d:%s,", k, extractScope(captures[k]))
+	}
+	return sb.String()
+}
+
+func foreignPayloadEmissionSignature[TObservation cmp.Ordered, TContext any](
+	payload *editor.ForeignMachinePayload[TObservation, TContext],
+	config ExtractionConfig[TContext],
+) string {
+	if payload == nil {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("embed=")
+	sb.WriteString(payload.MachineID)
+	sb.WriteString("||embed_scope=")
+	sb.WriteString(config.ExtractMetaScope(payload.MachineContext))
+	sb.WriteString("||")
+
+	escape, err := payload.EscapePattern.ToRegEx()
+	if err != nil {
+		panic(fmt.Errorf("failed to compile escape pattern: %w", err))
+	}
+	sb.WriteString("escape=")
+	sb.WriteString(escape)
+	sb.WriteString("||")
+
+	if len(payload.EscapeCaptures) > 0 {
+		sb.WriteString(capturesEmissionSignature(payload.EscapeCaptures, config.ExtractScope))
+	}
+
+	return sb.String()
+}
+
+func buildTransitionsRemapped[TObservation cmp.Ordered, TContext any](
+	transitions []editor.EditorTransition[TObservation, TContext],
+	config ExtractionConfig[TContext],
+	labelToRepresentative map[string]string,
+) []contextEntry {
+	entries := make([]contextEntry, 0, len(transitions))
+	for _, t := range transitions {
+		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative))
+	}
+	return entries
+}
+
+func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
+	t editor.EditorTransition[TObservation, TContext],
+	config ExtractionConfig[TContext],
+	labelToRepresentative map[string]string,
+) contextEntry {
+	regexStr, err := t.OnPattern.ToRegEx()
+	if err != nil {
+		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+	}
+
+	if t.IsLookahead {
+		regexStr = fmt.Sprintf("(?=%s)", regexStr)
+	}
+
+	entry := contextEntry{
+		Match:    &regexStr,
+		Scope:    config.ExtractScope(t.MatchContext),
+		Captures: buildCapturesMap(t.Captures, config.ExtractScope),
+	}
+
+	applyStackOperationRemapped(&entry, t, config, labelToRepresentative)
+	return entry
+}
+
+func applyStackOperationRemapped[TObservation cmp.Ordered, TContext any](
+	entry *contextEntry,
+	t editor.EditorTransition[TObservation, TContext],
+	config ExtractionConfig[TContext],
+	labelToRepresentative map[string]string,
+) {
+	switch t.Operation {
+	case editor.STACK_PUSH:
+		entry.Push = determineContextLabelsRemapped(t.Targets, labelToRepresentative)
+	case editor.STACK_POP:
+		entry.Pop = t.PopAmount
+	case editor.STACK_SET:
+		entry.Set = determineContextLabelsRemapped(t.Targets, labelToRepresentative)
+	case editor.STACK_EMBED:
+		applyEmbedOperation(entry, t.ForeignPayload, config)
+	case editor.STACK_NONE:
+	}
+}
+
+func determineContextLabelsRemapped[TObservation cmp.Ordered, TContext any](
+	targets []*editor.EditorState[TObservation, TContext],
+	labelToRepresentative map[string]string,
+) []string {
+	out := make([]string, len(targets))
+	for i, target := range targets {
+		label := determineContextLabel(target.Label)
+		if rep, ok := labelToRepresentative[label]; ok {
+			label = rep
+		}
+		out[i] = label
+	}
+	return out
+}
+
+func shouldExtractSharedInclude(entries []contextEntry, useCount int) bool {
+	if len(entries) == 0 || useCount < 2 {
+		return false
+	}
+
+	// Single-entry contexts only start paying off when reused more than twice.
+	if len(entries) == 1 {
+		return useCount >= 3
+	}
+
+	return true
+}
+
+func buildSharedContextName(labels []string, entries []contextEntry) string {
+	labelStem := deriveSharedLabelStem(labels)
+	entryStem := deriveSharedEntryStem(entries)
+
+	switch {
+	case labelStem != "" && entryStem != "":
+		return "shared__" + labelStem + "__" + entryStem
+	case labelStem != "":
+		return "shared__" + labelStem
+	case entryStem != "":
+		return "shared__" + entryStem
+	default:
+		return "shared__context"
+	}
+}
+
+func deriveSharedLabelStem(labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+
+	tokenSets := make([][]string, 0, len(labels))
+	for _, label := range labels {
+		tokens := semanticLabelTokens(label)
+		if len(tokens) > 0 {
+			tokenSets = append(tokenSets, tokens)
+		}
+	}
+	if len(tokenSets) == 0 {
+		return ""
+	}
+
+	common := append([]string(nil), tokenSets[0]...)
+	for i := 1; i < len(tokenSets); i++ {
+		common = commonPrefix(common, tokenSets[i])
+		if len(common) == 0 {
+			break
+		}
+	}
+
+	if len(common) == 0 {
+		common = tokenSets[0]
+	}
+
+	if len(common) > 4 {
+		common = common[:4]
+	}
+
+	return strings.Join(common, "_")
+}
+
+func deriveSharedEntryStem(entries []contextEntry) string {
+	seen := map[string]bool{}
+	parts := make([]string, 0, 3)
+
+	for _, e := range entries {
+		stem := scopeStem(e.Scope)
+		if stem == "" && e.Match != nil {
+			stem = regexStem(*e.Match)
+		}
+		if stem == "" || seen[stem] {
+			continue
+		}
+		seen[stem] = true
+		parts = append(parts, stem)
+		if len(parts) == 3 {
+			break
+		}
+	}
+
+	return strings.Join(parts, "__")
+}
+
+func semanticLabelTokens(s string) []string {
+	s = strings.ToLower(s)
+
+	var normalized strings.Builder
+	normalized.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if isAlphaNum(ch) {
+			normalized.WriteByte(ch)
+		} else {
+			normalized.WriteByte('_')
+		}
+	}
+
+	raw := strings.Split(normalized.String(), "_")
+	out := make([]string, 0, len(raw))
+
+	for _, part := range raw {
+		if part == "" {
+			continue
+		}
+		if isNoiseToken(part) {
+			continue
+		}
+		if isNumericToken(part) {
+			continue
+		}
+		if isHexLikeToken(part) {
+			continue
+		}
+		out = append(out, part)
+	}
+
+	return out
+}
+
+func commonPrefix(a, b []string) []string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
+}
+
+func scopeStem(scope string) string {
+	if scope == "" {
+		return ""
+	}
+
+	scope = strings.ReplaceAll(scope, ".", "_")
+	tokens := semanticLabelTokens(scope)
+	if len(tokens) == 0 {
+		return ""
+	}
+	if len(tokens) > 4 {
+		tokens = tokens[:4]
+	}
+	return strings.Join(tokens, "_")
+}
+
+func regexStem(regex string) string {
+	var sb strings.Builder
+
+	for i := 0; i < len(regex); i++ {
+		ch := regex[i]
+		if isAlphaNum(ch) {
+			sb.WriteByte(ch)
+			if sb.Len() >= 24 {
+				break
+			}
+			continue
+		}
+		if sb.Len() > 0 {
+			break
+		}
+	}
+
+	return strings.ToLower(sb.String())
+}
+
+func makeUniqueContextName(base string, used map[string]bool) string {
+	if base == "" {
+		base = "shared__context"
+	}
+
+	name := base
+	suffix := 2
+	for used[name] {
+		name = fmt.Sprintf("%s_%d", base, suffix)
+		suffix++
+	}
+	return name
+}
+
+func isAlphaNum(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9')
+}
+
+func isNumericToken(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func isHexLikeToken(s string) bool {
+	if len(s) < 6 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		isHex := (ch >= '0' && ch <= '9') ||
+			(ch >= 'a' && ch <= 'f') ||
+			(ch >= 'A' && ch <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
+}
+
+func isNoiseToken(s string) bool {
+	switch s {
+	case "dummy", "state", "context", "ctx", "shared", "for":
+		return true
+	default:
+		return false
+	}
 }
 
 func generateEntriesSignature(entries []contextEntry) string {
@@ -247,52 +812,6 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-func processMetaScope[TObservation cmp.Ordered, TContext any](
-	state editor.EditorState[TObservation, TContext],
-	entries []contextEntry,
-	config ExtractionConfig[TContext],
-) []contextEntry {
-	if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
-		metaEntry := contextEntry{MetaScope: &metaScope}
-		return append([]contextEntry{metaEntry}, entries...)
-	}
-	return entries
-}
-
-func buildTransitions[TObservation cmp.Ordered, TContext any](
-	transitions []editor.EditorTransition[TObservation, TContext],
-	config ExtractionConfig[TContext],
-) []contextEntry {
-	var entries []contextEntry
-	for _, t := range transitions {
-		entries = append(entries, buildSingleTransition(t, config))
-	}
-	return entries
-}
-
-func buildSingleTransition[TObservation cmp.Ordered, TContext any](
-	t editor.EditorTransition[TObservation, TContext],
-	config ExtractionConfig[TContext],
-) contextEntry {
-	regexStr, err := t.OnPattern.ToRegEx()
-	if err != nil {
-		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
-	}
-
-	if t.IsLookahead {
-		regexStr = fmt.Sprintf("(?=%s)", regexStr)
-	}
-
-	entry := contextEntry{
-		Match:    &regexStr,
-		Scope:    config.ExtractScope(t.MatchContext),
-		Captures: buildCapturesMap(t.Captures, config.ExtractScope),
-	}
-
-	applyStackOperation(&entry, t, config)
-	return entry
-}
-
 func buildCapturesMap[TContext any](
 	captures map[int]TContext,
 	extractScope func(TContext) string,
@@ -306,24 +825,6 @@ func buildCapturesMap[TContext any](
 		mapped[index] = extractScope(ctx)
 	}
 	return mapped
-}
-
-func applyStackOperation[TObservation cmp.Ordered, TContext any](
-	entry *contextEntry,
-	t editor.EditorTransition[TObservation, TContext],
-	config ExtractionConfig[TContext],
-) {
-	switch t.Operation {
-	case editor.STACK_PUSH:
-		entry.Push = determineContextLabels(t.Targets)
-	case editor.STACK_POP:
-		entry.Pop = t.PopAmount
-	case editor.STACK_SET:
-		entry.Set = determineContextLabels(t.Targets)
-	case editor.STACK_EMBED:
-		applyEmbedOperation(entry, t.ForeignPayload, config)
-	case editor.STACK_NONE:
-	}
 }
 
 func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
@@ -344,14 +845,6 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	entry.EmbedScope = config.ExtractMetaScope(payload.MachineContext)
 	entry.Escape = &escapeStr
 	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, config.ExtractScope)
-}
-
-func determineContextLabels[TObservation cmp.Ordered, TContext any](targets []*editor.EditorState[TObservation, TContext]) []string {
-	out := make([]string, len(targets))
-	for i, target := range targets {
-		out[i] = determineContextLabel(target.Label)
-	}
-	return out
 }
 
 func determineContextLabel(label string) string {
