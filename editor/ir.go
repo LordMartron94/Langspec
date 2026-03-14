@@ -18,6 +18,13 @@ const ROOT_LABEL = "root"
 // Stack frames beyond this depth are omitted, which bounds context-key space
 // for recursive grammars (e.g. Pratt parsers) at the cost of merging
 // semantically-identical deep contexts — acceptable for syntax highlighting.
+//
+// A value of 8 was chosen empirically: the LangSpec grammar (101 rules, 4-level
+// Pratt precedence tower) generates 231 distinct contexts at depth 8 and
+// terminates in < 60 ms. Lowering this value merges more contexts (fewer states,
+// less precise scoping); raising it increases state count and may cause the
+// algorithm to diverge for highly-recursive grammars unless GNest boundaries
+// are sufficient to break the recursion.
 const lsMaxKeyDepth = 8
 
 // ------------------------------------------------------------- PUBLIC TYPES
