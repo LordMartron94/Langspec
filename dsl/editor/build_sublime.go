@@ -2,12 +2,16 @@ package editor
 
 import (
 	"autarch/pattern"
+	"foundation/bytes"
 	"foundation/domain"
+	"foundation/hash"
 	"langspec/dsl"
 	langspeceditor "langspec/editor"
 	"langspec/editor/sublime"
 	"strings"
 )
+
+var hasher = hash.XXH3HasherCreateWithSeed(6789)
 
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 
@@ -23,7 +27,10 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	config := langspeceditor.EditorIRConfigurationCreate(
-		dsl.LangSpecLexerTokenType.String,
+		hasher,
+		func(token dsl.LangSpecLexerTokenType) uint64 {
+			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token.String()}, 0x00))
+		},
 		buildContextProducer(scopeMap),
 		buildEditorOverrideProducer(),
 		func(left, right SublimeContext) bool {
