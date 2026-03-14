@@ -417,7 +417,10 @@ func lsTerminalKey[TToken, TNodeKind comparable](
 		sb.WriteString(":NEST(")
 		sb.WriteString(string(t.nestNode.GrammarLabel))
 		sb.WriteString(")")
-		return sb.String()
+		// Fall through to encode the continuation (remaining + stack) so that
+		// different call-sites for the same nest token (e.g. `(` used inside
+		// a Pratt BP-10 context vs. a BP-30 context) produce distinct keys and
+		// are not incorrectly merged into one shared context.
 	}
 	sb.WriteString(":(")
 	sb.WriteString(lsGrammarNodesKey(t.remaining, tokenFmt))
