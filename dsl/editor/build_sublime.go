@@ -21,8 +21,6 @@ type SublimeContext struct {
 	MetaScope string
 }
 
-// ------------------------------------------------------------- ORCHESTRATOR
-
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string, pdaAllocationFn memarch.AllocationFn) error {
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
@@ -33,7 +31,6 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string,
 		func(left, right SublimeContext) bool {
 			return left.Scope == right.Scope && left.MetaScope == right.MetaScope
 		},
-		// runeFactory,
 		pdaAllocationFn,
 	).WithNestContextProducer(buildNestContextProducer())
 
@@ -47,15 +44,13 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string,
 		return err
 	}
 
-	err = sublime.GenerateSyntaxFile(
+	return sublime.GenerateSyntaxFile(
 		editorIR,
 		[]string{".lspec"},
 		"source.lspec",
 		syntaxFile,
 		buildExtractionConfig(".lspec"),
 	)
-
-	return err
 }
 
 func buildExtractionConfig(suffix string) sublime.ExtractionConfig[SublimeContext] {
@@ -73,68 +68,34 @@ func applyScopeSuffix(scope, suffix string) string {
 	if scope == "" {
 		return ""
 	}
-
 	return scope + suffix
 }
 
-// buildNestContextProducer returns the function used to derive a SublimeContext
-// (specifically its MetaScope) for each GNest body state from the nest's
-// GrammarLabel. The label is sanitized and converted to a dotted, lower-case
-// "meta.<name>.body" scope string so that every delimited block in the generated
-// syntax file receives a meaningful block-level scope.
-//
-// Examples of generated meta-scopes:
-//
-//	"PARSE_SECTION_BLOCK_NEST" → "meta.parse-section-block.body"
-//	"PRAGMA_SECTION_BLOCK_NEST" → "meta.pragma-section-block.body"
-//	"PATTERN_GROUP" → "meta.pattern-group.body"
 func buildNestContextProducer() func(syntaxa.GrammarLabel) SublimeContext {
 	return func(label syntaxa.GrammarLabel) SublimeContext {
 		return SublimeContext{MetaScope: nestLabelToMetaScope(string(label))}
 	}
 }
 
-// nestLabelToMetaScope converts a GrammarLabel (space-separated upper-case words,
-// optionally with an underscore-delimited suffix like "LEX SECTION BLOCK_NEST") to
-// a Sublime Text meta-scope string like "meta.lex-section-block.body".
-//
-// The function lower-cases the input first and then strips the conventional " nest"
-// or "_nest" suffix.  These exact literal forms are what the DSL grammar builder
-// produces after lower-casing: space-delimited node names use " nest" (e.g. "HEADER
-// NEST" → "header nest") while block nodes that pass "BLOCK_NEST" as a suffix string
-// produce "_nest" (e.g. "LEX SECTION BLOCK_NEST" → "lex section block_nest").
 func nestLabelToMetaScope(label string) string {
 	if label == "" {
 		return ""
 	}
-	// Lower-case first so every case below works on a normalised form.
 	lower := strings.ToLower(label)
-	// Strip "_nest" (block nodes: "LEX SECTION BLOCK_NEST" → "_nest" after lower-casing).
 	lower = strings.TrimSuffix(lower, "_nest")
-	// Strip " nest" (plain nest nodes: "HEADER NEST" → " nest" after lower-casing).
 	lower = strings.TrimSuffix(lower, " nest")
-	// Replace any remaining spaces and underscores with dashes.
 	lower = strings.ReplaceAll(lower, " ", "-")
 	lower = strings.ReplaceAll(lower, "_", "-")
 	return "meta." + lower + ".body"
 }
 
-// ------------------------------------------------------------- CONTEXT PIPELINE
-
 func buildContextProducer(
 	scopeMap map[dsl.LangSpecLexerTokenType]string,
 ) func(*EditorCtx) SublimeContext {
-
 	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
-		// 1. Resolve base lexical scope
 		baseScope := resolveBaseScope(ctx, scopeMap)
-
-		// 2. Apply Node/AST Overrides (Dead code path until IR processes Parser Nodes)
 		baseScope = applyNodeOverrides(ctx, baseScope)
-
-		return SublimeContext{
-			Scope: baseScope,
-		}
+		return SublimeContext{Scope: baseScope}
 	}
 }
 
@@ -161,16 +122,12 @@ func applyNodeOverrides(
 		return currentScope
 	}
 
-	// Per-token scope overrides take the highest precedence.
-	// They allow a single node kind to style different token types differently
-	// (e.g. NodeMetaValue styling TokStringLiteral vs. TokKWTrue differently).
 	if len(binding.TokenScopes) > 0 {
 		if tokenScopes, hasTokenOverride := binding.TokenScopes[*ctx.Token]; hasTokenOverride && len(tokenScopes) > 0 {
 			return tokenScopes[0]
 		}
 	}
 
-	// General node scope: applies to all tokens that belong to this node kind.
 	if len(binding.Scopes) > 0 {
 		return binding.Scopes[0]
 	}
@@ -198,17 +155,13 @@ func buildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorO
 }
 
 func lineCommentOverride() *EditorOverride {
-	// Group 1: The slashes
 	slashes := pattern.LiteralString(runeFactory, "//").Capture()
-
-	// Group 2: The actual comment text (not terminator)
 	notTerminator := runeFactory.NegatedClass(
 		runeFactory.Range('\n', '\n'),
 		runeFactory.Range('\r', '\r'),
 	).Star().Capture()
 
 	newPattern := slashes.Then(notTerminator)
-
 	matchCtx := SublimeContext{Scope: "comment.line.double-slash"}
 
 	return &EditorOverride{
@@ -252,8 +205,6 @@ func regExOverride() *EditorOverride {
 		},
 	}
 }
-
-// ------------------------------------------------------------- NODE BINDING (PRESERVED)
 
 type NodeBinding struct {
 	Scopes      []string

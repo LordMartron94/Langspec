@@ -15,9 +15,6 @@ import (
 const headerLine = "# ======================================================\n"
 const timeFormat = "2006-01-02 15:04:05 MST"
 
-// ------------------------------------------------------------------ TYPES
-
-// ExtractionConfig centralizes all generic context unpacking logic.
 type ExtractionConfig[TContext any] struct {
 	ExtractScope     func(TContext) string
 	ExtractMetaScope func(TContext) string
@@ -48,8 +45,6 @@ type contextsSection struct {
 	Contexts map[string][]contextEntry `yaml:"contexts"`
 }
 
-// ------------------------------------------------------------------ PUBLIC API
-
 func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	ir *editor.EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	fileExtensions []string,
@@ -65,7 +60,6 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 		return err
 	}
 
-	// Pass the entire LanguageMachine instead of just the EditorStates
 	if err := writeContexts(sb, ir.LanguageMachine, config); err != nil {
 		return err
 	}
@@ -76,8 +70,6 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 
 	return nil
 }
-
-// ------------------------------------------------------------------ SECTIONS
 
 func writeHeader(sb *strings.Builder, name, version string) {
 	sb.WriteString("%YAML 1.2\n---\n\n")
@@ -98,14 +90,12 @@ func writeSectionHeader(sb *strings.Builder, headerContent string) {
 
 func writeMetadata(sb *strings.Builder, name string, exts []string, baseScope string) error {
 	writeSectionHeader(sb, "Language Metadata")
-
 	meta := languageMetadata{
 		Name:           name,
 		FileExtensions: exts,
 		Scope:          baseScope,
 		Version:        2,
 	}
-
 	return encodeAndWriteYAML(sb, meta)
 }
 
@@ -115,58 +105,26 @@ func writeContexts[TObservation cmp.Ordered, TContext any](
 	config ExtractionConfig[TContext],
 ) error {
 	writeSectionHeader(sb, "Contexts & Rules")
-
 	contextsMap := buildContextsMap(machine, config)
 	section := contextsSection{Contexts: contextsMap}
-
 	return encodeAndWriteYAML(sb, section)
 }
-
-// ------------------------------------------------------------------ BUILDERS
 
 func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
 ) map[string][]contextEntry {
-
 	contextsMap := make(map[string][]contextEntry)
 
-	// Map structural PDA states to Sublime Contexts
 	for _, state := range machine.EditorStates {
 		label := determineContextLabel(state.Label)
 		entries := buildTransitions(state.Transitions, config)
-
-		// ImmediatePushTarget: wrapper states (from the meta-scope wrapper pattern)
-		// have no regular transitions but immediately push a companion content state.
-		// Emit a zero-width "match: ''" → push entry so the companion is activated
-		// instantly, while the wrapper stays on the stack to keep the meta_scope live.
-		if state.ImmediatePushTarget != nil {
-			entries = append(entries, buildImmediatePushEntry(state.ImmediatePushTarget.Label))
-		}
-
-		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
-			metaEntry := contextEntry{MetaScope: &metaScope}
-			entries = append([]contextEntry{metaEntry}, entries...)
-		}
-
-		// HasFallthroughPop: afterNest continuation contexts must eventually pop even
-		// when their optional tail tokens (e.g. ';') are absent. A lookahead-POP rule
-		// "(?=\S) → pop: N" fires on any non-whitespace character that no earlier rule
-		// consumed, causing the context to exit cleanly rather than getting stuck.
-		// FallthroughPopAmount > 0 overrides the default pop depth of 1; this is used
-		// for companion content states in wrapped nest bodies that need pop: 2.
-		if state.HasFallthroughPop {
-			popAmount := 1
-			if state.FallthroughPopAmount > 0 {
-				popAmount = state.FallthroughPopAmount
-			}
-			entries = append(entries, fallthroughPopEntry(popAmount))
-		}
-
+		entries = processImmediatePushTarget(state, entries)
+		entries = processMetaScope(state, entries, config)
+		entries = processFallthroughPop(state, entries)
 		contextsMap[label] = entries
 	}
 
-	// Map ambient transitions into Sublime's native prototype context
 	if len(machine.AmbientTransitions) > 0 {
 		contextsMap["prototype"] = buildTransitions(machine.AmbientTransitions, config)
 	}
@@ -174,18 +132,50 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	return contextsMap
 }
 
+func processImmediatePushTarget[TObservation cmp.Ordered, TContext any](
+	state editor.EditorState[TObservation, TContext],
+	entries []contextEntry,
+) []contextEntry {
+	if state.ImmediatePushTarget != nil {
+		return append(entries, buildImmediatePushEntry(state.ImmediatePushTarget.Label))
+	}
+	return entries
+}
+
+func processMetaScope[TObservation cmp.Ordered, TContext any](
+	state editor.EditorState[TObservation, TContext],
+	entries []contextEntry,
+	config ExtractionConfig[TContext],
+) []contextEntry {
+	if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
+		metaEntry := contextEntry{MetaScope: &metaScope}
+		return append([]contextEntry{metaEntry}, entries...)
+	}
+	return entries
+}
+
+func processFallthroughPop[TObservation cmp.Ordered, TContext any](
+	state editor.EditorState[TObservation, TContext],
+	entries []contextEntry,
+) []contextEntry {
+	if state.HasFallthroughPop {
+		popAmount := 1
+		if state.FallthroughPopAmount > 0 {
+			popAmount = state.FallthroughPopAmount
+		}
+		return append(entries, fallthroughPopEntry(popAmount))
+	}
+	return entries
+}
+
 func buildTransitions[TObservation cmp.Ordered, TContext any](
 	transitions []editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
 ) []contextEntry {
-
 	var entries []contextEntry
-
 	for _, t := range transitions {
-		entry := buildSingleTransition(t, config)
-		entries = append(entries, entry)
+		entries = append(entries, buildSingleTransition(t, config))
 	}
-
 	return entries
 }
 
@@ -193,7 +183,6 @@ func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 	t editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
 ) contextEntry {
-
 	regexStr, err := t.OnPattern.ToRegEx()
 	if err != nil {
 		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
@@ -210,7 +199,6 @@ func buildSingleTransition[TObservation cmp.Ordered, TContext any](
 	}
 
 	applyStackOperation(&entry, t, config)
-
 	return entry
 }
 
@@ -226,11 +214,8 @@ func buildCapturesMap[TContext any](
 	for index, ctx := range captures {
 		mapped[index] = extractScope(ctx)
 	}
-
 	return mapped
 }
-
-// ------------------------------------------------------------------ UTILS
 
 func applyStackOperation[TObservation cmp.Ordered, TContext any](
 	entry *contextEntry,
@@ -247,7 +232,6 @@ func applyStackOperation[TObservation cmp.Ordered, TContext any](
 	case editor.STACK_EMBED:
 		applyEmbedOperation(entry, t.ForeignPayload, config)
 	case editor.STACK_NONE:
-		// Transition consumes the token and applies scope without altering the stack.
 	}
 }
 
@@ -271,15 +255,6 @@ func applyEmbedOperation[TObservation cmp.Ordered, TContext any](
 	entry.EscapeCaptures = buildCapturesMap(payload.EscapeCaptures, config.ExtractScope)
 }
 
-// fallthroughPopEntry returns the last-resort context entry that pops the current
-// Sublime context when no earlier match rule fires. It uses a zero-width lookahead
-// for any non-whitespace character ("(?=\S)") so that the context exits without
-// consuming the character, letting the parent context re-process it.
-// This is only attached to afterNest continuation contexts (HasFallthroughPop=true)
-// that would otherwise stay on the stack indefinitely when their optional tail tokens
-// (e.g. ';') are absent.
-// popAmount controls how many context levels are popped; typically 1, but may be
-// higher (e.g. 2) for companion content states in wrapped nest bodies.
 func fallthroughPopEntry(popAmount int) contextEntry {
 	regex := `(?=\S)`
 	return contextEntry{
@@ -288,13 +263,6 @@ func fallthroughPopEntry(popAmount int) contextEntry {
 	}
 }
 
-// buildImmediatePushEntry creates a zero-width lookahead → push entry used by
-// wrapper states (from the meta-scope wrapper pattern). The lookahead pattern
-// `(?=[\s\S]*)` matches at every position including EOF: `[\s\S]` matches any
-// character (including newlines, unlike `.` which excludes them), and `*` allows
-// zero repetitions, making the whole assertion vacuously true even at end-of-file.
-// This causes the companion content state to be pushed instantly when the wrapper
-// becomes the top context, without consuming any input.
 func buildImmediatePushEntry(targetLabel string) contextEntry {
 	pattern := `(?=[\s\S]*)`
 	return contextEntry{
@@ -305,11 +273,9 @@ func buildImmediatePushEntry(targetLabel string) contextEntry {
 
 func determineContextLabels[TObservation cmp.Ordered, TContext any](targets []*editor.EditorState[TObservation, TContext]) []string {
 	out := make([]string, len(targets))
-
 	for i, target := range targets {
 		out[i] = determineContextLabel(target.Label)
 	}
-
 	return out
 }
 
@@ -325,7 +291,6 @@ func encodeAndWriteYAML(sb *strings.Builder, data any) error {
 	if err != nil {
 		return fmt.Errorf("yaml marshal failed: %w", err)
 	}
-
 	sb.Write(value)
 	sb.WriteString("\n")
 	return nil
