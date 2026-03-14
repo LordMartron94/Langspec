@@ -32,7 +32,7 @@ func TestBuildSublimeSyntaxForDSL(t *testing.T) {
 	compiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(compiler)
 
-	if err := editor.BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile, scratchAllocationFn); err != nil {
+	if err := editor.BuildSublimeSyntaxForDSL(compiler, testSublimeSyntaxFile); err != nil {
 		t.Fatalf("Sublime Syntax generation failed with error: %s", err.Error())
 	}
 }
