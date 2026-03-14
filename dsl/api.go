@@ -10,6 +10,7 @@ import (
 	"lexarch"
 	"memarch"
 	"syntaxa"
+	"syntaxa/lowering"
 	"syntaxa/rule"
 )
 
@@ -270,13 +271,17 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	)
 
 	grammarPackage := compiler.parser.GetGrammarPackage()
-	grammarPackageDump := grammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState]{
-		FormatToken: LangSpecLexerTokenType.String,
-	})
+	getAnalysis := func() *syntaxa.GrammarAnalysis[LangSpecLexerTokenType] { return lowering.GetAnalysis(grammarPackage) }
+	grammarPackageDump := grammarPackage.DebugDump(
+		syntaxa.GrammarPackageDebugFormatter[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState]{
+			FormatToken: LangSpecLexerTokenType.String,
+		},
+		getAnalysis,
+	)
 
 	var cfgDump string
-	if grammarPackage.CoreCFG != nil {
-		cfgDump = grammarPackage.CoreCFG.DebugDump(
+	if cfg, _, _ := lowering.ToPatternGrammar(grammarPackage.Root, grammarPackage.AdditionalRules, grammarPackage.Grammars); cfg != nil {
+		cfgDump = cfg.DebugDump(
 			pattern.NewContextaCleanFormatter(LangSpecLexerTokenType.String),
 		)
 	}
