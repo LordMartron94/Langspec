@@ -7,6 +7,8 @@ import (
 	langspeceditor "langspec/editor"
 	"langspec/editor/sublime"
 	"memarch"
+	"strings"
+	"syntaxa"
 )
 
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
@@ -33,7 +35,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string,
 		},
 		// runeFactory,
 		pdaAllocationFn,
-	)
+	).WithNestContextProducer(buildNestContextProducer())
 
 	editorIR, err := langspeceditor.EditorIRCreate(
 		dsl.LangSpecCompilerLexingRuleSet(compiler),
@@ -75,6 +77,48 @@ func applyScopeSuffix(scope, suffix string) string {
 	return scope + suffix
 }
 
+// buildNestContextProducer returns the function used to derive a SublimeContext
+// (specifically its MetaScope) for each GNest body state from the nest's
+// GrammarLabel. The label is sanitized and converted to a dotted, lower-case
+// "meta.<name>.body" scope string so that every delimited block in the generated
+// syntax file receives a meaningful block-level scope.
+//
+// Examples of generated meta-scopes:
+//
+//	"PARSE_SECTION_BLOCK_NEST" → "meta.parse-section-block.body"
+//	"PRAGMA_SECTION_BLOCK_NEST" → "meta.pragma-section-block.body"
+//	"PATTERN_GROUP" → "meta.pattern-group.body"
+func buildNestContextProducer() func(syntaxa.GrammarLabel) SublimeContext {
+	return func(label syntaxa.GrammarLabel) SublimeContext {
+		return SublimeContext{MetaScope: nestLabelToMetaScope(string(label))}
+	}
+}
+
+// nestLabelToMetaScope converts a GrammarLabel (space-separated upper-case words,
+// optionally with an underscore-delimited suffix like "LEX SECTION BLOCK_NEST") to
+// a Sublime Text meta-scope string like "meta.lex-section-block.body".
+//
+// The function lower-cases the input first and then strips the conventional " nest"
+// or "_nest" suffix.  These exact literal forms are what the DSL grammar builder
+// produces after lower-casing: space-delimited node names use " nest" (e.g. "HEADER
+// NEST" → "header nest") while block nodes that pass "BLOCK_NEST" as a suffix string
+// produce "_nest" (e.g. "LEX SECTION BLOCK_NEST" → "lex section block_nest").
+func nestLabelToMetaScope(label string) string {
+	if label == "" {
+		return ""
+	}
+	// Lower-case first so every case below works on a normalised form.
+	lower := strings.ToLower(label)
+	// Strip "_nest" (block nodes: "LEX SECTION BLOCK_NEST" → "_nest" after lower-casing).
+	lower = strings.TrimSuffix(lower, "_nest")
+	// Strip " nest" (plain nest nodes: "HEADER NEST" → " nest" after lower-casing).
+	lower = strings.TrimSuffix(lower, " nest")
+	// Replace any remaining spaces and underscores with dashes.
+	lower = strings.ReplaceAll(lower, " ", "-")
+	lower = strings.ReplaceAll(lower, "_", "-")
+	return "meta." + lower + ".body"
+}
+
 // ------------------------------------------------------------- CONTEXT PIPELINE
 
 func buildContextProducer(
@@ -108,6 +152,29 @@ func applyNodeOverrides(
 	ctx *EditorCtx,
 	currentScope string,
 ) string {
+	if ctx.NodeKind == nil || ctx.Token == nil {
+		return currentScope
+	}
+
+	binding, ok := langSpecEditorManifest[*ctx.NodeKind]
+	if !ok {
+		return currentScope
+	}
+
+	// Per-token scope overrides take the highest precedence.
+	// They allow a single node kind to style different token types differently
+	// (e.g. NodeMetaValue styling TokStringLiteral vs. TokKWTrue differently).
+	if len(binding.TokenScopes) > 0 {
+		if tokenScopes, hasTokenOverride := binding.TokenScopes[*ctx.Token]; hasTokenOverride && len(tokenScopes) > 0 {
+			return tokenScopes[0]
+		}
+	}
+
+	// General node scope: applies to all tokens that belong to this node kind.
+	if len(binding.Scopes) > 0 {
+		return binding.Scopes[0]
+	}
+
 	return currentScope
 }
 
