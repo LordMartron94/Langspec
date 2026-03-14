@@ -154,13 +154,14 @@ func EditorIRFromStateGraph[
 	sort.Strings(finalStateIDs)
 
 	allStates := make([]EditorState[TObservation, TContext], 0, len(stateByID)+len(delimitedStates))
-	var rootOut EditorState[TObservation, TContext]
 
+	var rootOut EditorState[TObservation, TContext]
 	for _, id := range finalStateIDs {
 		s := stateByID[id]
 		allStates = append(allStates, *s)
-		if id == sg.RootContextID {
+		if s.ID == sg.RootContextID {
 			rootOut = *s
+			break
 		}
 	}
 

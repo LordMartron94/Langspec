@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"foundation/system"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ type contextEntry struct {
 	EmbedScope     string         `yaml:"embed_scope,omitempty"`
 	Escape         *string        `yaml:"escape,omitempty"`
 	EscapeCaptures map[int]string `yaml:"escape_captures,omitempty"`
+	Include        *string        `yaml:"include,omitempty"`
 }
 
 type contextsSection struct {
@@ -116,13 +118,57 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 ) map[string][]contextEntry {
 	contextsMap := make(map[string][]contextEntry)
 
+	stateBaseEntries := make(map[string][]contextEntry)
+	stateSignatures := make(map[string]string)
+	sigCounts := make(map[string]int)
+
+	// PASS 1: Generate base entries (the raw regex matches) and build signatures
 	for _, state := range machine.EditorStates {
 		label := determineContextLabel(state.Label)
+		baseEntries := buildTransitions(state.Transitions, config)
+		stateBaseEntries[label] = baseEntries
 
-		entries := buildTransitions(state.Transitions, config)
+		// We only compress blocks with 2 or more transitions to avoid overhead
+		if len(baseEntries) > 1 {
+			sig := generateEntriesSignature(baseEntries)
+			stateSignatures[label] = sig
+			sigCounts[sig]++
+		}
+	}
 
+	// PASS 2: Deterministically assign shared context names to duplicates
+	sharedGroups := make(map[string]string) // signature -> shared_name
+	sharedPool := make(map[string][]contextEntry)
+	sharedCounter := 0
+
+	for _, state := range machine.EditorStates {
+		label := determineContextLabel(state.Label)
+		sig, hasSig := stateSignatures[label]
+
+		if hasSig && sigCounts[sig] > 1 {
+			if _, alreadyCreated := sharedGroups[sig]; !alreadyCreated {
+				sharedName := fmt.Sprintf("shared_%d", sharedCounter)
+				sharedCounter++
+				sharedGroups[sig] = sharedName
+				sharedPool[sharedName] = stateBaseEntries[label]
+			}
+		}
+	}
+
+	// PASS 3: Apply the includes, then re-attach the structural wrappers (Push/Pop/MetaScope)
+	for _, state := range machine.EditorStates {
+		label := determineContextLabel(state.Label)
+		baseEntries := stateBaseEntries[label]
+
+		// Swap raw transitions for an include pointer if it belongs to a shared group
+		if sig, hasSig := stateSignatures[label]; hasSig && sigCounts[sig] > 1 {
+			sharedName := sharedGroups[sig]
+			baseEntries = []contextEntry{{Include: stringPtr(sharedName)}}
+		}
+
+		// Now apply the editor-specific wrapper mechanics around the base logic
 		if state.ImmediatePushTarget != nil {
-			entries = append(entries, contextEntry{
+			baseEntries = append(baseEntries, contextEntry{
 				Match: stringPtr(`(?=[\s\S]*)`),
 				Push:  []string{determineContextLabel(state.ImmediatePushTarget.Label)},
 			})
@@ -130,7 +176,7 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 			metaEntry := contextEntry{MetaScope: &metaScope}
-			entries = append([]contextEntry{metaEntry}, entries...)
+			baseEntries = append([]contextEntry{metaEntry}, baseEntries...)
 		}
 
 		if state.HasFallthroughPop {
@@ -138,13 +184,18 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 			if state.FallthroughPopAmount > 0 {
 				popAmount = state.FallthroughPopAmount
 			}
-			entries = append(entries, contextEntry{
+			baseEntries = append(baseEntries, contextEntry{
 				Match: stringPtr(`(?=\S)`),
 				Pop:   popAmount,
 			})
 		}
 
-		contextsMap[label] = entries
+		contextsMap[label] = baseEntries
+	}
+
+	// Merge the shared transition blocks into the final output
+	for sharedName, entries := range sharedPool {
+		contextsMap[sharedName] = entries
 	}
 
 	if len(machine.AmbientTransitions) > 0 {
@@ -152,6 +203,43 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	}
 
 	return contextsMap
+}
+
+func generateEntriesSignature(entries []contextEntry) string {
+	var sb strings.Builder
+	for _, e := range entries {
+		if e.Match != nil {
+			sb.WriteString(*e.Match)
+		}
+		sb.WriteString("||")
+		sb.WriteString(e.Scope)
+		sb.WriteString("||")
+
+		// Serialize Stack Ops
+		fmt.Fprintf(&sb, "P%v:O%v:S%v||", e.Push, e.Pop, e.Set)
+
+		// Serialize Captures Deterministically
+		if len(e.Captures) > 0 {
+			keys := make([]int, 0, len(e.Captures))
+			for k := range e.Captures {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				fmt.Fprintf(&sb, "%d:%s,", k, e.Captures[k])
+			}
+		}
+		sb.WriteString("||")
+
+		// Serialize Embeds
+		sb.WriteString(e.Embed)
+		sb.WriteString("||")
+		if e.Escape != nil {
+			sb.WriteString(*e.Escape)
+		}
+		sb.WriteString("###")
+	}
+	return sb.String()
 }
 
 // Helper to easily get a pointer to a string literal
