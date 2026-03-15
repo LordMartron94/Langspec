@@ -204,6 +204,15 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 			})
 		}
 
+		if state.HasFallbackInvalid {
+			if scope := config.ExtractScope(state.FallbackInvalidContext); scope != "" {
+				entries = append(entries, contextEntry{
+					Match: stringPtr(`\S`),
+					Scope: scope,
+				})
+			}
+		}
+
 		contextsMap[label] = entries
 	}
 
@@ -338,6 +347,7 @@ func localStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	}
 
 	fmt.Fprintf(&sb, "fall=%t:%d||", state.HasFallthroughPop, state.FallthroughPopAmount)
+	fmt.Fprintf(&sb, "invalid_fallback=%t:%s||", state.HasFallbackInvalid, config.ExtractScope(state.FallbackInvalidContext))
 
 	for _, tr := range state.Transitions {
 		sb.WriteString(localTransitionEmissionSignature(tr, config))
@@ -367,6 +377,7 @@ func fullStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	}
 
 	fmt.Fprintf(&sb, "fall=%t:%d||", state.HasFallthroughPop, state.FallthroughPopAmount)
+	fmt.Fprintf(&sb, "invalid_fallback=%t:%s||", state.HasFallbackInvalid, config.ExtractScope(state.FallbackInvalidContext))
 
 	for _, tr := range state.Transitions {
 		sb.WriteString(fullTransitionEmissionSignature(tr, partitions, config))
