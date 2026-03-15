@@ -21,9 +21,9 @@ func stackOpFromLowering(op lowering.StackOp) StackOperation {
 		return STACK_POP
 	case lowering.OpSet:
 		return STACK_SET
-	case lowering.OpRecoverPop:
+	case lowering.OpSyncToken:
 		return STACK_POP
-	case lowering.OpRecoverNoConsume:
+	case lowering.OpSyncTokenNoConsume:
 		return STACK_POP
 	default:
 		return STACK_NONE
@@ -212,6 +212,10 @@ func buildEditorTransitionFromGeneric[
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
 ) *EditorTransition[TObservation, TContext] {
+	if tr.IsRecoveryTransition {
+		return nil
+	}
+
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:    &tr.Token,
 		NodeKind: tr.NodeKind,
@@ -270,7 +274,7 @@ func buildEditorTransitionFromGeneric[
 	}
 
 	popAmount := tr.PopAmount
-	if popAmount <= 0 && (tr.Operation == lowering.OpPop || tr.Operation == lowering.OpRecoverPop || tr.Operation == lowering.OpRecoverNoConsume) {
+	if popAmount <= 0 && (tr.Operation == lowering.OpPop || tr.Operation == lowering.OpSyncToken || tr.Operation == lowering.OpSyncTokenNoConsume) {
 		popAmount = 1
 	}
 
@@ -281,7 +285,7 @@ func buildEditorTransitionFromGeneric[
 		Operation:    stackOpFromLowering(tr.Operation),
 		Targets:      targets,
 		PopAmount:    popAmount,
-		IsLookahead:  tr.Operation == lowering.OpRecoverNoConsume,
+		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
 	}
 }
 
