@@ -212,9 +212,6 @@ func buildEditorTransitionFromGeneric[
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
 ) *EditorTransition[TObservation, TContext] {
-	if tr.IsRecoveryTransition {
-		return nil
-	}
 
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:    &tr.Token,
@@ -232,6 +229,7 @@ func buildEditorTransitionFromGeneric[
 		pat = rule.Pattern
 		hasPattern = true
 	}
+
 	if !hasPattern {
 		return nil
 	}
@@ -266,27 +264,40 @@ func buildEditorTransitionFromGeneric[
 		}
 	}
 
-	targets := make([]*EditorState[TObservation, TContext], 0, len(tr.TargetContextIDs))
-	for _, id := range tr.TargetContextIDs {
-		if t := stateByID[id]; t != nil {
-			targets = append(targets, t)
-		}
-	}
-
-	popAmount := tr.PopAmount
-	if popAmount <= 0 && (tr.Operation == lowering.OpPop || tr.Operation == lowering.OpSyncToken || tr.Operation == lowering.OpSyncTokenNoConsume) {
-		popAmount = 1
-	}
-
 	return &EditorTransition[TObservation, TContext]{
 		OnPattern:    pat,
 		MatchContext: matchCtx,
 		Captures:     captures,
 		Operation:    stackOpFromLowering(tr.Operation),
-		Targets:      targets,
-		PopAmount:    popAmount,
+		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
+		PopAmount:    determinePopAmount(tr),
 		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
 	}
+}
+
+func resolveTargets[TObservation cmp.Ordered, TContext any](
+	ids []string,
+	stateByID map[string]*EditorState[TObservation, TContext],
+) []*EditorState[TObservation, TContext] {
+	targets := make([]*EditorState[TObservation, TContext], 0, len(ids))
+	for _, id := range ids {
+		if t := stateByID[id]; t != nil {
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+func determinePopAmount[TToken, TNodeKind comparable](tr lowering.Transition[TToken, TNodeKind]) int {
+	if tr.PopAmount > 0 {
+		return tr.PopAmount
+	}
+
+	if tr.Operation == lowering.OpPop || tr.Operation == lowering.OpSyncToken || tr.Operation == lowering.OpSyncTokenNoConsume {
+		return 1
+	}
+
+	return 0
 }
 
 func getOrCreateDelimitedState[
