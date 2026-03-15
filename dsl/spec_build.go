@@ -546,8 +546,6 @@ func (b *dslGrammarBuilder) patternExpr() Rule {
 			RightBP:  19,
 			NodeKind: NodePatternConcat,
 		},
-
-		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon},
 	}
 
 	return b.g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualPatternExpression), cfg)
@@ -906,8 +904,6 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 			RightBP:  19,
 			NodeKind: NodeParseConcat,
 		},
-
-		RecoveryTokens: []LangSpecLexerTokenType{TokSemicolon, TokBraceClose},
 	}
 
 	return b.g.rb.Pratt.Expression(VirtualGrammarIDToGrammarID(VirtualParseExpression), cfg)

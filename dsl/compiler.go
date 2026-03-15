@@ -1013,7 +1013,6 @@ func buildPrattConfig(
 			panic(fmt.Errorf("compiler error: unknown pratt category: %s", actualCat.Kind()))
 		}
 	}
-	config.RecoveryTokens = append(config.RecoveryTokens, collectSyncTokens(ruleNode)...)
 	return config
 }
 
