@@ -16,14 +16,18 @@ EditorCtx is the context passed to configuration callbacks when building EditorI
 
 Token, TokenRole, and NodeKind describe the current transition; they may be nil when
 not applicable. IsNest and NestLabel are set when the state corresponds to a nest body.
+IsInvalidContext is true when the transition is a recovery transition (OpRecoverPop or
+OpRecoverNoConsume); clients should apply the "invalid.illegal.unexpected-token" scope
+when this flag is set.
 */
 type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	Token     *TToken
 	TokenRole *TTokenRole
 	NodeKind  *TNodeKind
 
-	IsNest    bool
-	NestLabel syntaxa.GrammarLabel
+	IsNest           bool
+	NestLabel        syntaxa.GrammarLabel
+	IsInvalidContext bool
 }
 
 /*
