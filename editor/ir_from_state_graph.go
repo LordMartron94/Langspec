@@ -21,9 +21,9 @@ func stackOpFromLowering(op lowering.StackOp) StackOperation {
 		return STACK_POP
 	case lowering.OpSet:
 		return STACK_SET
-	case lowering.OpRecoverPop:
+	case lowering.OpSyncToken:
 		return STACK_POP
-	case lowering.OpRecoverNoConsume:
+	case lowering.OpSyncTokenNoConsume:
 		return STACK_POP
 	default:
 		return STACK_NONE
@@ -129,12 +129,8 @@ func EditorIRFromStateGraph[
 			tr       lowering.Transition[TToken, TNodeKind]
 		}
 		pairs := make([]pair, 0, len(transList))
-		hasRecovery := false
 		for _, tr := range transList {
 			pairs = append(pairs, pair{priority: tokenToPriority[tr.Token], tr: tr})
-			if tr.IsRecoveryTransition {
-				hasRecovery = true
-			}
 		}
 		sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].priority > pairs[j].priority })
 		for _, p := range pairs {
@@ -145,7 +141,7 @@ func EditorIRFromStateGraph[
 				s.Transitions = append(s.Transitions, *edTr)
 			}
 		}
-		if hasRecovery {
+		if !s.HasFallthroughPop && len(s.Transitions) > 0 {
 			s.HasFallbackInvalid = true
 			s.FallbackInvalidContext = config.contextProducer(
 				&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
@@ -216,6 +212,7 @@ func buildEditorTransitionFromGeneric[
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
 ) *EditorTransition[TObservation, TContext] {
+
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:    &tr.Token,
 		NodeKind: tr.NodeKind,
@@ -232,6 +229,7 @@ func buildEditorTransitionFromGeneric[
 		pat = rule.Pattern
 		hasPattern = true
 	}
+
 	if !hasPattern {
 		return nil
 	}
@@ -266,27 +264,40 @@ func buildEditorTransitionFromGeneric[
 		}
 	}
 
-	targets := make([]*EditorState[TObservation, TContext], 0, len(tr.TargetContextIDs))
-	for _, id := range tr.TargetContextIDs {
-		if t := stateByID[id]; t != nil {
-			targets = append(targets, t)
-		}
-	}
-
-	popAmount := tr.PopAmount
-	if popAmount <= 0 && (tr.Operation == lowering.OpPop || tr.Operation == lowering.OpRecoverPop || tr.Operation == lowering.OpRecoverNoConsume) {
-		popAmount = 1
-	}
-
 	return &EditorTransition[TObservation, TContext]{
 		OnPattern:    pat,
 		MatchContext: matchCtx,
 		Captures:     captures,
 		Operation:    stackOpFromLowering(tr.Operation),
-		Targets:      targets,
-		PopAmount:    popAmount,
-		IsLookahead:  tr.Operation == lowering.OpRecoverNoConsume,
+		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
+		PopAmount:    determinePopAmount(tr),
+		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
 	}
+}
+
+func resolveTargets[TObservation cmp.Ordered, TContext any](
+	ids []string,
+	stateByID map[string]*EditorState[TObservation, TContext],
+) []*EditorState[TObservation, TContext] {
+	targets := make([]*EditorState[TObservation, TContext], 0, len(ids))
+	for _, id := range ids {
+		if t := stateByID[id]; t != nil {
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+func determinePopAmount[TToken, TNodeKind comparable](tr lowering.Transition[TToken, TNodeKind]) int {
+	if tr.PopAmount > 0 {
+		return tr.PopAmount
+	}
+
+	if tr.Operation == lowering.OpPop || tr.Operation == lowering.OpSyncToken || tr.Operation == lowering.OpSyncTokenNoConsume {
+		return 1
+	}
+
+	return 0
 }
 
 func getOrCreateDelimitedState[
