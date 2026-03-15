@@ -129,12 +129,8 @@ func EditorIRFromStateGraph[
 			tr       lowering.Transition[TToken, TNodeKind]
 		}
 		pairs := make([]pair, 0, len(transList))
-		hasRecovery := false
 		for _, tr := range transList {
 			pairs = append(pairs, pair{priority: tokenToPriority[tr.Token], tr: tr})
-			if tr.IsRecoveryTransition {
-				hasRecovery = true
-			}
 		}
 		sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].priority > pairs[j].priority })
 		for _, p := range pairs {
@@ -145,7 +141,7 @@ func EditorIRFromStateGraph[
 				s.Transitions = append(s.Transitions, *edTr)
 			}
 		}
-		if hasRecovery {
+		if !s.HasFallthroughPop && len(s.Transitions) > 0 {
 			s.HasFallbackInvalid = true
 			s.FallbackInvalidContext = config.contextProducer(
 				&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
