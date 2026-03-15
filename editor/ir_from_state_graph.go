@@ -212,7 +212,6 @@ func splitNestBodiesAndWireImmediatePush[TObservation cmp.Ordered, TContext any]
 		contentState := &EditorState[TObservation, TContext]{
 			ID:          contentID,
 			Label:       sanitizer.Sanitize(s.Label + "_content"),
-			Context:     s.Context,
 			Transitions: s.Transitions,
 		}
 
