@@ -877,15 +877,14 @@ func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 	targetName := getIdentifierValue(nameNode)
 
-	tokenRef := node.FindFirstKind(NodeParseTokenReference)
 	groupRef := node.FindFirstKind(NodeParseGroup)
-
-	if tokenRef != nil {
-		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), targetName, getIdentifierValue(tokenRef))
-	}
-
 	if groupRef != nil {
 		return compileEmitOneOfWithCustomName(ctx, groupRef, targetName)
+	}
+
+	tokenRef := node.FindFirstKind(NodeParseTokenReference)
+	if tokenRef != nil {
+		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), targetName, getIdentifierValue(tokenRef))
 	}
 
 	return compileRuleReference(ctx, nameNode, targetName)
@@ -1014,7 +1013,6 @@ func buildPrattConfig(
 			panic(fmt.Errorf("compiler error: unknown pratt category: %s", actualCat.Kind()))
 		}
 	}
-	config.RecoveryTokens = append(config.RecoveryTokens, collectSyncTokens(ruleNode)...)
 	return config
 }
 
