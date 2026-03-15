@@ -21,6 +21,8 @@ func stackOpFromLowering(op lowering.StackOp) StackOperation {
 		return STACK_POP
 	case lowering.OpSet:
 		return STACK_SET
+	case lowering.OpRecoverPop, lowering.OpRecoverNoConsume:
+		return STACK_POP
 	default:
 		return STACK_NONE
 	}
@@ -201,8 +203,9 @@ func buildEditorTransitionFromGeneric[
 	sanitizer *text.Sanitizer,
 ) *EditorTransition[TObservation, TContext] {
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		Token:    &tr.Token,
-		NodeKind: tr.NodeKind,
+		Token:     &tr.Token,
+		NodeKind:  tr.NodeKind,
+		IsInvalid: tr.Operation == lowering.OpRecoverPop || tr.Operation == lowering.OpRecoverNoConsume,
 	}
 	override, hasOverride := config.overrideProducer(edCtx)
 	matchCtx := config.contextProducer(edCtx)
@@ -261,6 +264,9 @@ func buildEditorTransitionFromGeneric[
 	if popAmount <= 0 && tr.Operation == lowering.OpPop {
 		popAmount = 1
 	}
+	if popAmount <= 0 && (tr.Operation == lowering.OpRecoverPop || tr.Operation == lowering.OpRecoverNoConsume) {
+		popAmount = 1
+	}
 
 	return &EditorTransition[TObservation, TContext]{
 		OnPattern:    pat,
@@ -269,6 +275,7 @@ func buildEditorTransitionFromGeneric[
 		Operation:    stackOpFromLowering(tr.Operation),
 		Targets:      targets,
 		PopAmount:    popAmount,
+		IsLookahead:  tr.Operation == lowering.OpRecoverNoConsume,
 	}
 }
 

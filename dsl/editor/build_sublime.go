@@ -79,6 +79,10 @@ func buildContextProducer(
 	scopeMap map[dsl.LangSpecLexerTokenType]string,
 ) func(*EditorCtx) SublimeContext {
 	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
+		if ctx.IsInvalid {
+			return SublimeContext{Scope: "invalid.illegal.unexpected-token"}
+		}
+
 		if ctx.IsNest {
 			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
 		}
