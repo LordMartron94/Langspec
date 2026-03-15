@@ -129,8 +129,12 @@ func EditorIRFromStateGraph[
 			tr       lowering.Transition[TToken, TNodeKind]
 		}
 		pairs := make([]pair, 0, len(transList))
+		hasRecovery := false
 		for _, tr := range transList {
 			pairs = append(pairs, pair{priority: tokenToPriority[tr.Token], tr: tr})
+			if tr.IsRecoveryTransition {
+				hasRecovery = true
+			}
 		}
 		sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].priority > pairs[j].priority })
 		for _, p := range pairs {
@@ -140,6 +144,14 @@ func EditorIRFromStateGraph[
 			if edTr != nil {
 				s.Transitions = append(s.Transitions, *edTr)
 			}
+		}
+		if hasRecovery {
+			s.HasFallbackInvalid = true
+			s.FallbackInvalidContext = config.contextProducer(
+				&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+					IsInvalidContext: true,
+				},
+			)
 		}
 	}
 
@@ -205,9 +217,8 @@ func buildEditorTransitionFromGeneric[
 	sanitizer *text.Sanitizer,
 ) *EditorTransition[TObservation, TContext] {
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		Token:            &tr.Token,
-		NodeKind:         tr.NodeKind,
-		IsInvalidContext: tr.Operation == lowering.OpRecoverPop || tr.Operation == lowering.OpRecoverNoConsume,
+		Token:    &tr.Token,
+		NodeKind: tr.NodeKind,
 	}
 	override, hasOverride := config.overrideProducer(edCtx)
 	matchCtx := config.contextProducer(edCtx)

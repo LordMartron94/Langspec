@@ -16,9 +16,11 @@ EditorCtx is the context passed to configuration callbacks when building EditorI
 
 Token, TokenRole, and NodeKind describe the current transition; they may be nil when
 not applicable. IsNest and NestLabel are set when the state corresponds to a nest body.
-IsInvalidContext is true when the transition is a recovery transition (OpRecoverPop or
-OpRecoverNoConsume); clients should apply the "invalid.illegal.unexpected-token" scope
-when this flag is set.
+IsInvalidContext is true when the context is being produced for the synthesised
+catch-all/fallback transition of a state that has recovery (sync-point) transitions.
+Clients should return the "invalid.illegal.unexpected-token" scope (or equivalent)
+when this flag is set. Recovery transitions themselves are normal transitions and
+must NOT have IsInvalidContext set; only the catch-all fallback does.
 */
 type EditorCtx[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	Token     *TToken
@@ -90,6 +92,12 @@ ID and Label identify the state. Context is the semantic context (e.g. highlight
 scope). Transitions are the outgoing edges. HasFallthroughPop and FallthroughPopAmount
 support optional-continuation fallthrough. ImmediatePushTarget is set for nest-body
 wrapper states so the engine pushes the content state immediately.
+
+HasFallbackInvalid is true when this state has at least one recovery (sync-point)
+transition. When set, FallbackInvalidContext holds the pre-computed context for a
+synthesised catch-all transition that should match any input not covered by the
+explicit transitions and apply the error scope (e.g. "invalid.illegal.unexpected-token").
+Backends must emit such a catch-all rule when HasFallbackInvalid is true.
 */
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
 	ID                   string
@@ -99,6 +107,8 @@ type EditorState[TObservation cmp.Ordered, TContext any] struct {
 	HasFallthroughPop    bool
 	FallthroughPopAmount int
 	ImmediatePushTarget  *EditorState[TObservation, TContext]
+	HasFallbackInvalid   bool
+	FallbackInvalidContext TContext
 }
 
 /*
