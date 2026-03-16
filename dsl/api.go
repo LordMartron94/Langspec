@@ -89,6 +89,8 @@ type LangSpecCompileResult struct {
 	CompiledLexerSpec  *LexerSpec
 	CompiledParserSpec *ParserSpec
 
+	TargetLangspecVersion string
+
 	CompiledGrammarPackage GrammarPackage
 
 	CompiledToolPragmas []ToolPragma
@@ -228,6 +230,8 @@ func LangSpecCompilerCompile(
 		result.CompiledGrammarPackage = compiled.grammarPackage
 
 		result.CompiledToolPragmas = compiled.toolPragmas
+
+		result.TargetLangspecVersion = compiled.targetLangspecVersion
 
 		result.EOFToken = compiled.eofToken
 	}

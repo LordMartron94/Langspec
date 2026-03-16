@@ -45,6 +45,18 @@ langspec (root)
 
 Dependencies: `lexarch` (lexing), `syntaxa` (grammar/LST), `autarch/pattern` (regex/Regula), `foundation` (system, domain).
 
+### Ergonomics: bootstrap, editor registry, and default patterns
+
+Three conveniences reduce boilerplate when going from a `.lspec` file to a parser and editor support:
+
+- **Bootstrap** — Package **`bootstrap`** provides **`CompileParserFromSpec(specFile, alloc, opts...)`**. It compiles the DSL, runs toolchains (e.g. Sublime syntax generation when the spec enables it in PRAGMA), and returns a **`LangParser`**. Options: **`WithDiagnosticSink(sink)`** for human-readable diagnostics; **`WithSublimeOverrides(overrideProducer)`** to supply token overrides for the Sublime toolchain. Use this when you want “one call” from spec path to parser (and optional editor assets).
+
+- **Editor registry** — Package **`editor`** provides **`OverrideRegistry`** and **`NewOverrideRegistry`**. Register token → **`OverrideHandler`** with **`Register(token, handler)`**; then pass **`Producer()`** as the `overrideProducer` in **`EditorIRConfigurationCreate`** (or into **`WithSublimeOverrides`** after adapting to the string-typed toolchain if your spec is compiled dynamically). The registry maps tokens to overrides so you can assemble one producer from many handlers instead of writing a single large switch.
+
+- **Default patterns** — **`TextPatternBuilder`** ( **`NewTextPatternBuilder(factory)`** ) builds **`OverrideHandler`** values for common cases: **`LineComment(prefix, matchContext, punctuationContext)`** and **`BlockComment(open, close, bodyMetaContext, openContext, closeContext)`**. Use these to register line- and block-comment overrides (e.g. for capture or delimited regions) without implementing handlers by hand. Combine with **`OverrideRegistry`**: create a registry, create a **`TextPatternBuilder`** with a rune **`RegulaASTFactory`**, register the handlers for your comment tokens, then use **`Producer()`** as the override producer.
+
+Typical flow: **`CompileParserFromSpec(specFile, alloc, WithDiagnosticSink(sink), WithSublimeOverrides(registry.Producer()))`** after building a registry and registering handlers (e.g. from **`TextPatternBuilder`**). For the DSL itself, **`dsl/editor.BuildSublimeSyntaxForDSL`** uses a built-in override producer; for user-defined languages driven by JSON config, **`toolchain.RunSublimeToolchain`** accepts an override producer that can be backed by a registry.
+
 ### Required libraries and workspace
 
 The required libraries (`lexarch`, `syntaxa`, `autarch`, `foundation`, etc.) are meant to be imported into the **same Go workspace** as LangSpec. They are maintained as **git submodules** so the workspace can track a consistent set of versions. These libraries are intended to be available on the maintainer’s GitHub. If you cannot access a dependency (e.g. the repository is private or missing), please **open an issue** on this repository so the maintainer can make the library public or fix the reference.
@@ -97,7 +109,7 @@ Generic editor IR (push-down automaton) for syntax highlighting:
 
 ### Sublime syntax generation
 
-Sublime Text syntax is generated from the editor IR, which is built from a **GrammarPackage** and **LexingRuleset** plus **configuration**:
+Sublime Text syntax is generated from the editor IR, which is built from a **GrammarPackage** and **LexingRuleset** plus **configuration**. For a step-by-step guide and both entry points (DSL vs user language), see **Generating a Sublime Text syntax file** below.
 
 - **Scope provider / context producer** — Maps tokens and grammar nodes to Sublime scope strings (e.g. `comment.line`, `string.quoted.double`). Configuration supplies a base scope per token and optional per-node bindings (node kind → scopes, and optionally token-specific scopes within a node).
 - **Token formatter** — Used for rule IDs and consistency.
@@ -110,6 +122,135 @@ Sublime Text syntax is generated from the editor IR, which is built from a **Gra
 ### Package `toolchain`
 
 - Helpers for tools (e.g. Sublime config keys and tool names) used by the DSL and generator.
+
+---
+
+## Generating a Sublime Text syntax file
+
+This section describes how to use LangSpec to produce a **Sublime Text syntax definition** (`.sublime-syntax` YAML) for a language. The pipeline is: **grammar + lexer + configuration → editor IR → Sublime YAML**. Two main entry points exist: one for the **LangSpec DSL itself** (`.lspec` files), and one for **any language** you define in a `.lspec` and optionally drive with a JSON config and override producer.
+
+### Pipeline overview
+
+1. **Grammar and lexer** — From your `.lspec` (compiled via `LangSpecCompilerCompile` or `CompileParserFromSpec`), LangSpec produces a `GrammarPackage` and a `LexingRuleset`.
+2. **Editor IR** — Package **`editor`** builds an **editor IR** (push-down automaton) from that grammar and lexer plus an **`EditorIRConfiguration`**: token hasher, **context producer** (maps tokens/nodes to scope strings), **override producer** (optional custom behavior per token), and context equality.
+3. **Sublime YAML** — Package **`editor/sublime`** turns the IR into a `.sublime-syntax` file (contexts, rules, file extensions, scope) via **`GenerateSyntaxFile`**. The **toolchain** package wires steps 2 and 3 for you when using PRAGMA or the bootstrap.
+
+### Path 1: Syntax for the LangSpec DSL (`.lspec` files)
+
+When you want Sublime highlighting **for the DSL itself** (e.g. editing `.lspec` files in your editor):
+
+1. Create and configure a **LangSpec compiler** (e.g. `LangSpecCompilerCreate` with `LangSpecCompilerConfigurationCreate` and optional `WithDiagnosticSink`).
+2. Call **`dsl/editor.BuildSublimeSyntaxForDSL(compiler, syntaxFile)`** where `syntaxFile` is the output path for the `.sublime-syntax` file.
+
+No PRAGMA or JSON config is required. The DSL editor package uses the compiler’s **scope map** and a **built-in override producer** (line comment, block comment, regex literal) and writes the file. Use this when you are building tooling for the meta-language.
+
+### Path 2: Syntax for a user-defined language (your `.lspec`)
+
+When your **language** is defined in its own `.lspec` file and you want to generate a Sublime syntax from it, use the **Sublime toolchain** driven by **PRAGMA** and an optional **configuration JSON** and **override producer**.
+
+#### Step 1: Enable the Sublime tool in your `.lspec` PRAGMA
+
+In your `.lspec` file, add a PRAGMA block:
+
+```lspec
+PRAGMA {
+  tool.sublime {
+    enable = true;
+    output-path = "path/to/your.sublime-syntax";
+    configuration-path = "path/to/sublime_config.json";
+  }
+}
+```
+
+- **`enable`** — Must be `true` for the toolchain to run.
+- **`output-path`** — Where the generated `.sublime-syntax` file is written.
+- **`configuration-path`** — Path to a **JSON file** that describes file extensions, scope naming, and the **scope manifest** (base token scopes, node bindings, invalid scope). See **Configuration JSON format** below.
+
+The toolchain runs when you compile the spec and invoke **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** (or use the bootstrap with **`WithSublimeOverrides`**). It only runs if `enable = true` and the paths are set.
+
+#### Step 2: Compile the spec and run the toolchain
+
+**Option A — Bootstrap (one call):** Use **`bootstrap.CompileParserFromSpec(specFile, alloc, opts...)`** with **`WithSublimeOverrides(overrideProducer)`**. This compiles the `.lspec`, runs the Sublime toolchain when PRAGMA enables it, and returns a parser. The override producer is used when building the editor IR for Sublime.
+
+**Option B — Manual:** Compile with **`LangSpecCompilerCompile(compiler, specFile)`** to get a **`LangSpecCompileResult`**. Then call **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`**. The function reads PRAGMA, loads the JSON config, builds the IR with the given override producer, and writes the syntax file.
+
+In both cases, **`overrideProducer`** can be **`nil`** if you do not need token overrides (e.g. no special line/block comment or embedded-region handling). Otherwise, pass a function with signature:
+
+```go
+func(ec *editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], bool)
+```
+
+The toolchain uses **string** token and node kinds (from the compiled spec); if your override logic is written in terms of **typed** tokens (e.g. `dsl.LangSpecLexerTokenType`), build an **adapter** that maps string token names to your enums and delegates to your typed producer (see **Token overrides** below).
+
+#### Step 3: Configuration JSON format
+
+The file at **`configuration-path`** must be valid JSON matching **`editor/sublime.SublimeConfiguration`**:
+
+| Field | JSON key | Description |
+| ----- | -------- | ----------- |
+| File extensions | `file_extensions` | List of extensions for this syntax (e.g. `[".mylang"]`). |
+| Scope extension | `scope_extension` | Suffix for scope names (e.g. `".mylang"`). The base scope is `source` + this value. |
+| Scope manifest | `scope_manifest` | Object with `invalid_scope`, `base_token_scopes`, and `node_bindings`. |
+
+**Scope manifest** (`scope_manifest`):
+
+| Field | JSON key | Description |
+| ----- | -------- | ----------- |
+| Invalid scope | `invalid_scope` | Scope applied to invalid/unexpected tokens (e.g. `"invalid.illegal.unexpected-token"`). |
+| Base token scopes | `base_token_scopes` | Map from **token name** (string, as in your LEX) to default scope (e.g. `"TokIdentifier"` → `"variable.other"`). |
+| Node bindings | `node_bindings` | Map from **grammar node kind** (string) to a **binding** object. |
+
+Each **binding** in `node_bindings` can have:
+
+- **`scopes`** — List of scope strings for that node (first is used when no token override).
+- **`token_scopes`** — Optional map from **token name** to list of scopes; used when the node is realized by that token (e.g. string literal inside a meta value).
+
+Example minimal config:
+
+```json
+{
+  "file_extensions": [".mylang"],
+  "scope_extension": ".mylang",
+  "scope_manifest": {
+    "invalid_scope": "invalid.illegal.unexpected-token",
+    "base_token_scopes": {
+      "TokIdentifier": "variable.other",
+      "TokStringLiteral": "string.quoted.double",
+      "TokLineComment": "comment.line",
+      "TokBlockComment": "comment.block"
+    },
+    "node_bindings": {
+      "NodeKeyword": { "scopes": ["keyword.control"] },
+      "NodeStringLiteral": {
+        "scopes": ["meta.value"],
+        "token_scopes": {
+          "TokStringLiteral": ["meta.value", "string.quoted.double"]
+        }
+      }
+    }
+  }
+}
+```
+
+The context producer built by the toolchain uses this manifest to map (token, node) → scope when building the editor IR. Simple “one scope per token/node” behavior is entirely data-driven; **complex** behavior (line comment with prefix capture, block comment region, embedded regex) requires an **override producer** in code.
+
+#### Step 4: Token overrides (optional)
+
+When the default “single transition per token” is not enough (e.g. line comment with punctuation capture, block comment as a delimited region, regex literal as embedded scope), supply an **override producer** to **`RunSublimeToolchain`** or **`WithSublimeOverrides`**.
+
+- **OverrideRegistry** — In **`editor`**, create an **`OverrideRegistry`**, register **`OverrideHandler`**s per token (e.g. from **`TextPatternBuilder.LineComment`** / **`BlockComment`**), and use **`Producer()`** as the override producer. The registry’s producer is typed by your token type; the **Sublime toolchain** expects a **string**-typed producer (token names from the compiled spec). So for a **user-defined** language you have two options: (1) implement a string-based producer that maps token name strings to the desired **`EditorOverride`** (e.g. with a switch or map), or (2) keep a typed registry keyed by your enum and an **adapter** that, given `EditorCtx` with string token, looks up the enum and calls your typed registry’s producer.
+- **TextPatternBuilder** — Use **`NewTextPatternBuilder(factory)`** (with a rune **`RegulaASTFactory`**), then **`LineComment(prefix, matchContext, punctuationContext)`** and **`BlockComment(open, close, bodyMetaContext, openContext, closeContext)`** to get handlers. Register those for the corresponding tokens. This gives consistent, editor-friendly comment highlighting without hand-written patterns.
+
+Example (conceptual): register line and block comment handlers for your language’s token names, then pass an adapter that maps `ctx.Token` (string) to your enum and calls the registry; the adapter returns the resulting **`EditorOverride`** with **`SublimeContext`** (Scope / MetaScope) filled from your bindings.
+
+### Summary
+
+| Goal | Entry point |
+| ---- | ----------- |
+| Sublime syntax for **`.lspec`** (the DSL) | **`dsl/editor.BuildSublimeSyntaxForDSL(compiler, syntaxFile)`** |
+| Sublime syntax for **your language** (from `.lspec`) | Enable **PRAGMA** `tool.sublime`, provide **configuration-path** JSON; compile then **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** or **`bootstrap.CompileParserFromSpec(..., WithSublimeOverrides(overrideProducer))`** |
+| No overrides | Pass **`nil`** as override producer. |
+| Line/block comment or custom token behavior | Implement an override producer (e.g. **`OverrideRegistry`** + **`TextPatternBuilder`**), optionally adapt typed → string for **`RunSublimeToolchain`**. |
 
 ---
 
@@ -331,7 +472,7 @@ PARSE {
 - **Define a language:** Write a `.lspec` file (header, LEX, PARSE, optional PATTERN/PRAGMA/PRATT), compile with `LangSpecCompilerCompile`, then use `LangSpecCreate` and `LangParserCreate` to parse source files.
 - **Bootstrap / self-host:** The LangSpec DSL is itself defined and parsed by this pipeline; the compiler uses the same parser for `.lspec` files.
 - **Generate .lspec:** Use `dsl/generator` to emit `.lspec` from an in-memory grammar and lexer (e.g. for round-trip or tooling).
-- **Editor support:** Use `langspec/editor` and `editor/sublime` to build Sublime Text syntax from a grammar and lexer; for the DSL, use `dsl/editor.BuildSublimeSyntaxForDSL`.
+- **Editor support:** Use `langspec/editor` and `editor/sublime` to build Sublime Text syntax from a grammar and lexer; for the DSL, use `dsl/editor.BuildSublimeSyntaxForDSL`. For token overrides (e.g. line/block comments), use the **editor registry** and **default patterns** (see **Ergonomics** above).
 - **Validation:** Implement validation in Go (package **`validation`**); attach stages to the DSL compiler or run them on the LST after parsing. The `.lspec` file does not define validation rules. Inspect `ValidationEntries` in `LangSpecCompileResult`.
 
 ## Safety Guidelines
