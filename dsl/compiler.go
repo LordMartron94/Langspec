@@ -32,6 +32,8 @@ type CompiledLangSpec struct {
 	dslName    string
 	dslVersion string
 
+	targetLangspecVersion string
+
 	lexerSpec  *LexerSpec
 	parserSpec *ParserSpec
 
@@ -77,7 +79,7 @@ type parseCompileCtx struct {
 }
 
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
-	dslName, dslVersion := getInfoFromHeader(rootNode.FindFirstKind(NodeHeader))
+	dslName, dslVersion, langspecTargetVersion := getInfoFromHeader(rootNode.FindFirstKind(NodeHeader))
 
 	env := BuildSemanticEnv(rootNode, nil)
 
@@ -129,23 +131,27 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	toolPragmas := extractPragmas(rootNode)
 
 	return &CompiledLangSpec{
-		dslName:        dslName,
-		dslVersion:     dslVersion,
-		lexerSpec:      lexerSpec,
-		parserSpec:     parserSpec,
-		eofToken:       eofToken,
-		grammarPackage: *grammarPkg,
-		toolPragmas:    toolPragmas,
+		dslName:               dslName,
+		dslVersion:            dslVersion,
+		lexerSpec:             lexerSpec,
+		parserSpec:            parserSpec,
+		eofToken:              eofToken,
+		grammarPackage:        *grammarPkg,
+		toolPragmas:           toolPragmas,
+		targetLangspecVersion: langspecTargetVersion,
 	}
 }
 
 // ------------------------------- HEADER -------------------------------
 
-func getInfoFromHeader(headerNode *Node) (string, string) {
+func getInfoFromHeader(headerNode *Node) (string, string, string) {
 	dslName := nodeFormattedContent(headerNode.FindFirstKind(NodeDSLName), ATTRIBUTE_LITERAL_STRING_VALUE)
-	dslVersion := lexemeRawContent(headerNode.FindFirstKind(NodeVersion).Tokens()[0])
 
-	return dslName, dslVersion
+	versions := headerNode.FindAllKind(NodeVersion)
+	dslVersion := lexemeRawContent(versions[0].Tokens()[0])
+	langSpecTargetVersion := lexemeRawContent(versions[1].Tokens()[0])
+
+	return dslName, dslVersion, langSpecTargetVersion
 }
 
 func getEOFToken(rootNode *Node) string {
