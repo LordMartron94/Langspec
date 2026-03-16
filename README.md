@@ -45,6 +45,10 @@ langspec (root)
 
 Dependencies: `lexarch` (lexing), `syntaxa` (grammar/LST), `autarch/pattern` (regex/Regula), `foundation` (system, domain).
 
+### Required libraries and workspace
+
+The required libraries (`lexarch`, `syntaxa`, `autarch`, `foundation`, etc.) are meant to be imported into the **same Go workspace** as LangSpec. They are maintained as **git submodules** so the workspace can track a consistent set of versions. These libraries are intended to be available on the maintainer’s GitHub. If you cannot access a dependency (e.g. the repository is private or missing), please **open an issue** on this repository so the maintainer can make the library public or fix the reference.
+
 ---
 
 ## Packages
