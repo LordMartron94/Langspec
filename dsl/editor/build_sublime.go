@@ -6,9 +6,9 @@ import (
 	"foundation/domain"
 	"foundation/hash"
 	"langspec/dsl"
+	"langspec/dsl/generator"
 	langspeceditor "langspec/editor"
-	"langspec/editor/sublime"
-	"strings"
+	"langspec/toolchain"
 )
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
@@ -16,132 +16,59 @@ var hasher = hash.XXH3HasherCreateWithSeed(6789)
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 
 type EditorCtx = langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]
-type EditorOverride = langspeceditor.EditorOverride[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind, SublimeContext]
-
-type SublimeContext struct {
-	Scope     string
-	MetaScope string
-}
+type EditorOverride = langspeceditor.EditorOverride[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind, toolchain.SublimeContext]
 
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
-	config := langspeceditor.EditorIRConfigurationCreate(
+	ctxCfg := toolchain.ContextProducerConfig[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
+		InvalidScope: "invalid.illegal.unexpected-token",
+		GetBaseScope: func(token dsl.LangSpecLexerTokenType) string {
+			return scopeMap[token]
+		},
+		GetNodeScope: func(nodeKind dsl.LangSpecParserNodeKind, token *dsl.LangSpecLexerTokenType) string {
+			binding, ok := langSpecEditorManifest[nodeKind]
+			if !ok {
+				return ""
+			}
+			if token != nil && len(binding.TokenScopes) > 0 {
+				if ts, ok := binding.TokenScopes[*token]; ok && len(ts) > 0 {
+					return ts[0]
+				}
+			}
+			if len(binding.Scopes) > 0 {
+				return binding.Scopes[0]
+			}
+			return ""
+		},
+	}
+
+	irConfig := langspeceditor.EditorIRConfigurationCreate(
 		hasher,
 		func(token dsl.LangSpecLexerTokenType) uint64 {
 			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token.String()}, 0x00))
 		},
-		buildContextProducer(scopeMap),
-		buildEditorOverrideProducer(),
-		func(left, right SublimeContext) bool {
+		toolchain.BuildContextProducer[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](ctxCfg),
+		BuildEditorOverrideProducer(),
+		func(left, right toolchain.SublimeContext) bool {
 			return left == right
 		},
 	)
 
-	editorIR, err := langspeceditor.EditorIRCreate(
-		dsl.LangSpecCompilerLexingRuleSet(compiler),
-		dsl.LangSpecCompilerGrammarPackage(compiler),
-		config,
-	)
-
-	if err != nil {
-		return err
+	runnerCfg := &toolchain.SublimeRunnerConfig[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]{
+		LexerRuleset:   dsl.LangSpecCompilerLexingRuleSet(compiler),
+		GrammarPackage: dsl.LangSpecCompilerGrammarPackage(compiler),
+		IRConfig:       irConfig,
+		FileExtensions: []string{".lspec"},
+		BaseScope:      "source.lspec",
+		OutputPath:     syntaxFile,
+		ScopeSuffix:    ".lspec",
 	}
 
-	return sublime.GenerateSyntaxFile(
-		editorIR,
-		[]string{".lspec"},
-		"source.lspec",
-		syntaxFile,
-		buildExtractionConfig(".lspec"),
-	)
+	return toolchain.RunSublimeGenerator(runnerCfg)
 }
 
-func buildExtractionConfig(suffix string) sublime.ExtractionConfig[SublimeContext] {
-	return sublime.ExtractionConfig[SublimeContext]{
-		ExtractScope: func(ctx SublimeContext) string {
-			return applyScopeSuffix(ctx.Scope, suffix)
-		},
-		ExtractMetaScope: func(ctx SublimeContext) string {
-			return applyScopeSuffix(ctx.MetaScope, suffix)
-		},
-	}
-}
-
-func applyScopeSuffix(scope, suffix string) string {
-	if scope == "" {
-		return ""
-	}
-	return scope + suffix
-}
-
-func buildContextProducer(
-	scopeMap map[dsl.LangSpecLexerTokenType]string,
-) func(*EditorCtx) SublimeContext {
-	return func(ctx *langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]) SublimeContext {
-		if ctx.IsInvalidContext {
-			return SublimeContext{Scope: "invalid.illegal.unexpected-token"}
-		}
-
-		if ctx.IsNest {
-			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
-		}
-
-		baseScope := resolveBaseScope(ctx, scopeMap)
-		baseScope = applyNodeOverrides(ctx, baseScope)
-		return SublimeContext{Scope: baseScope}
-	}
-}
-
-func nestLabelToMetaScope(label string) string {
-	if label == "" {
-		return ""
-	}
-	lower := strings.ToLower(label)
-	lower = strings.TrimSuffix(lower, "_nest")
-	lower = strings.TrimSuffix(lower, " nest")
-	lower = strings.ReplaceAll(lower, " ", "-")
-	lower = strings.ReplaceAll(lower, "_", "-")
-	return "meta." + lower + ".body"
-}
-
-func resolveBaseScope(
-	ctx *EditorCtx,
-	scopeMap map[dsl.LangSpecLexerTokenType]string,
-) string {
-	if ctx.Token == nil {
-		return ""
-	}
-	return scopeMap[*ctx.Token]
-}
-
-func applyNodeOverrides(
-	ctx *EditorCtx,
-	currentScope string,
-) string {
-	if ctx.NodeKind == nil || ctx.Token == nil {
-		return currentScope
-	}
-
-	binding, ok := langSpecEditorManifest[*ctx.NodeKind]
-	if !ok {
-		return currentScope
-	}
-
-	if len(binding.TokenScopes) > 0 {
-		if tokenScopes, hasTokenOverride := binding.TokenScopes[*ctx.Token]; hasTokenOverride && len(tokenScopes) > 0 {
-			return tokenScopes[0]
-		}
-	}
-
-	if len(binding.Scopes) > 0 {
-		return binding.Scopes[0]
-	}
-
-	return currentScope
-}
-
-func buildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
+func BuildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
 	return func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
 		if editorCtx.Token == nil {
 			return nil, false
@@ -168,12 +95,12 @@ func lineCommentOverride() *EditorOverride {
 	).Star().Capture()
 
 	newPattern := slashes.Then(notTerminator)
-	matchCtx := SublimeContext{Scope: "comment.line.double-slash"}
+	matchCtx := toolchain.SublimeContext{Scope: "comment.line.double-slash"}
 
 	return &EditorOverride{
 		Pattern:      &newPattern,
 		MatchContext: &matchCtx,
-		Captures: map[int]SublimeContext{
+		Captures: map[int]toolchain.SublimeContext{
 			1: {Scope: "punctuation.definition.comment"},
 		},
 	}
@@ -185,12 +112,12 @@ func blockCommentOverride() *EditorOverride {
 
 	return &EditorOverride{
 		Pattern:      &openPattern,
-		MatchContext: &SublimeContext{Scope: "punctuation.definition.comment.begin"},
-		DelimitedPayload: &langspeceditor.DelimitedPayload[rune, SublimeContext]{
+		MatchContext: &toolchain.SublimeContext{Scope: "punctuation.definition.comment.begin"},
+		DelimitedPayload: &langspeceditor.DelimitedPayload[rune, toolchain.SublimeContext]{
 			StateLabel:   "block_comment_inner",
-			BodyContext:  SublimeContext{MetaScope: "comment.block"},
+			BodyContext:  toolchain.SublimeContext{MetaScope: "comment.block"},
 			ClosePattern: closePattern,
-			CloseContext: SublimeContext{Scope: "punctuation.definition.comment.end"},
+			CloseContext: toolchain.SublimeContext{Scope: "punctuation.definition.comment.end"},
 		},
 	}
 }
@@ -200,12 +127,12 @@ func regExOverride() *EditorOverride {
 
 	return &EditorOverride{
 		Pattern:      &backtick,
-		MatchContext: &SublimeContext{Scope: "punctuation.definition.string.begin"},
-		ForeignPayload: &langspeceditor.ForeignMachinePayload[rune, SublimeContext]{
+		MatchContext: &toolchain.SublimeContext{Scope: "punctuation.definition.string.begin"},
+		ForeignPayload: &langspeceditor.ForeignMachinePayload[rune, toolchain.SublimeContext]{
 			MachineID:      "scope:source.regexp",
-			MachineContext: SublimeContext{MetaScope: "meta.embedded.regexp"},
+			MachineContext: toolchain.SublimeContext{MetaScope: "meta.embedded.regexp"},
 			EscapePattern:  backtick,
-			EscapeCaptures: map[int]SublimeContext{
+			EscapeCaptures: map[int]toolchain.SublimeContext{
 				0: {Scope: "punctuation.definition.string.end"},
 			},
 		},
@@ -256,4 +183,16 @@ var langSpecEditorManifest = map[dsl.LangSpecParserNodeKind]NodeBinding{
 	dsl.NodeParseIgnoreRole:          {Scopes: []string{"constant.language.token-role-reference"}},
 	dsl.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
 	dsl.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
+}
+
+func GetGeneratorBindings() map[dsl.LangSpecParserNodeKind]generator.NodeBinding[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind] {
+	out := make(map[dsl.LangSpecParserNodeKind]generator.NodeBinding[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind])
+
+	for kind, b := range langSpecEditorManifest {
+		out[kind] = generator.NodeBinding[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
+			Scopes:      b.Scopes,
+			TokenScopes: b.TokenScopes,
+		}
+	}
+	return out
 }

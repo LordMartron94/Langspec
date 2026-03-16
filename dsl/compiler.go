@@ -23,6 +23,11 @@ type LexerRuleset = lexarch.LexingRuleset[rune, string, string]
 type CompiledRule = syntaxa.ParserRule[rune, string, string, string, string]
 type CompilerRuleBuilder = rule.RuleBuilder[rune, string, string, string, string]
 
+type ToolPragma struct {
+	ToolName string
+	Settings map[string]string
+}
+
 type CompiledLangSpec struct {
 	dslName    string
 	dslVersion string
@@ -31,6 +36,8 @@ type CompiledLangSpec struct {
 	parserSpec *ParserSpec
 
 	grammarPackage GrammarPackage
+
+	toolPragmas []ToolPragma
 
 	eofToken string
 }
@@ -119,6 +126,8 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	)
 	parserSpec.WithSkipRoles(skipRoles...)
 
+	toolPragmas := extractPragmas(rootNode)
+
 	return &CompiledLangSpec{
 		dslName:        dslName,
 		dslVersion:     dslVersion,
@@ -126,6 +135,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		parserSpec:     parserSpec,
 		eofToken:       eofToken,
 		grammarPackage: *grammarPkg,
+		toolPragmas:    toolPragmas,
 	}
 }
 
@@ -147,6 +157,70 @@ func getEOFToken(rootNode *Node) string {
 	}
 
 	return eofToken
+}
+
+// ------------------------------- PRAGMAS -------------------------------
+
+func extractPragmas(rootNode *Node) []ToolPragma {
+	section := rootNode.FindFirstKind(NodePragmaSection)
+	if section == nil {
+		return nil
+	}
+
+	var out []ToolPragma
+	for _, block := range section.FindAllKind(NodePragmaBlock) {
+		// 1. Step into the key wrapper first
+		keyNode := block.FindFirstKind(NodePragmaBlockKey)
+		if keyNode == nil {
+			continue
+		}
+
+		// 2. Now extract the prefix from the key node
+		blockKeyPrefix := keyNode.FindFirstKind(NodePragmaBlockKeyPrefix)
+		if blockKeyPrefix == nil {
+			continue
+		}
+
+		keyPrefix := getTrimmedIdentifierNodeContent(blockKeyPrefix)
+		if keyPrefix != "tool" {
+			continue
+		}
+
+		// 3. Extract the segments from the key node, not the whole block
+		segments := keyNode.FindAllKind(NodePragmaBlockKeySegment)
+		if len(segments) != 1 {
+			panic(fmt.Errorf("tool pragma key must have exactly 1 segment, got=%d", len(segments)))
+		}
+		toolName := getTrimmedIdentifierNodeContent(segments[0])
+
+		settings := make(map[string]string)
+		settingNodes := block.FindAllKind(NodePragmaConfiguration)
+		for _, config := range settingNodes {
+			settingKey := getTrimmedIdentifierNodeContent(config.FindFirstKind(NodePragmaKey))
+			settingValueNode := config.FindFirstKind(NodePragmaValue)
+
+			var settingValue string
+			settingValueToken := settingValueNode.Tokens()[0].Token
+			if settingValueToken == TokStringLiteral {
+				settingValueRetrieved, exist := AttributeAs[string](settingValueNode, ATTRIBUTE_LITERAL_STRING_VALUE)
+				if !exist {
+					panic("engine-error: setting value node does not have string")
+				}
+
+				settingValue = settingValueRetrieved
+			} else {
+				settingValue = getTrimmedIdentifierNodeContent(settingValueNode)
+			}
+
+			settings[settingKey] = settingValue
+		}
+
+		out = append(out, ToolPragma{
+			ToolName: toolName,
+			Settings: settings,
+		})
+	}
+	return out
 }
 
 // ------------------------------- LEX -------------------------------
