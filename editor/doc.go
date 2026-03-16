@@ -19,10 +19,10 @@
 //
 // Override mechanism: token overrides replace the default single-rule state for a token
 // with a custom StateRule and optional extra States (e.g. line comment with capture).
-// Nest overrides replace the default single-body state for a grammar nest with a custom
-// state sequence. Use the structural helpers—TokenOverrideDelimitedRegion,
-// TokenOverrideMatchWithCapture, BuildNestStateSequence—to build overrides from regex
-// and scope strings. Node overrides (AddNodeOverride / AddNodeScopeOverride) attach
-// scope or meta-scope to specific grammar nodes by GrammarLabel. The editor package does
-// not prescribe language semantics; clients supply regex and scope strings.
+// Use OverrideRegistry to map tokens to OverrideHandlers and pass Registry.Producer()
+// as the overrideProducer in EditorIRConfiguration. TextPatternBuilder provides
+// default patterns (LineComment, BlockComment) that return handlers you can register
+// for line- and block-comment tokens. Nest overrides replace the default single-body
+// state for a grammar nest with a custom state sequence. The editor package does not
+// prescribe language semantics; clients supply regex and scope strings.
 package editor

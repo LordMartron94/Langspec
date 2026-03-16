@@ -11,6 +11,11 @@ import (
 
 // ----------------------------------------------------------------- CONFIGURATION
 
+/*
+ParserCompiler holds configuration for the bootstrap pipeline (spec path, allocator,
+optional diagnostic sink, optional Sublime override producer). Built by buildConfig
+from CompileParserFromSpec options; not constructed directly by callers.
+*/
 type ParserCompiler struct {
 	specFile        string
 	allocFn         memarch.AllocationFn
@@ -18,14 +23,29 @@ type ParserCompiler struct {
 	sublimeOverride func(ec *editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], bool)
 }
 
+/*
+Option configures a ParserCompiler when passed to CompileParserFromSpec.
+*/
 type Option func(*ParserCompiler)
 
+/*
+WithDiagnosticSink sets the diagnostic sink for compiler output (e.g. trace, validation).
+If nil, no diagnostics are written. Use dsl.DefaultLangSpecDiagnosticSink() for stdout.
+*/
 func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
 	return func(c *ParserCompiler) {
 		c.diagnosticSink = sink
 	}
 }
 
+/*
+WithSublimeOverrides sets the override producer used when the Sublime toolchain runs.
+
+When the .lspec PRAGMA enables the Sublime tool, RunSublimeToolchain is invoked with
+this producer. Pass the result of OverrideRegistry.Producer() (after registering
+handlers, e.g. from TextPatternBuilder) to supply token overrides for syntax generation.
+If unset, the Sublime toolchain uses no overrides when enabled.
+*/
 func WithSublimeOverrides(overrideFn func(ec *editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], bool)) Option {
 	return func(c *ParserCompiler) {
 		c.sublimeOverride = overrideFn
@@ -34,6 +54,14 @@ func WithSublimeOverrides(overrideFn func(ec *editor.EditorCtx[rune, string, str
 
 // ----------------------------------------------------------------- BOOTSTRAP PIPELINE
 
+/*
+CompileParserFromSpec compiles a .lspec file and returns a LangParser ready to parse source.
+
+Pipeline: build config from opts → compile DSL (LangSpecCompilerCompile) → run toolchains
+(e.g. Sublime if enabled in PRAGMA and WithSublimeOverrides was set) → create parser from
+CompiledLexerSpec and CompiledParserSpec. specFile must be a path to a .lspec file; alloc
+is used for compiler and parser allocation. Returns (nil, error) on compile or toolchain failure.
+*/
 func CompileParserFromSpec(
 	specFile string,
 	alloc memarch.AllocationFn,
