@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"foundation/system"
 	"foundation/text"
+	"langspec/toolchain"
 	"lexarch"
 	"slices"
 	"strings"
@@ -15,6 +16,11 @@ import (
 
 // ----------------------------------------------------------------- TYPES
 
+type NodeBinding[TToken, TNodeKind comparable] struct {
+	Scopes      []string
+	TokenScopes map[TToken][]string
+}
+
 type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 	targetLSpecVersion string
 
@@ -22,10 +28,18 @@ type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
 
-	enableSublime bool
-	emitRegex     bool
+	enableSublime     bool
+	sublimeConfigPath string
+	sublimeOutputPath string
 
-	baseScopes map[TToken]string
+	baseScopes   map[TToken]string
+	nodeBindings map[TNodeKind]NodeBinding[TToken, TNodeKind]
+	invalidScope string
+
+	sublimeFileExtensions []string
+	sublimeScopeExtension string
+
+	emitRegex bool
 
 	ignoredRoles []TTokenRole
 
@@ -50,24 +64,15 @@ func GeneratorConfigCreate[TToken, TTokenRole, TNodeKind comparable](
 			return fmt.Sprintf("%v", kind)
 		},
 		baseScopes:      make(map[TToken]string),
+		nodeBindings:    make(map[TNodeKind]NodeBinding[TToken, TNodeKind]),
 		columnThreshold: 80,
 		ignoredRoles:    skippedRoles,
 		eofToken:        nil,
 	}
 }
 
-func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEnableSublime(value bool) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
-	g.enableSublime = value
-	return g
-}
-
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEmitRegEx(value bool) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.emitRegex = value
-	return g
-}
-
-func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithBaseScopes(baseScopes map[TToken]string) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
-	g.baseScopes = baseScopes
 	return g
 }
 
@@ -96,6 +101,27 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEofToken(token TTok
 	return g
 }
 
+func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithSublimeConfiguration(
+	configPath, outputPath string,
+	baseScopes map[TToken]string,
+	bindings map[TNodeKind]NodeBinding[TToken, TNodeKind],
+	invalidScope string,
+	scopeExtension string,
+	fileExtensions []string,
+) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
+	g.enableSublime = true
+	g.sublimeConfigPath = configPath
+	g.sublimeOutputPath = outputPath
+
+	g.baseScopes = baseScopes
+	g.nodeBindings = bindings
+	g.invalidScope = invalidScope
+
+	g.sublimeFileExtensions = fileExtensions
+	g.sublimeScopeExtension = scopeExtension
+	return g
+}
+
 // ----------------------------------------------------------------- ENTRY
 
 func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
@@ -108,6 +134,19 @@ func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 		return fmt.Errorf("given path '%s' is not an lspec path", outputPath)
 	}
 
+	if err := writeLSpecDocument(grammarPackage, lexingRuleSet, outputPath, configuration); err != nil {
+		return err
+	}
+
+	return writeSublimeConfiguration(configuration)
+}
+
+func writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState comparable](
+	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
+	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
+	outputPath string,
+	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
+) error {
 	gen := createGenerator(grammarPackage, lexingRuleSet, configuration)
 	document := gen.buildDocument()
 
@@ -115,7 +154,7 @@ func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	renderedOutput := printer.render(document)
 
 	if err := system.FileWriteString(outputPath, renderedOutput); err != nil {
-		return fmt.Errorf("could not write output file: %w", err)
+		return fmt.Errorf("could not write lspec output file: %w", err)
 	}
 
 	return nil
@@ -139,6 +178,8 @@ func createGenerator[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 		columnThreshold:    configuration.columnThreshold,
 		ignoredTokenRoles:  configuration.ignoredRoles,
 		eofToken:           configuration.eofToken,
+		sublimeConfigPath:  configuration.sublimeConfigPath,
+		sublimeOutputPath:  configuration.sublimeOutputPath,
 	}
 }
 
@@ -155,6 +196,9 @@ type generator[TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	tokenFormatter     func(token TToken) string
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
+
+	sublimeConfigPath string
+	sublimeOutputPath string
 
 	baseScopes map[TToken]string
 
@@ -204,12 +248,15 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSecti
 }
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSublimePragma() Doc {
+	outPath := `"` + g.sublimeOutputPath + `"`
+	cfgPath := `"` + g.sublimeConfigPath + `"`
+
 	return concat(
-		doctext("tool.sublime {"),
+		doctext(fmt.Sprintf("tool.%s {", toolchain.SublimeToolName)),
 		nest(1, concat(
-			line(), doctext("enable = true;"),
-			line(), doctext(`path = "<insert path here>";`),
-			line(), doctext("auto-generate = true;"),
+			line(), doctext(fmt.Sprintf("%s = true;", toolchain.SublimeEnableKey)),
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.SublimeOutputPathKey, outPath)),
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.SublimeConfigurationPathKey, cfgPath)),
 		)),
 		line(), doctext("}"),
 	)
@@ -430,17 +477,11 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLexRows(rul
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRow(rule lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole]) lexRow {
 	var attributes []string
 
-	if baseScope, ok := g.baseScopes[rule.Token]; ok {
-		attributes = append(attributes, fmt.Sprintf("scope=\"%s\"", baseScope))
-	}
 	if g.eofToken != nil && rule.Token == *g.eofToken {
 		attributes = append(attributes, "EOF=true")
 	}
 
-	meta := ""
-	if len(attributes) > 0 {
-		meta = fmt.Sprintf("%%%% %s %%%%", strings.Join(attributes, " "))
-	}
+	meta := fmt.Sprintf("%%%% %s %%%%", strings.Join(attributes, " "))
 
 	return lexRow{
 		Priority: rule.Priority,
