@@ -634,16 +634,22 @@ func checkGrammarChoiceConflicts(ctx *ValidationCtx, pkg *GrammarPackage, analys
 		visited[g.GrammarKey] = true
 
 		if g.Kind == syntaxa.GChoice {
-			seenTokens := make(map[string]int)
+			seenTokens := make(map[string]int) // Maps FIRST token -> branch index
 			for i, child := range g.Children {
 				if child == nil || child.NodePath == nil {
 					continue
 				}
 				childKey := syntaxa.NodeKeyFromPath(*child.NodePath)
+
 				for token := range analysis.First[childKey] {
 					if prevBranch, exists := seenTokens[token]; exists {
-						ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
+						// We found an LL(1) conflict. Do the explicit lookaheads mutually exclude each other?
+						prevChild := g.Children[prevBranch]
+						if lookaheadsMutuallyExclusive(prevChild.Lookaheads, child.Lookaheads) {
+							continue
+						}
 
+						ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
 						ruleNode := findParseRuleByName(parseSection, string(ruleName))
 						nodeToReport := ctx.RootNode
 						if ruleNode != nil {
@@ -651,10 +657,9 @@ func checkGrammarChoiceConflicts(ctx *ValidationCtx, pkg *GrammarPackage, analys
 						}
 
 						msg := fmt.Sprintf(
-							"FIRST-set conflict in rule '%s'. Token '%s' is expected by both branch %d and branch %d. Add a predict modifier to disambiguate.",
+							"FIRST-set conflict in rule '%s'. Token '%s' is expected by both branch %d and branch %d. Explicit lookaheads do not uniquely resolve this.",
 							ruleName, token, prevBranch, i,
 						)
-						// Report Error instead of Fatal so the user sees ALL conflicts at once.
 						ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, nodeToReport)
 					} else {
 						seenTokens[token] = i
@@ -1015,4 +1020,15 @@ func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 		}
 	}
 	return nil
+}
+
+func lookaheadsMutuallyExclusive(la1, la2 []syntaxa.Lookahead[string]) bool {
+	for _, req1 := range la1 {
+		for _, req2 := range la2 {
+			if req1.Offset == req2.Offset && req1.Expected != req2.Expected {
+				return true
+			}
+		}
+	}
+	return false
 }
