@@ -49,13 +49,13 @@ Dependencies: `lexarch` (lexing), `syntaxa` (grammar/LST), `autarch/pattern` (re
 
 Three conveniences reduce boilerplate when going from a `.lspec` file to a parser and editor support:
 
-- **Bootstrap** — Package **`bootstrap`** provides **`CompileParserFromSpec(specFile, alloc, opts...)`**. It compiles the DSL, runs toolchains (e.g. Sublime syntax generation when the spec enables it in PRAGMA), and returns a **`LangParser`**. Options: **`WithDiagnosticSink(sink)`** for human-readable diagnostics; **`WithSublimeOverrides(overrideProducer)`** to supply token overrides for the Sublime toolchain. Use this when you want “one call” from spec path to parser (and optional editor assets).
+- **Bootstrap** — Package **`bootstrap`** provides **`CompileParserFromSpec(specFile, alloc, opts...)`**. It compiles the DSL, runs toolchains (e.g. Sublime syntax generation when the spec enables it in PRAGMA), and returns a **`LangParser`**. Options: **`WithDiagnosticSink(sink)`** for human-readable diagnostics; **`WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension)`** to supply an **in-memory** manifest and override factory (then **configuration-path** in PRAGMA is ignored). If **`WithSublimeToolchain`** is not used, the bootstrap uses **`toolchain.RunSublimeToolchain`**, which reads the manifest from the JSON file at **configuration-path**. Use this when you want “one call” from spec path to parser (and optional editor assets).
 
-- **Editor registry** — Package **`editor`** provides **`OverrideRegistry`** and **`NewOverrideRegistry`**. Register token → **`OverrideHandler`** with **`Register(token, handler)`**; then pass **`Producer()`** as the `overrideProducer` in **`EditorIRConfigurationCreate`** (or into **`WithSublimeOverrides`** after adapting to the string-typed toolchain if your spec is compiled dynamically). The registry maps tokens to overrides so you can assemble one producer from many handlers instead of writing a single large switch.
+- **Editor registry** — Package **`editor`** provides **`OverrideRegistry`** and **`NewOverrideRegistry`**. Register token → **`OverrideHandler`** with **`Register(token, handler)`**; then pass **`Producer()`** as the `overrideProducer` in **`EditorIRConfigurationCreate`** (or use it inside a **`SublimeOverrideFactory`** passed to **`WithSublimeToolchain`**, after adapting to the string-typed toolchain if your spec is compiled dynamically). The registry maps tokens to overrides so you can assemble one producer from many handlers instead of writing a single large switch.
 
 - **Default patterns** — **`TextPatternBuilder`** ( **`NewTextPatternBuilder(factory)`** ) builds **`OverrideHandler`** values for common cases: **`LineComment(prefix, matchContext, punctuationContext)`** and **`BlockComment(open, close, bodyMetaContext, openContext, closeContext)`**. Use these to register line- and block-comment overrides (e.g. for capture or delimited regions) without implementing handlers by hand. Combine with **`OverrideRegistry`**: create a registry, create a **`TextPatternBuilder`** with a rune **`RegulaASTFactory`**, register the handlers for your comment tokens, then use **`Producer()`** as the override producer.
 
-Typical flow: **`CompileParserFromSpec(specFile, alloc, WithDiagnosticSink(sink), WithSublimeOverrides(registry.Producer()))`** after building a registry and registering handlers (e.g. from **`TextPatternBuilder`**). For the DSL itself, **`dsl/editor.BuildSublimeSyntaxForDSL`** uses a built-in override producer; for user-defined languages driven by JSON config, **`toolchain.RunSublimeToolchain`** accepts an override producer that can be backed by a registry.
+Typical flow: **`CompileParserFromSpec(specFile, alloc, WithDiagnosticSink(sink))`** for JSON-driven Sublime (PRAGMA sets **configuration-path**); or **`CompileParserFromSpec(specFile, alloc, WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension))`** when the manifest is built in Go. For the DSL itself, **`dsl/editor.BuildSublimeSyntaxForDSL`** uses a built-in override producer; for user-defined languages, the manifest can come from a **JSON file** ( **`RunSublimeToolchain`** ) or **in-memory** ( **`WithSublimeToolchain`** + **`RunSublimeToolchainFromMemory`** ).
 
 ### Required libraries and workspace
 
@@ -121,7 +121,7 @@ Sublime Text syntax is generated from the editor IR, which is built from a **Gra
 
 ### Package `toolchain`
 
-- Helpers for tools (e.g. Sublime config keys and tool names) used by the DSL and generator.
+- Helpers for tools (e.g. Sublime config keys and tool names) used by the DSL and generator. The Sublime toolchain supports **two manifest sources**: (1) **JSON manifest** — **`RunSublimeToolchain`** reads PRAGMA **configuration-path**, loads **`SublimeConfiguration`** via **`LoadSublimeConfigFromJSON`**, and runs the pipeline; (2) **in-memory manifest** — **`RunSublimeToolchainFromMemory`** takes a **`SemanticManifest`** and metadata (output path, file extensions, scope extension) directly, used by the bootstrap when **`WithSublimeToolchain`** is set. Both paths use **`BuildContextProducerFromManifest`** to build the context producer for the editor IR.
 
 ---
 
@@ -146,7 +146,7 @@ No PRAGMA or JSON config is required. The DSL editor package uses the compiler�
 
 ### Path 2: Syntax for a user-defined language (your `.lspec`)
 
-When your **language** is defined in its own `.lspec` file and you want to generate a Sublime syntax from it, use the **Sublime toolchain** driven by **PRAGMA** and an optional **configuration JSON** and **override producer**.
+When your **language** is defined in its own `.lspec` file and you want to generate a Sublime syntax from it, use the **Sublime toolchain**. The manifest can be supplied in **two ways**: (1) **JSON manifest** — a file at **configuration-path** in PRAGMA (see Step 1 and Step 3); (2) **in-memory manifest** — pass **`WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension)`** to the bootstrap so the manifest and metadata come from Go ( **configuration-path** is then ignored).
 
 #### Step 1: Enable the Sublime tool in your `.lspec` PRAGMA
 
@@ -163,16 +163,18 @@ PRAGMA {
 ```
 
 - **`enable`** — Must be `true` for the toolchain to run.
-- **`output-path`** — Where the generated `.sublime-syntax` file is written.
-- **`configuration-path`** — Path to a **JSON file** that describes file extensions, scope naming, and the **scope manifest** (base token scopes, node bindings, invalid scope). See **Configuration JSON format** below.
+- **`output-path`** — Where the generated `.sublime-syntax` file is written. Required in both JSON and in-memory modes.
+- **`configuration-path`** — Path to a **JSON file** that describes file extensions, scope naming, and the **scope manifest**. **Only used when the manifest is not supplied in-memory** (i.e. when you do not use **`WithSublimeToolchain`** ). If you use **`WithSublimeToolchain`**, this setting is ignored and the manifest comes from Go. See **Configuration JSON format** below for the file shape.
 
-The toolchain runs when you compile the spec and invoke **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** (or use the bootstrap with **`WithSublimeOverrides`**). It only runs if `enable = true` and the paths are set.
+The toolchain runs when you compile the spec and either: invoke **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** (JSON manifest), use **`toolchain.RunSublimeToolchainFromMemory(...)`** (in-memory), or use the bootstrap (which chooses JSON vs in-memory based on whether **`WithSublimeToolchain`** was passed). It only runs if `enable = true` and **output-path** is set; **configuration-path** is required only for the JSON path.
 
 #### Step 2: Compile the spec and run the toolchain
 
-**Option A — Bootstrap (one call):** Use **`bootstrap.CompileParserFromSpec(specFile, alloc, opts...)`** with **`WithSublimeOverrides(overrideProducer)`**. This compiles the `.lspec`, runs the Sublime toolchain when PRAGMA enables it, and returns a parser. The override producer is used when building the editor IR for Sublime.
+**Option A — Bootstrap with JSON manifest:** Use **`bootstrap.CompileParserFromSpec(specFile, alloc, WithDiagnosticSink(sink), ...)`** without **`WithSublimeToolchain`**. The bootstrap calls **`toolchain.RunSublimeToolchain(compileResult, nil)`**, which reads **configuration-path** from PRAGMA, loads the JSON config, and writes the syntax file. Override producer is nil unless you call the toolchain separately with one.
 
-**Option B — Manual:** Compile with **`LangSpecCompilerCompile(compiler, specFile)`** to get a **`LangSpecCompileResult`**. Then call **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`**. The function reads PRAGMA, loads the JSON config, builds the IR with the given override producer, and writes the syntax file.
+**Option B — Bootstrap with in-memory manifest:** Use **`bootstrap.CompileParserFromSpec(specFile, alloc, WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension), ...)`**. The bootstrap calls **`toolchain.RunSublimeToolchainFromMemory`** with your manifest and metadata; **configuration-path** is ignored. The **factory** is called to build the override producer (can be nil if you do not need overrides).
+
+**Option C — Manual:** Compile with **`LangSpecCompilerCompile(compiler, specFile)`** to get a **`LangSpecCompileResult`**. Then call **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** (JSON) or **`toolchain.RunSublimeToolchainFromMemory(compileResult, manifest, overrideProducer, outputPath, fileExtensions, scopeExtension)`** (in-memory). The chosen function builds the IR and writes the syntax file.
 
 In both cases, **`overrideProducer`** can be **`nil`** if you do not need token overrides (e.g. no special line/block comment or embedded-region handling). Otherwise, pass a function with signature:
 
@@ -236,7 +238,7 @@ The context producer built by the toolchain uses this manifest to map (token, no
 
 #### Step 4: Token overrides (optional)
 
-When the default “single transition per token” is not enough (e.g. line comment with punctuation capture, block comment as a delimited region, regex literal as embedded scope), supply an **override producer** to **`RunSublimeToolchain`** or **`WithSublimeOverrides`**.
+When the default “single transition per token” is not enough (e.g. line comment with punctuation capture, block comment as a delimited region, regex literal as embedded scope), supply an **override producer** to **`RunSublimeToolchain`** / **`RunSublimeToolchainFromMemory`**, or supply a **SublimeOverrideFactory** to **`WithSublimeToolchain`** that returns that producer.
 
 - **OverrideRegistry** — In **`editor`**, create an **`OverrideRegistry`**, register **`OverrideHandler`**s per token (e.g. from **`TextPatternBuilder.LineComment`** / **`BlockComment`**), and use **`Producer()`** as the override producer. The registry’s producer is typed by your token type; the **Sublime toolchain** expects a **string**-typed producer (token names from the compiled spec). So for a **user-defined** language you have two options: (1) implement a string-based producer that maps token name strings to the desired **`EditorOverride`** (e.g. with a switch or map), or (2) keep a typed registry keyed by your enum and an **adapter** that, given `EditorCtx` with string token, looks up the enum and calls your typed registry’s producer.
 - **TextPatternBuilder** — Use **`NewTextPatternBuilder(factory)`** (with a rune **`RegulaASTFactory`**), then **`LineComment(prefix, matchContext, punctuationContext)`** and **`BlockComment(open, close, bodyMetaContext, openContext, closeContext)`** to get handlers. Register those for the corresponding tokens. This gives consistent, editor-friendly comment highlighting without hand-written patterns.
@@ -248,9 +250,10 @@ Example (conceptual): register line and block comment handlers for your language
 | Goal | Entry point |
 | ---- | ----------- |
 | Sublime syntax for **`.lspec`** (the DSL) | **`dsl/editor.BuildSublimeSyntaxForDSL(compiler, syntaxFile)`** |
-| Sublime syntax for **your language** (from `.lspec`) | Enable **PRAGMA** `tool.sublime`, provide **configuration-path** JSON; compile then **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** or **`bootstrap.CompileParserFromSpec(..., WithSublimeOverrides(overrideProducer))`** |
-| No overrides | Pass **`nil`** as override producer. |
-| Line/block comment or custom token behavior | Implement an override producer (e.g. **`OverrideRegistry`** + **`TextPatternBuilder`**), optionally adapt typed → string for **`RunSublimeToolchain`**. |
+| Sublime syntax for **your language** with **JSON manifest** | Enable **PRAGMA** `tool.sublime` with **output-path** and **configuration-path**; compile then **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** or **`bootstrap.CompileParserFromSpec(...)`** (no **WithSublimeToolchain**). |
+| Sublime syntax for **your language** with **in-memory manifest** | Enable **PRAGMA** `tool.sublime` with **output-path**; call **`bootstrap.CompileParserFromSpec(..., WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension))`** or **`toolchain.RunSublimeToolchainFromMemory(...)`** manually. **configuration-path** is ignored. |
+| No overrides | Pass **`nil`** as override producer (or nil **SublimeOverrideFactory** when using **WithSublimeToolchain**). |
+| Line/block comment or custom token behavior | Implement an override producer (e.g. **`OverrideRegistry`** + **`TextPatternBuilder`**), or a **SublimeOverrideFactory** that returns one; optionally adapt typed → string for the string-typed toolchain. |
 
 ---
 
@@ -290,8 +293,8 @@ Optional. Contains tool-specific configuration blocks.
 PRAGMA {
   tool.sublime {
     enable = true;
-    output_path = "path";
-    config_path = "path";
+    output-path = "path";
+    configuration-path = "path";
   }
 }
 ```

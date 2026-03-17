@@ -19,8 +19,7 @@ func TestClientDSLToolchain(t *testing.T) {
 		t.Fatalf("Client compilation failed with error: %s", err.Error())
 	}
 
-	// 2. Dispatch to the generic JSON toolchain, passing the adapted Go Overrides.
-	// We now pass the compiler so the adapter can fulfill dependencies.
+	// Dispatch to the generic JSON toolchain, passing the adapted Go Overrides.
 	err = toolchain.RunSublimeToolchain(compileResult, adaptGoOverrideProducer(compiler))
 
 	if err != nil {
@@ -29,38 +28,36 @@ func TestClientDSLToolchain(t *testing.T) {
 }
 
 // adaptGoOverrideProducer bridges the string-based toolchain to your strongly-typed Go logic.
-func adaptGoOverrideProducer(compiler *dsl.LangSpecCompiler) func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
+func adaptGoOverrideProducer(
+	compiler *dsl.LangSpecCompiler,
+) func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
 
-	// 1. Fulfill the new dependencies
+	// 1. Fulfill the dependencies
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
+	bindings := dsleditor.GetGeneratorBindings()
 
-	// Recreate the native context producer for the dynamic overrides
-	ctxCfg := toolchain.ContextProducerConfig[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
-		InvalidScope: "invalid.illegal.unexpected-token",
-		GetBaseScope: func(token dsl.LangSpecLexerTokenType) string { return scopeMap[token] },
-		GetNodeScope: func(nodeKind dsl.LangSpecParserNodeKind, token *dsl.LangSpecLexerTokenType) string {
-			binding, ok := dsleditor.GetGeneratorBindings()[nodeKind] // Assuming this is exposed
-			if !ok {
-				return ""
-			}
-			if token != nil && len(binding.TokenScopes) > 0 {
-				if ts, ok := binding.TokenScopes[*token]; ok && len(ts) > 0 {
-					return ts[0]
-				}
-			}
-			if len(binding.Scopes) > 0 {
-				return binding.Scopes[0]
-			}
-			return ""
-		},
+	// 2. Recreate the native context producer using the new SemanticManifest architecture
+	nodeBindings := make(map[dsl.LangSpecParserNodeKind]toolchain.NodeBinding[dsl.LangSpecLexerTokenType])
+	for kind, b := range bindings {
+		nodeBindings[kind] = toolchain.NodeBinding[dsl.LangSpecLexerTokenType]{
+			Scopes:      b.Scopes,
+			TokenScopes: b.TokenScopes,
+		}
 	}
-	ctxProducer := toolchain.BuildContextProducer[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](ctxCfg)
 
-	// Build the native producer WITH dependencies
+	manifest := toolchain.SemanticManifest[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
+		InvalidScope:    "invalid.illegal.unexpected-token",
+		BaseTokenScopes: scopeMap,
+		NodeBindings:    nodeBindings,
+	}
+
+	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind](manifest)
+
+	// 3. Build the native producer WITH dependencies
 	nativeProducer := dsleditor.BuildEditorOverrideProducer(ruleset, ctxProducer)
 
-	// 2. Map known string representations back to your Enums (Include Identifiers!)
+	// 4. Map known string representations back to your Enums (Include Identifiers!)
 	tokenMap := map[string]dsl.LangSpecLexerTokenType{
 		dsl.TokLineComment.String():  dsl.TokLineComment,
 		dsl.TokBlockComment.String(): dsl.TokBlockComment,
@@ -72,6 +69,7 @@ func adaptGoOverrideProducer(compiler *dsl.LangSpecCompiler) func(*editor.Editor
 		dsl.NodeParseSymbolReference.String(): dsl.NodeParseSymbolReference,
 	}
 
+	// 5. Return the bridged closure (returning a slice of VALUES)
 	return func(ctx *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
 		var nativeToken *dsl.LangSpecLexerTokenType
 		var nativeNode *dsl.LangSpecParserNodeKind
@@ -93,18 +91,17 @@ func adaptGoOverrideProducer(compiler *dsl.LangSpecCompiler) func(*editor.Editor
 			return nil
 		}
 
-		// 3. Query the native producer
+		// Query the native producer
 		nativeCtx := &dsleditor.EditorCtx{Token: nativeToken, NodeKind: nativeNode}
 		nativeOverrides := nativeProducer(nativeCtx)
 		if len(nativeOverrides) == 0 {
 			return nil
 		}
 
-		// 4. Map the results back to strings, ensuring NO DATA IS DROPPED
+		// Map the results back to strings, ensuring NO DATA IS DROPPED
 		out := make([]*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], len(nativeOverrides))
 		for i, nativeOverride := range nativeOverrides {
 
-			// Dereference nativeOverride if your nativeProducer returns pointers
 			adaptedOverride := editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]{
 				Pattern:      nativeOverride.Pattern,
 				PatternRegex: nativeOverride.PatternRegex,
