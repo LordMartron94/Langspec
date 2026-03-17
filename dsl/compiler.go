@@ -66,16 +66,14 @@ parseCompileCtx holds shared state for compiling parse rules into grammar rules.
 Passed through instead of (builder, env, grammarID, nodeKind, ruleName, counts, rootLevel, transparent).
 */
 type parseCompileCtx struct {
-	builder            *CompilerRuleBuilder
-	env                *SemanticEnv
-	grammarID          syntaxa.GrammarLabel
-	nodeKind           string
-	ruleName           string
-	counts             map[string]int
-	rootLevel          bool
-	transparent        bool
-	nestCloseToken     string           // when compiling nest body: close token to add to list element recovery (RecoverSync) so we sync to it
-	ruleBodyByRuleName map[string]*Node // rule name -> body root node; used to expand refs when nestCloseToken set
+	builder     *CompilerRuleBuilder
+	env         *SemanticEnv
+	grammarID   syntaxa.GrammarLabel
+	nodeKind    string
+	ruleName    string
+	counts      map[string]int
+	rootLevel   bool
+	transparent bool
 }
 
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
@@ -688,22 +686,19 @@ func getParserSpecInfo(
 	programRuleNode := env.Rules[programRuleName]
 	rootNodeKind := nodeSingleTokenContent(programRuleNode.FindFirstKind(NodeParseNodeName))
 
-	ruleBodyByRuleName := buildParseRuleBodyMapForCompile(env.Rules)
-
 	var entryRule CompiledRule
 	var entryOverride syntaxa.GrammarLabel
 
 	for ruleName, ruleNode := range env.Rules {
 		ctx := &parseCompileCtx{
-			builder:            ruleBuilder,
-			env:                env,
-			grammarID:          syntaxa.GrammarLabel(ruleName),
-			nodeKind:           nodeSingleTokenContent(ruleNode.FindFirstKind(NodeParseNodeName)),
-			ruleName:           ruleName,
-			counts:             make(map[string]int),
-			rootLevel:          true,
-			transparent:        ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil,
-			ruleBodyByRuleName: ruleBodyByRuleName,
+			builder:     ruleBuilder,
+			env:         env,
+			grammarID:   syntaxa.GrammarLabel(ruleName),
+			nodeKind:    nodeSingleTokenContent(ruleNode.FindFirstKind(NodeParseNodeName)),
+			ruleName:    ruleName,
+			counts:      make(map[string]int),
+			rootLevel:   true,
+			transparent: ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil,
 		}
 		compiled, override := compileParseRuleDefinition(ctx, ruleNode)
 		if ruleName == programRuleName {
@@ -1026,7 +1021,6 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) CompiledRule {
 	subCtx := *ctx
 	subCtx.rootLevel = false
-	subCtx.nestCloseToken = closeToken
 
 	if bodyNode := node.FindFirstKind(NodeParseNestBody); bodyNode != nil {
 		return compileParseExpression(&subCtx, bodyNode.RequireSingleChild())

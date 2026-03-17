@@ -17,6 +17,9 @@
 * **Action Items:**
   - [ ] **Decision:** Do we formally build LL(k) / boolean lookahead logic into `autarch/pattern` (State-space explosion risk), OR do we strictly enforce LL(1) left-factoring in the DSL?
   - [ ] If keeping `predict`, upgrade the syntax to support condition blocks instead of raw offsets, e.g., `predict { Peek(1) == TokTheme }`.
+## [P0] Clarify or Extend behavior for nesting logic.
+- **The Problem:** currently it is unclear whether the nest automatically syncs/recovers on its closing token or not. Make this clear.
+
 
 ## [P1] Grammar Import and Export Mechanism
 * **The Problem:** Monolithic `.lspec` files do not scale. Real-world languages require modularity (e.g., importing a standard regex library or a base JSON grammar into a larger config language).

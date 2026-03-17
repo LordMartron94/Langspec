@@ -2,11 +2,13 @@ package dsl
 
 import (
 	"fmt"
+	"foundation/formatting"
 	"io"
 	"langspec/validation"
 	"lexarch"
 	"strings"
 	"syntaxa"
+	"text/tabwriter"
 )
 
 // -----------------------------------------------------------------------------
@@ -241,31 +243,6 @@ func determineFallbackLineIndex(startLine, totalLines int) int {
 	return -1
 }
 
-func renderSpanMarker(startCol, endCol int) string {
-	startCol = enforceMinimumColumn(startCol)
-	endCol = enforceMinimumColumn(endCol)
-
-	if endCol < startCol {
-		endCol = startCol
-	}
-
-	// The absolute truth: Visual spaces needed = Target Column - 1
-	visualStart := startCol - 1
-	spanWidth := endCol - startCol
-
-	var sb strings.Builder
-	sb.WriteString(strings.Repeat(" ", visualStart))
-
-	if spanWidth <= 1 {
-		sb.WriteString("^")
-		return sb.String()
-	}
-
-	sb.WriteString("^")
-	sb.WriteString(strings.Repeat("~", spanWidth-1))
-	return sb.String()
-}
-
 func enforceMinimumColumn(col int) int {
 	if col < 1 {
 		return 1
@@ -316,21 +293,66 @@ func RenderParseTrace[TToken any](
 
 	fmt.Fprintln(w, "\n===== PARSE TRACE =====")
 
+	// Initialize tabwriter for aligned columns: minwidth, tabwidth, padding, padchar, flags
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+
+	fmt.Fprintln(tw, "IDX\tCUR\tRULE\tOK\tCONS\tNODE\tRAW / LOGICAL\tRECOVERY\tSYNC SET")
+	fmt.Fprintln(tw, "---\t---\t----\t--\t----\t----\t-------------\t--------\t--------")
+
 	for i, ev := range trace.Events {
-		fmt.Fprintf(w,
-			"%04d | cur=%d | raw=%s | logical=%s | ok=%v | cons=%v | node=%v | rule=%s\n",
+		ok := "Y"
+		if !ev.RuleSucceeded {
+			ok = "N"
+		}
+		cons := "Y"
+		if !ev.Consumed {
+			cons = "N"
+		}
+		node := "Y"
+		if !ev.NodeReturned {
+			node = "N"
+		}
+
+		tokens := fmt.Sprintf("%s / %s", formatToken(ev.RawToken), formatToken(ev.LogicalToken))
+		recStatus := formatRecoveryStatus(ev.RecoveryAttempted, ev.Recovered, ev.LandedOnOurs)
+		syncSet := formatting.FormatSlice(ev.RecoveryTokenSet, formatting.FormatSliceOptions[TToken]{
+			FormatItem: func(index int, value TToken) string {
+				return formatToken(value)
+			},
+			Prefix:       "[",
+			Suffix:       "]",
+			IncludeIndex: true,
+		})
+
+		fmt.Fprintf(tw,
+			"%04d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			i,
 			ev.Cursor,
-			formatToken(ev.RawToken),
-			formatToken(ev.LogicalToken),
-			ev.RuleSucceeded,
-			ev.Consumed,
-			ev.NodeReturned,
-			string(ev.RuleName),
+			ev.RuleName,
+			ok,
+			cons,
+			node,
+			tokens,
+			recStatus,
+			syncSet,
 		)
 	}
 
+	tw.Flush()
 	fmt.Fprintln(w, "======================")
+}
+
+func formatRecoveryStatus(attempted, recovered, landed bool) string {
+	if !attempted {
+		return "-"
+	}
+	if recovered {
+		if landed {
+			return "RECOVERED (SYNCED)"
+		}
+		return "RECOVERED (DELEGATED)"
+	}
+	return "FAILED"
 }
 
 func RenderLSTDump(w io.Writer, dump string) {
