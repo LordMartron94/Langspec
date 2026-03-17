@@ -25,7 +25,10 @@ type SemanticManifest[TToken, TNodeKind comparable] struct {
 	NodeBindings    map[TNodeKind]NodeBinding[TToken] `json:"node_bindings,omitempty"`
 }
 
-// SublimeConfiguration wraps the manifest alongside editor-specific file metadata.
+// SublimeConfiguration wraps the manifest alongside editor-specific file
+// metadata (file extensions, scope extension). This is the structure decoded
+// from the JSON file at configuration-path when using the JSON-driven
+// toolchain (RunSublimeToolchain).
 type SublimeConfiguration[TToken, TNodeKind comparable] struct {
 	FileExtensions []string                            `json:"file_extensions,omitempty"`
 	ScopeExtension string                              `json:"scope_extension,omitempty"`
@@ -35,8 +38,19 @@ type SublimeConfiguration[TToken, TNodeKind comparable] struct {
 // ----------------------------------------------------------------- JSON LOADER
 
 /*
-LoadSublimeConfigFromJSON reads a JSON file from disk and parses it into a strongly-typed Go configuration.
-This allows users to share manifests natively without writing Go code.
+LoadSublimeConfigFromJSON reads a JSON file from disk and parses it into a
+strongly-typed SublimeConfiguration. Used by RunSublimeToolchain when the
+manifest is supplied via PRAGMA configuration-path.
+
+Use cases:
+- Loading a shared Sublime config file (e.g. in repo) for the JSON-driven toolchain.
+- Decoding a manifest and file metadata without writing Go struct literals.
+
+Prerequisites:
+- configPath must point to a readable file containing valid JSON matching SublimeConfiguration (scope_manifest, file_extensions, scope_extension).
+
+Edge cases:
+- Returns an error if the file cannot be read or JSON is invalid or does not match the expected structure.
 */
 func LoadSublimeConfigFromJSON(configPath string) (*SublimeConfiguration[string, string], error) {
 	data, err := system.FileReadAllBytes(configPath)
@@ -55,8 +69,22 @@ func LoadSublimeConfigFromJSON(configPath string) (*SublimeConfiguration[string,
 // ----------------------------------------------------------------- CONTEXT PRODUCER
 
 /*
-BuildContextProducerFromManifest creates a standard context producer directly from a static manifest.
-This replaces the need for clients to write custom GetBaseScope/GetNodeScope callbacks.
+BuildContextProducerFromManifest creates a context producer that maps editor
+context (token, node kind, invalid/nest state) to SublimeContext using the
+given manifest. Used by both JSON-driven and in-memory toolchain paths to build
+EditorIRConfiguration.
+
+Use cases:
+- Building the context producer when using a SemanticManifest (from JSON or in-memory).
+- Avoiding custom GetBaseScope/GetNodeScope callbacks when manifest data is sufficient.
+
+Prerequisites:
+- manifest must have BaseTokenScopes and/or NodeBindings populated as needed for the language.
+
+Edge cases:
+- Invalid context yields SublimeContext with manifest.InvalidScope.
+- Nest context yields a meta-scope derived from the nest label.
+- Unmatched token/node yields zero SublimeContext.
 */
 func BuildContextProducerFromManifest[
 	TObservation cmp.Ordered,

@@ -12,6 +12,7 @@ import (
 	"syntaxa"
 )
 
+// PRAGMA keys for the Sublime toolchain (tool.sublime { ... } in .lspec).
 const (
 	SublimeToolName             = "sublime"
 	SublimeOutputPathKey        = "output-path"
@@ -21,11 +22,16 @@ const (
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
 
+// SublimeContext carries the scope and optional meta-scope used when building
+// Sublime Text syntax rules from the editor IR.
 type SublimeContext struct {
 	Scope     string
 	MetaScope string
 }
 
+// SublimeRunnerConfig holds the lexer, grammar, IR config, file extensions,
+// base scope, output path, and scope suffix for a single Sublime generator run.
+// Used by RunSublimeGenerator after the toolchain has built the editor IR.
 type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	LexerRuleset   *lexarch.LexingRuleset[TObservation, TToken, TTokenRole]
 	GrammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
@@ -39,8 +45,24 @@ type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerSta
 // ----------------------------------------------------------------- ENTRY POINTS
 
 /*
-RunSublimeToolchain is the legacy JSON-driven entry point (used by LangSpec compiling itself).
-It reads the configuration path from the pragma and loads the manifest from disk.
+RunSublimeToolchain is the JSON-driven entry point for the Sublime toolchain. It
+reads the Sublime PRAGMA (enable, output-path, configuration-path), loads the
+manifest from the file at configuration-path via LoadSublimeConfigFromJSON,
+then runs the toolchain.
+
+Use cases:
+- Generating Sublime syntax when the manifest is defined in a JSON file (e.g. shared config in repo).
+- LangSpec compiling itself or other specs that do not use bootstrap.WithSublimeToolchain.
+- One-off or script-driven generation where no in-memory manifest is supplied.
+
+Prerequisites:
+- compileResult must contain a tool.sublime PRAGMA with enable = true, output-path set, and configuration-path set.
+- The file at configuration-path must exist and be valid JSON matching SublimeConfiguration.
+
+Edge cases:
+- Returns nil without error if no tool.sublime PRAGMA is present or enable is not "true".
+- overrideProducer may be nil; a no-op producer is used internally so overrides are optional.
+- Returns an error if configuration-path is missing, file read fails, or JSON is invalid.
 */
 func RunSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
@@ -80,8 +102,23 @@ func RunSublimeToolchain(
 }
 
 /*
-RunSublimeToolchainFromMemory is the pure Go entry point (used by bootstrapped languages).
-It bypasses JSON loading and uses the provided SemanticManifest directly.
+RunSublimeToolchainFromMemory is the in-memory entry point for the Sublime
+toolchain. It runs the pipeline using the provided SemanticManifest,
+outputPath, fileExtensions, and scopeExtension without reading any
+configuration file.
+
+Use cases:
+- Bootstrapped languages where the host supplies manifest and metadata in Go via WithSublimeToolchain.
+- Typed manifests (e.g. from a compiler) that are not serialized to JSON.
+- Avoiding file I/O when the manifest is already in memory.
+
+Prerequisites:
+- compileResult must be a valid LangSpecCompileResult from a successful compile.
+- outputPath, fileExtensions, and scopeExtension must be set as desired for the generated syntax file.
+
+Edge cases:
+- overrideProducer may be nil; a no-op producer is used internally.
+- Does not read or validate PRAGMA; the caller (e.g. bootstrap) is responsible for enable and output-path.
 */
 func RunSublimeToolchainFromMemory(
 	compileResult *dsl.LangSpecCompileResult,
@@ -103,6 +140,9 @@ func RunSublimeToolchainFromMemory(
 
 // ----------------------------------------------------------------- CORE EXECUTION
 
+// executeSublimeToolchain is the shared implementation for both manifest sources.
+// It builds the editor IR (context producer from manifest, optional override producer),
+// then runs the Sublime generator. Called by RunSublimeToolchain and RunSublimeToolchainFromMemory.
 func executeSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
@@ -146,6 +186,20 @@ func executeSublimeToolchain(
 	return RunSublimeGenerator(runnerCfg)
 }
 
+/*
+RunSublimeGenerator builds the editor IR from the given runner config and writes
+the .sublime-syntax file to cfg.OutputPath.
+
+Use cases:
+- Called internally by executeSublimeToolchain after the IR config is built.
+- Direct use when the caller has already constructed SublimeRunnerConfig (e.g. dsl/editor with a typed manifest).
+
+Prerequisites:
+- cfg must be fully populated: LexerRuleset, GrammarPackage, IRConfig, FileExtensions, BaseScope, OutputPath, ScopeSuffix.
+
+Edge cases:
+- Returns an error if editor IR creation or file write fails.
+*/
 func RunSublimeGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
 	cfg *SublimeRunnerConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) error {

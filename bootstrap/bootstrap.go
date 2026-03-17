@@ -12,16 +12,18 @@ import (
 
 // ----------------------------------------------------------------- CONFIGURATION
 
-// SublimeOverrideFactory allows the host to build overrides using compiled dependencies
+// SublimeOverrideFactory is a function that, given the compiled ruleset and
+// context producer, returns an override producer for the Sublime toolchain. Used
+// when WithSublimeToolchain is set so the host can supply token overrides (e.g.
+// line/block comment, embedded regions) from typed Go code.
 type SublimeOverrideFactory func(
 	ruleset *lexarch.LexingRuleset[rune, string, string],
 	ctxProducer func(ctx *editor.EditorCtx[rune, string, string, string, string]) toolchain.SublimeContext,
 ) func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]
 
-/*
-ParserCompiler holds configuration for the bootstrap pipeline.
-Built by buildConfig from CompileParserFromSpec options.
-*/
+// ParserCompiler holds configuration for the bootstrap pipeline (spec file,
+// allocator, diagnostic sink, optional Sublime in-memory manifest and factory).
+// Built by buildConfig from CompileParserFromSpec options; not used directly by callers.
 type ParserCompiler struct {
 	specFile       string
 	allocFn        memarch.AllocationFn
@@ -42,8 +44,22 @@ func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
 }
 
 /*
-WithSublimeToolchain injects the in-memory manifest and override factory.
-When used, the Sublime toolchain will use this strongly-typed Go data.
+WithSublimeToolchain configures the bootstrap to use an in-memory Sublime
+manifest and override factory. When present, runToolchains uses
+toolchain.RunSublimeToolchainFromMemory instead of loading a JSON config from
+PRAGMA configuration-path.
+
+Use cases:
+- Bootstrapped languages with a typed manifest (e.g. from a compiler) and custom overrides in Go.
+- Avoiding a separate JSON config file when the manifest is built in code.
+- Supplying an override factory that has access to compiled ruleset and context producer.
+
+Prerequisites:
+- The .lspec PRAGMA must still include tool.sublime with enable = true and output-path set.
+- manifest, fileExtensions, and scopeExtension are used as-is; configuration-path in PRAGMA is ignored.
+
+Edge cases:
+- factory may be nil; then no overrides are applied beyond what the manifest provides.
 */
 func WithSublimeToolchain(
 	manifest toolchain.SemanticManifest[string, string],
@@ -62,7 +78,15 @@ func WithSublimeToolchain(
 // ----------------------------------------------------------------- BOOTSTRAP PIPELINE
 
 /*
-CompileParserFromSpec compiles a .lspec file and returns a LangParser ready to parse source.
+CompileParserFromSpec compiles a .lspec file and returns a LangParser ready to
+parse source. It runs the DSL compiler, then toolchains (e.g. Sublime when
+enabled in PRAGMA), then builds the parser from the compile result.
+
+Prerequisites:
+- specFile must be a path to a valid .lspec file; alloc must be a valid allocation function.
+
+Edge cases:
+- If WithSublimeToolchain was not used, the Sublime toolchain runs only when PRAGMA enables it and supplies configuration-path (JSON manifest). If WithSublimeToolchain was used, the in-memory manifest is used and configuration-path is ignored.
 */
 func CompileParserFromSpec(
 	specFile string,
