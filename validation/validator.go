@@ -1,3 +1,7 @@
+// Package validation provides LST (Lossless Syntax Tree) validation stages and reporting.
+// Validation is semantic and imperative; the .lspec grammar has no construct for defining
+// validation rules. Callers configure stages and optional run state (typed via TState),
+// then run the validator on a parsed LST.
 package validation
 
 import (
@@ -7,6 +11,7 @@ import (
 	"syntaxa"
 )
 
+/* ValidationSeverity indicates the severity of a validation entry. */
 type ValidationSeverity uint8
 
 const (
@@ -34,36 +39,25 @@ func (v ValidationSeverity) String() string {
 	}
 }
 
-/* ValidationEntry is a single validation error. */
+/* ValidationEntry is a single validation finding (code, message, severity, node span). */
 type ValidationEntry[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
-	// Stable identifier (for tooling, tests, suppression, docs)
-	Code string
-
-	// Human message
-	Message string
-
-	// How serious this is
+	Code     string
+	Message  string
 	Severity ValidationSeverity
-
-	// Where it happened (prefer LST node — spans can be derived)
-	Node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
-
-	// Optional explicit span override (for tokens, ranges, etc.)
-	Start int
-	End   int
-
-	// Optional extra context
-	Notes []string
+	Node     *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	Start    int
+	End      int
+	Notes    []string
 }
 
-/* StageValidationResult encapsulates a result of stage validation. */
+/* StageValidationResult holds all entries produced by one validation stage. */
 type StageValidationResult[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
 	StageName string
 	Order     int
 	Entries   []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]
 }
 
-/* ValidationEntries encapsulates the errors during validation. */
+/* ValidationEntries aggregates results from all stages run in a single LSTValidatorRun. */
 type ValidationEntries[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
 	Results []StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind]
 }
@@ -74,40 +68,33 @@ func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) getStag
 			return &v.Results[i]
 		}
 	}
-
 	return nil
 }
 
-func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) beginStage(stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]) {
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) beginStage(stageName string, order int) {
 	v.Results = append(v.Results, StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind]{
-		StageName: stage.Name,
-		Order:     stage.Order,
+		StageName: stageName,
+		Order:     order,
 		Entries:   []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]{},
 	})
 }
 
-/*
-GetStageEntries returns the entries for a given stage.
-
-If the stage does not exist or doesn't have a result struct associated, it will return nil.
-*/
+/* GetStageEntries returns all entries for the given stage name, or nil if the stage was not run. */
 func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) GetStageEntries(stageName string) []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind] {
 	if result := v.getStageResult(stageName); result != nil {
 		return result.Entries
 	}
-
 	return nil
 }
 
-func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) reportForStage(stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind], entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]) {
-	result := v.getStageResult(stage.Name)
+func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) reportForStage(stageName string, entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]) {
+	result := v.getStageResult(stageName)
 	result.Entries = append(result.Entries, entry)
 }
 
-/* CountBySeverity shows the amount of entries having this severity. */
+/* CountBySeverity returns the number of entries with the given severity across all stages. */
 func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) CountBySeverity(severity ValidationSeverity) int {
 	amount := 0
-
 	for _, result := range v.Results {
 		for _, entry := range result.Entries {
 			if entry.Severity == severity {
@@ -115,11 +102,10 @@ func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) CountBy
 			}
 		}
 	}
-
 	return amount
 }
 
-/* HasErrors checks if there are errors (including fatals). */
+/* HasErrors returns true if any entry has severity ERROR or higher. */
 func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasErrors() bool {
 	for _, result := range v.Results {
 		for _, entry := range result.Entries {
@@ -128,11 +114,10 @@ func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasErro
 			}
 		}
 	}
-
 	return false
 }
 
-/* HasFatal checks if there are fatal errors. */
+/* HasFatal returns true if any entry has severity FATAL. */
 func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasFatal() bool {
 	for _, result := range v.Results {
 		for _, entry := range result.Entries {
@@ -141,13 +126,13 @@ func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasFata
 			}
 		}
 	}
-
 	return false
 }
 
-/* LSTValidationStageContext encapsulates the available functions for a validation stage. */
-type LSTValidationStageContext[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+/* LSTValidationStageContext is passed to each stage processor; it holds the LST root, typed run state, and report helpers. */
+type LSTValidationStageContext[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any] struct {
 	RootNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	RunState TState
 
 	NewValidationEntry func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]
 
@@ -160,46 +145,32 @@ type LSTValidationStageContext[TObservation cmp.Ordered, TToken, TTokenRole, TNo
 	ReportValidationEntry func(entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind])
 }
 
-/*
-LSTValidationStageProcessor processes a single validation stage.
-
-Errors encountered during validation should be reported using the context.
-*/
-type LSTValidationStageProcessor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
-	ctx *LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind],
+/* LSTValidationStageProcessor is the function type for a single validation stage; it receives the context including RunState. */
+type LSTValidationStageProcessor[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any] func(
+	ctx *LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind, TState],
 )
 
-/*
-LSTValidationStageSummarizer summarizes the validation errors from this stage.
-
-This is commonly used for logging and user feedback.
-*/
-type LSTValidationStageSummarizer[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] func(
-	stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind],
+/* LSTValidationStageSummarizer is called after each stage with the stage and its entries (e.g. for logging). */
+type LSTValidationStageSummarizer[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any] func(
+	stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	entries []ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind],
 )
 
-/*
-LSTValidationStage encapsulates a single validation stage.
-
-Stages with a higher order are executed later (stage 0 executes before stage 100)
-*/
-type LSTValidationStage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
+/* LSTValidationStage defines one validation stage (name, order, processor). */
+type LSTValidationStage[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any] struct {
 	Name        string
 	Description string
-
-	Order int
-
-	Processor LSTValidationStageProcessor[TObservation, TToken, TTokenRole, TNodeKind]
+	Order       int
+	Processor   LSTValidationStageProcessor[TObservation, TToken, TTokenRole, TNodeKind, TState]
 }
 
-/* LSTValidationStageCreate creates an LSTValidationStage instance. */
-func LSTValidationStageCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable](
+/* LSTValidationStageCreate builds a validation stage with the given name, description, order, and processor. */
+func LSTValidationStageCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any](
 	name, description string,
 	order int,
-	processor LSTValidationStageProcessor[TObservation, TToken, TTokenRole, TNodeKind],
-) *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind] {
-	return &LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]{
+	processor LSTValidationStageProcessor[TObservation, TToken, TTokenRole, TNodeKind, TState],
+) *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState] {
+	return &LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState]{
 		Name:        name,
 		Description: description,
 		Processor:   processor,
@@ -207,57 +178,52 @@ func LSTValidationStageCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNod
 	}
 }
 
-// -------------------------------------------------------------------- CONFIG
-
-/* LSTValidatorConfiguration encapsulates the configuration for the LST validator. */
-type LSTValidatorConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable] struct {
-	stageReporter LSTValidationStageSummarizer[TObservation, TToken, TTokenRole, TNodeKind]
-
-	stages []*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]
+/* LSTValidatorConfiguration holds the list of stages and optional stage reporter; parameterized by LST types and run state type. */
+type LSTValidatorConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any] struct {
+	stageReporter LSTValidationStageSummarizer[TObservation, TToken, TTokenRole, TNodeKind, TState]
+	stages        []*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState]
 }
 
-/* LSTValidatorConfigurationCreate creates a validation config instance. */
-func LSTValidatorConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable]() *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind] {
-	return &LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind]{
+/* LSTValidatorConfigurationCreate returns a new validator configuration with no stages. */
+func LSTValidatorConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any]() *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState] {
+	return &LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState]{
 		stageReporter: nil,
-		stages:        make([]*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind], 0),
+		stages:        make([]*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState], 0),
 	}
 }
 
-/* WithStageReporter sets the stage reporter. */
-func (a *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind]) WithStageReporter(
-	stageReporter LSTValidationStageSummarizer[TObservation, TToken, TTokenRole, TNodeKind],
-) *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind] {
+/* WithStageReporter sets the optional summarizer invoked after each stage. */
+func (a *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState]) WithStageReporter(
+	stageReporter LSTValidationStageSummarizer[TObservation, TToken, TTokenRole, TNodeKind, TState],
+) *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState] {
 	a.stageReporter = stageReporter
 	return a
 }
 
-/* WithStages adds stages to the configuration. */
-func (a *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind]) WithStages(
-	stages ...*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind],
-) *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind] {
+/* WithStages appends the given stages to the configuration (order determines execution). */
+func (a *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState]) WithStages(
+	stages ...*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState],
+) *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState] {
 	a.stages = append(a.stages, stages...)
 	return a
 }
 
-func (a *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind]) getSortedStages() []*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind] {
-	sorted := extensions.SortedCopyShallow(a.stages, func(a, b *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind]) int {
+func (a *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState]) getSortedStages() []*LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState] {
+	return extensions.SortedCopyShallow(a.stages, func(a, b *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState]) int {
 		return cmp.Compare(a.Order, b.Order)
 	})
-	return sorted
 }
-
-// -------------------------------------------------------------------- VALIDATOR
 
 /*
 LSTValidatorRun runs a validation configuration on an LST.
-
-It returns the entries and an error if one of the stages reports one or more fatal errors.
-If the stage reporter is not nil, it will also call that for each stage.
+stageFilter may be nil to run all stages; otherwise only stages for which it returns true run.
+runState is passed to each stage's processor as ctx.RunState (type TState). Stop on first fatal.
 */
-func LSTValidatorRun[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable](
-	configuration *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind],
+func LSTValidatorRun[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any](
+	configuration *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState],
 	rootNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	stageFilter func(stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState]) bool,
+	runState TState,
 ) (*ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind], error) {
 	validationEntries := &ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]{
 		Results: make([]StageValidationResult[TObservation, TToken, TTokenRole, TNodeKind], 0),
@@ -265,9 +231,13 @@ func LSTValidatorRun[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind com
 
 	validationStages := configuration.getSortedStages()
 	for _, stage := range validationStages {
-		validationEntries.beginStage(stage)
+		if stageFilter != nil && !stageFilter(stage) {
+			continue
+		}
 
-		validationCtx := buildValidationContextForStage(stage, rootNode, validationEntries)
+		validationEntries.beginStage(stage.Name, stage.Order)
+
+		validationCtx := buildValidationContextForStage(stage.Name, rootNode, validationEntries, runState)
 		stage.Processor(validationCtx)
 
 		if configuration.stageReporter != nil {
@@ -288,11 +258,13 @@ func buildValidationContextForStage[
 	TToken,
 	TTokenRole,
 	TNodeKind comparable,
+	TState any,
 ](
-	stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind],
+	stageName string,
 	rootNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
 	sharedValidationEntries *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind],
-) *LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind] {
+	runState TState,
+) *LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind, TState] {
 	newValidationEntry := func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind] {
 		return ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]{
 			Code:     code,
@@ -303,31 +275,27 @@ func buildValidationContextForStage[
 	}
 
 	reportValidationEntry := func(entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]) {
-		sharedValidationEntries.reportForStage(stage, entry)
+		sharedValidationEntries.reportForStage(stageName, entry)
 	}
 
-	return &LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind]{
+	return &LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind, TState]{
 		RootNode:           rootNode,
+		RunState:           runState,
 		NewValidationEntry: newValidationEntry,
 		ReportDiagnostic: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_DIAGNOSTIC, node)
-			reportValidationEntry(entry)
+			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_DIAGNOSTIC, node))
 		},
 		ReportInfo: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_INFO, node)
-			reportValidationEntry(entry)
+			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_INFO, node))
 		},
 		ReportWarning: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_WARNING, node)
-			reportValidationEntry(entry)
+			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_WARNING, node))
 		},
 		ReportError: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_ERROR, node)
-			reportValidationEntry(entry)
+			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_ERROR, node))
 		},
 		ReportFatal: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
-			entry := newValidationEntry(code, message, VALIDATION_SEVERITY_FATAL, node)
-			reportValidationEntry(entry)
+			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_FATAL, node))
 		},
 		ReportValidationEntry: reportValidationEntry,
 	}

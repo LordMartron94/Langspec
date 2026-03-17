@@ -22,9 +22,9 @@ type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerT
 type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
 type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
-type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 
-type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 type Node = syntaxa.SyntaxaLSTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
@@ -40,7 +40,7 @@ func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 /* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
-	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 	diagnosticSink            *LangSpecDiagnosticSink
 }
 
@@ -52,7 +52,7 @@ Stage reporter is optional. DiagnosticSink is optional; when set, compilation di
 */
 func LangSpecCompilerConfigurationCreate(
 	scratchAllocationFunction memarch.AllocationFn,
-	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
+	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage],
 ) *LangSpecCompilerConfiguration {
 	return &LangSpecCompilerConfiguration{
 		scratchAllocationFunction: scratchAllocationFunction,
@@ -107,7 +107,7 @@ type LangSpecCompiler struct {
 	languageSpec LanguageSpec
 
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 
 	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 	programRule   Rule
@@ -127,7 +127,8 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	)
 	parser := langspec.LangParserCreate(langParserConfig)
 
-	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]()
+	// Register ALL stages (0 through 4) in the unified config
+	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]()
 	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
 		getValidationStages()...,
 	)
@@ -187,15 +188,18 @@ func LangSpecCompilerCompile(
 
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
 		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))
-		err = fmt.Errorf(
-			"langspec parse failed with %d syntax errors",
-			len(syntaxErrors.Errors),
-		)
+		err = fmt.Errorf("langspec parse failed with %d syntax errors", len(syntaxErrors.Errors))
 	}
 
-	// Validation entries
 	if !syntaxErrors.HasErrors() {
-		validationEntries, validationErr := validation.LSTValidatorRun(compiler.validatorConfig, rootNode)
+		validationEntries, validationErr := validation.LSTValidatorRun(
+			compiler.validatorConfig,
+			rootNode,
+			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]) bool {
+				return stage.Order < 4
+			},
+			(*GrammarPackage)(nil),
+		)
 		if validationErr != nil {
 			err = validationErr
 		}
@@ -222,18 +226,53 @@ func LangSpecCompilerCompile(
 
 	if err == nil {
 		compiled := compileTree(compiler, result.RootNode)
-		result.LanguageName = compiled.dslName
-		result.LanguageVersion = compiled.dslVersion
 
-		result.CompiledLexerSpec = compiled.lexerSpec
-		result.CompiledParserSpec = compiled.parserSpec
-		result.CompiledGrammarPackage = compiled.grammarPackage
+		postValidationEntries, postValidationErr := validation.LSTValidatorRun(
+			compiler.validatorConfig,
+			rootNode,
+			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]) bool {
+				return stage.Order >= 4
+			},
+			&compiled.grammarPackage,
+		)
 
-		result.CompiledToolPragmas = compiled.toolPragmas
+		if postValidationErr != nil {
+			err = postValidationErr
+		}
 
-		result.TargetLangspecVersion = compiled.targetLangspecVersion
+		if result.ValidationEntries == nil {
+			result.ValidationEntries = postValidationEntries
+		} else if postValidationEntries != nil {
+			result.ValidationEntries.Results = append(result.ValidationEntries.Results, postValidationEntries.Results...)
+		}
 
-		result.EOFToken = compiled.eofToken
+		if postValidationEntries != nil && len(postValidationEntries.Results) > 0 {
+			renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, lexarch.ColumnAdvanceRune(4))
+
+			errorAmount := 0
+			for _, stage := range postValidationEntries.Results {
+				for _, entry := range stage.Entries {
+					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
+						errorAmount++
+					}
+				}
+			}
+
+			if errorAmount > 0 {
+				err = fmt.Errorf("compilation failed with %d grammar safety errors", errorAmount)
+			}
+		}
+
+		if err == nil {
+			result.LanguageName = compiled.dslName
+			result.LanguageVersion = compiled.dslVersion
+			result.CompiledLexerSpec = compiled.lexerSpec
+			result.CompiledParserSpec = compiled.parserSpec
+			result.CompiledGrammarPackage = compiled.grammarPackage
+			result.CompiledToolPragmas = compiled.toolPragmas
+			result.TargetLangspecVersion = compiled.targetLangspecVersion
+			result.EOFToken = compiled.eofToken
+		}
 	}
 
 	return result, err

@@ -5,11 +5,13 @@ import (
 	"langspec/validation"
 	"strconv"
 	"strings"
+	"syntaxa"
+	"syntaxa/lowering"
 )
 
 // ------------------------------------------------------------- TYPES
 
-type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 
 type ValidationCode string
 
@@ -42,6 +44,7 @@ const (
 	VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION   ValidationCode = "V_PAR006"
 	VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION        ValidationCode = "V_PAR007"
 	VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT ValidationCode = "V_PAR008"
+	VALIDATION_FIRST_SET_CONFLICT                    ValidationCode = "V_PAR009"
 
 	VALIDATION_DUPLICATE_PRATT_EXPR             ValidationCode = "V_PRA001"
 	VALIDATION_PRATT_UNRESOLVED_TOKEN           ValidationCode = "V_PRA002"
@@ -61,8 +64,8 @@ const programRuleName = "PROGRAM"
 
 // ------------------------------------------------------------- STAGES REGISTRATION
 
-func getValidationStages() []*ValidationStage {
-	return []*ValidationStage{
+func getValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage] {
+	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]{
 		{
 			Name:        "Symbol Binding & Environment",
 			Description: "Builds semantic environment, checks duplicates, scoping, and reference resolution.",
@@ -88,10 +91,10 @@ func getValidationStages() []*ValidationStage {
 			Processor:   processPatternSemantics,
 		},
 		{
-			Name:        "Parser Safety",
-			Description: "Detects infinite loops and left-recursion in the parse section.",
+			Name:        "Grammar Safety & Ambiguity",
+			Description: "Analyzes lowered grammar for left-recursion, unbounded nullable repetitions, and FIRST-set conflicts.",
 			Order:       4,
-			Processor:   processParseSafety,
+			Processor:   processGrammarSafety,
 		},
 	}
 }
@@ -233,9 +236,6 @@ func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[stri
 	}
 }
 
-// markPrattOperatorTargetReferences validates NodeParseSymbolReference nodes that are pratt prefix/infix/postfix operator targets.
-// Only refs that are direct children of NodePrattOperatorDef are validated; identifier-mapping segments use NodeParseSymbolReference too.
-// Operator targets accept either a token or an expression; tokens are marked used for unused-token reporting.
 func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
 	prattSection := ctx.RootNode.FindFirstKind(NodePrattSection)
 	if prattSection == nil {
@@ -256,7 +256,7 @@ func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, use
 		case parseRefSymbolToken:
 			used[name] = true
 		case parseRefSymbolRule, parseRefSymbolPratt:
-			// No-op: valid targets that aren't tokens don't need to be marked 'used'
+			// No-op
 		default:
 			ctx.ReportError(
 				VALIDATION_PRATT_UNRESOLVED_OPERATOR_TARGET.String(),
@@ -498,56 +498,182 @@ func validateRepetitionBounds(ctx *ValidationCtx) {
 	}
 }
 
-// ------------------------------------------------------------- PARSER SAFETY (STAGE 4)
+// ------------------------------------------------------------- GRAMMAR SEMANTICS (POST-COMPILATION) (STAGE 4)
 
-func processParseSafety(ctx *ValidationCtx) {
+func processGrammarSafety(ctx *ValidationCtx) {
+	if ctx.RunState == nil {
+		ctx.ReportFatal("V_INTERNAL", "engine error: grammar package missing in validation run state", ctx.RootNode)
+		return
+	}
+	pkg := ctx.RunState
+
+	analysis := lowering.GetAnalysis(pkg)
+	if analysis == nil {
+		ctx.ReportFatal("V_INTERNAL", "engine error: failed to generate grammar analysis", ctx.RootNode)
+		return
+	}
+
+	checkGrammarLeftRecursion(ctx, pkg, analysis)
+	checkGrammarUnboundedOptional(ctx, pkg, analysis)
+	checkGrammarChoiceConflicts(ctx, pkg, analysis)
+}
+
+func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
-	if parseSection == nil {
-		return
-	}
 
-	ruleBodies := buildParseRuleBodyMap(parseSection)
-	if len(ruleBodies) == 0 {
-		return
-	}
-
-	env := BuildSemanticEnv(ctx.RootNode, nil)
-	ruleNullable := computeParseRuleNullable(ruleBodies)
-	firstRefs := computeParseRuleFirstRefs(ruleBodies, ruleNullable, env)
-
-	validateLeftRecursion(ctx, parseSection, firstRefs)
-	validateUnboundedOptionalRepetition(ctx, parseSection, ruleBodies, ruleNullable)
-}
-
-func validateLeftRecursion(ctx *ValidationCtx, parseSection *Node, firstRefs map[string]map[string]struct{}) {
-	cycles := findLeftRecursionCycles(firstRefs)
-	for _, ruleName := range cycles {
-		ruleNode := findParseRuleByName(parseSection, ruleName)
-		if ruleNode != nil {
-			body := ruleNode.FindFirstKind(NodeParseRuleBody)
-			msg := fmt.Sprintf("parse rule '%s' is left-recursive; parser may hang or stack overflow", ruleName)
-			ctx.ReportFatal(VALIDATION_PARSE_LEFT_RECURSION.String(), msg, body)
+	for ruleName, rootGrammar := range pkg.Grammars {
+		if hasLeftRecursion(rootGrammar, pkg, analysis, make(map[syntaxa.GrammarLabel]bool), ruleName) {
+			ruleNode := findParseRuleByName(parseSection, string(ruleName))
+			nodeToReport := ctx.RootNode
+			if ruleNode != nil {
+				if body := ruleNode.FindFirstKind(NodeParseRuleBody); body != nil {
+					nodeToReport = body
+				}
+			}
+			msg := fmt.Sprintf("parse rule '%s' is left-recursive; top-down parser will infinite loop", ruleName)
+			ctx.ReportFatal(VALIDATION_PARSE_LEFT_RECURSION.String(), msg, nodeToReport)
 		}
 	}
 }
 
-func validateUnboundedOptionalRepetition(ctx *ValidationCtx, parseSection *Node, ruleBodies map[string]*Node, ruleNullable map[string]bool) {
-	msg := "unbounded repetition of an optional or nullable expression causes an infinite parser loop"
+func hasLeftRecursion(g *syntaxa.Grammar[string, string], pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string], visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
+	if g == nil {
+		return false
+	}
+	switch g.Kind {
+	case syntaxa.GReference:
+		if g.ReferenceTarget == target {
+			return true
+		}
+		if visited[g.ReferenceTarget] {
+			return false // Prevent infinite loop in mutually recursive non-target rules
+		}
+		visited[g.ReferenceTarget] = true
+		targetRule := pkg.Grammars[g.ReferenceTarget]
+		res := hasLeftRecursion(targetRule, pkg, analysis, visited, target)
+		visited[g.ReferenceTarget] = false
+		return res
+	case syntaxa.GToken:
+		return false
+	case syntaxa.GNest:
+		return false // Open token consumes input immediately
+	case syntaxa.GConcat:
+		for _, child := range g.Children {
+			if hasLeftRecursion(child, pkg, analysis, visited, target) {
+				return true
+			}
+			// If child is not nullable, it consumes input; we can't left-recurse past it.
+			if child.NodePath != nil {
+				if !analysis.Nullable[syntaxa.NodeKeyFromPath(*child.NodePath)] {
+					break
+				}
+			}
+		}
+		return false
+	case syntaxa.GChoice:
+		for _, child := range g.Children {
+			if hasLeftRecursion(child, pkg, analysis, visited, target) {
+				return true
+			}
+		}
+		return false
+	case syntaxa.GRepeat, syntaxa.GOptional:
+		if len(g.Children) > 0 {
+			return hasLeftRecursion(g.Children[0], pkg, analysis, visited, target)
+		}
+		return false
+	}
+	return false
+}
 
-	for _, node := range parseSection.FindAllKind(NodeParseStar) {
-		if children := node.Children(); len(children) > 0 && parseExprNullable(children[0], ruleNullable, ruleBodies) {
-			ctx.ReportError(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
+func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
+	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
+	visited := make(map[syntaxa.GrammarKey]bool)
+
+	var walk func(g *syntaxa.Grammar[string, string])
+	walk = func(g *syntaxa.Grammar[string, string]) {
+		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
+			return
+		}
+		visited[g.GrammarKey] = true
+
+		if g.Kind == syntaxa.GRepeat && g.Max == nil {
+			if len(g.Children) > 0 && g.Children[0].NodePath != nil {
+				childKey := syntaxa.NodeKeyFromPath(*g.Children[0].NodePath)
+				if analysis.Nullable[childKey] {
+					ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
+					ruleNode := findParseRuleByName(parseSection, string(ruleName))
+					nodeToReport := ctx.RootNode
+					if ruleNode != nil {
+						nodeToReport = ruleNode
+					}
+					msg := fmt.Sprintf("unbounded repetition of an optional or nullable expression causes an infinite parser loop in rule '%s'", ruleName)
+					ctx.ReportError(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, nodeToReport)
+				}
+			}
+		}
+		for _, child := range g.Children {
+			walk(child)
 		}
 	}
 
-	for _, node := range parseSection.FindAllKind(NodeParsePlus) {
-		if children := node.Children(); len(children) > 0 && parseExprNullable(children[0], ruleNullable, ruleBodies) {
-			ctx.ReportError(VALIDATION_PARSE_UNBOUNDED_OPTIONAL_REPETITION.String(), msg, node)
-		}
+	for _, root := range pkg.Grammars {
+		walk(root)
 	}
 }
 
-// parseRefSymbolKind is the result of resolving a parse reference name against the semantic environment.
+func checkGrammarChoiceConflicts(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
+	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
+	visited := make(map[syntaxa.GrammarKey]bool)
+
+	var walk func(g *syntaxa.Grammar[string, string])
+	walk = func(g *syntaxa.Grammar[string, string]) {
+		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
+			return
+		}
+		visited[g.GrammarKey] = true
+
+		if g.Kind == syntaxa.GChoice {
+			seenTokens := make(map[string]int)
+			for i, child := range g.Children {
+				if child == nil || child.NodePath == nil {
+					continue
+				}
+				childKey := syntaxa.NodeKeyFromPath(*child.NodePath)
+				for token := range analysis.First[childKey] {
+					if prevBranch, exists := seenTokens[token]; exists {
+						ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
+
+						ruleNode := findParseRuleByName(parseSection, string(ruleName))
+						nodeToReport := ctx.RootNode
+						if ruleNode != nil {
+							nodeToReport = ruleNode
+						}
+
+						msg := fmt.Sprintf(
+							"FIRST-set conflict in rule '%s'. Token '%s' is expected by both branch %d and branch %d. Add a predict modifier to disambiguate.",
+							ruleName, token, prevBranch, i,
+						)
+						// Report Error instead of Fatal so the user sees ALL conflicts at once.
+						ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, nodeToReport)
+					} else {
+						seenTokens[token] = i
+					}
+				}
+			}
+		}
+		for _, child := range g.Children {
+			walk(child)
+		}
+	}
+
+	for _, root := range pkg.Grammars {
+		walk(root)
+	}
+}
+
+// ------------------------------------------------------------- HELPERS
+
 type parseRefSymbolKind uint8
 
 const (
@@ -557,8 +683,6 @@ const (
 	parseRefSymbolPratt
 )
 
-// resolveParseRefSymbolKind returns which symbol table (if any) contains the given name.
-// Used to cross-check expression vs token references and emit context-aware errors.
 func resolveParseRefSymbolKind(env *SemanticEnv, name string) parseRefSymbolKind {
 	if name == "" {
 		return parseRefSymbolNone
@@ -575,8 +699,6 @@ func resolveParseRefSymbolKind(env *SemanticEnv, name string) parseRefSymbolKind
 	return parseRefSymbolNone
 }
 
-// codeForUnresolvedParseRef returns the validation code for an unresolved parse-rule reference,
-// using the pratt-specific code when the ref is inside a pratt definition.
 func codeForUnresolvedParseRef(ref *Node) ValidationCode {
 	if enclosingPrattDef(ref) != nil {
 		return VALIDATION_PRATT_UNRESOLVED_RULE
@@ -584,8 +706,6 @@ func codeForUnresolvedParseRef(ref *Node) ValidationCode {
 	return VALIDATION_UNRESOLVED_PARSE_RULE_REF
 }
 
-// codeForUnresolvedPatternRef returns the validation code for an unresolved pattern reference,
-// using the pratt-specific code when the ref is inside a pratt definition.
 func codeForUnresolvedPatternRef(ref *Node) ValidationCode {
 	if enclosingPrattDef(ref) != nil {
 		return VALIDATION_PRATT_UNRESOLVED_PATTERN
@@ -593,8 +713,6 @@ func codeForUnresolvedPatternRef(ref *Node) ValidationCode {
 	return VALIDATION_UNRESOLVED_PATTERN_REF
 }
 
-// codeForUnresolvedTokenRef returns the validation code for an unresolved token reference,
-// using the pratt-specific code when the ref is inside a pratt definition.
 func codeForUnresolvedTokenRef(ref *Node) ValidationCode {
 	if enclosingPrattDef(ref) != nil {
 		return VALIDATION_PRATT_UNRESOLVED_TOKEN
@@ -643,7 +761,6 @@ func buildPatternDependencyMap(root *Node, env *SemanticEnv) map[string][]string
 func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]string {
 	out := make(map[string][]string)
 
-	// 1. Process Standard Parse Rules
 	parseSection := root.FindFirstKind(NodeParseSection)
 	if parseSection != nil {
 		for _, rule := range parseSection.FindAllKind(NodeParseRule) {
@@ -654,7 +771,6 @@ func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]s
 		}
 	}
 
-	// 2. Process Pratt Expression Definitions
 	prattSection := root.FindFirstKind(NodePrattSection)
 	if prattSection != nil {
 		for _, prattDef := range prattSection.FindAllKind(NodePrattExprDef) {
@@ -889,203 +1005,6 @@ func validateNegationSubtree(node *Node, report func(offending *Node)) {
 			validateNegationSubtree(ch, report)
 		}
 	}
-}
-func getParseRuleBodyRoot(body *Node) *Node {
-	if body == nil {
-		return nil
-	}
-	for _, ch := range body.Children() {
-		if ch == nil {
-			continue
-		}
-		k := ch.Kind()
-		if k == NodeParseAlternation || k == NodeParseConcat || k == NodeParseOptional ||
-			k == NodeParseStar || k == NodeParsePlus || k == NodeParseSegment || k == NodeParseGroup {
-			return ch
-		}
-	}
-	return nil
-}
-
-func buildParseRuleBodyMap(parseSection *Node) map[string]*Node {
-	out := make(map[string]*Node)
-	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
-		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		name := getParseRuleName(nameNode)
-		if name == "" {
-			continue
-		}
-
-		body := rule.FindFirstKind(NodeParseRuleBody)
-		if body != nil {
-			if root := getParseRuleBodyRoot(body); root != nil {
-				out[name] = root
-			}
-		}
-	}
-	return out
-}
-
-func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node) bool {
-	if node == nil {
-		return false
-	}
-	switch node.Kind() {
-	case NodeParseOptional, NodeParseStar:
-		return true
-	case NodeParsePlus, NodeParseGroup:
-		children := node.Children()
-		if len(children) == 0 {
-			return false
-		}
-		return parseExprNullable(children[0], ruleNullable, ruleBodies)
-	case NodeParseAlternation:
-		for _, ch := range node.Children() {
-			if parseExprNullable(ch, ruleNullable, ruleBodies) {
-				return true
-			}
-		}
-		return false
-	case NodeParseConcat:
-		for _, ch := range node.Children() {
-			if !parseExprNullable(ch, ruleNullable, ruleBodies) {
-				return false
-			}
-		}
-		return true
-	case NodeParseExpressionReference, NodeParseTokenReference:
-		return ruleNullable[getRefName(node)]
-	case NodeParseSegment:
-		if children := node.Children(); len(children) > 0 {
-			ch := children[0]
-			if ch.Kind() == NodeParseExpressionReference || ch.Kind() == NodeParseTokenReference || ch.Kind() == NodeParseGroup {
-				return parseExprNullable(ch, ruleNullable, ruleBodies)
-			}
-			if ch.Kind() == NodeParseSymbolReference {
-				name := getRefName(ch)
-				if name != "" && ruleBodies[name] != nil {
-					return ruleNullable[name]
-				}
-				return false
-			}
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies map[string]*Node, env *SemanticEnv) map[string]struct{} {
-	out := make(map[string]struct{})
-	if node == nil {
-		return out
-	}
-	switch node.Kind() {
-	case NodeParseExpressionReference:
-		if name := getRefName(node); name != "" && (env.Rules[name] != nil || env.Pratt[name] != nil) {
-			out[name] = struct{}{}
-		}
-	case NodeParseOptional, NodeParseStar, NodeParsePlus, NodeParseGroup:
-		if children := node.Children(); len(children) > 0 {
-			for k := range parseExprFirstRuleRefs(children[0], ruleNullable, ruleBodies, env) {
-				out[k] = struct{}{}
-			}
-		}
-	case NodeParseAlternation:
-		for _, ch := range node.Children() {
-			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env) {
-				out[k] = struct{}{}
-			}
-		}
-	case NodeParseConcat:
-		for _, ch := range node.Children() {
-			for k := range parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env) {
-				out[k] = struct{}{}
-			}
-			if !parseExprNullable(ch, ruleNullable, ruleBodies) {
-				break
-			}
-		}
-	case NodeParseSegment:
-		if children := node.Children(); len(children) > 0 {
-			ch := children[0]
-			if ch.Kind() == NodeParseExpressionReference || ch.Kind() == NodeParseGroup {
-				return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env)
-			}
-			if ch.Kind() == NodeParseSymbolReference {
-				if name := getRefName(ch); name != "" && (env.Rules[name] != nil || env.Pratt[name] != nil) {
-					out[name] = struct{}{}
-				}
-				if groupRef := node.FindFirstKind(NodeParseGroup); groupRef != nil {
-					for k := range parseExprFirstRuleRefs(groupRef, ruleNullable, ruleBodies, env) {
-						out[k] = struct{}{}
-					}
-				}
-			}
-		}
-	}
-	return out
-}
-
-func computeParseRuleNullable(ruleBodies map[string]*Node) map[string]bool {
-	nullable := make(map[string]bool)
-	for name := range ruleBodies {
-		nullable[name] = false
-	}
-	for {
-		changed := false
-		for name, root := range ruleBodies {
-			prev := nullable[name]
-			nullable[name] = parseExprNullable(root, nullable, ruleBodies)
-			if nullable[name] != prev {
-				changed = true
-			}
-		}
-		if !changed {
-			break
-		}
-	}
-	return nullable
-}
-
-func computeParseRuleFirstRefs(ruleBodies map[string]*Node, ruleNullable map[string]bool, env *SemanticEnv) map[string]map[string]struct{} {
-	out := make(map[string]map[string]struct{})
-	for name, root := range ruleBodies {
-		out[name] = parseExprFirstRuleRefs(root, ruleNullable, ruleBodies, env)
-	}
-	return out
-}
-
-func findLeftRecursionCycles(firstRefs map[string]map[string]struct{}) []string {
-	visited := make(map[string]bool)
-	inStack := make(map[string]bool)
-	cycleSet := make(map[string]struct{})
-
-	var dfs func(name string)
-	dfs = func(name string) {
-		visited[name] = true
-		inStack[name] = true
-		for ref := range firstRefs[name] {
-			if !visited[ref] {
-				dfs(ref)
-			} else if inStack[ref] {
-				cycleSet[ref] = struct{}{}
-			}
-		}
-		inStack[name] = false
-	}
-
-	for name := range firstRefs {
-		if !visited[name] {
-			dfs(name)
-		}
-	}
-
-	var cycles []string
-	for name := range cycleSet {
-		cycles = append(cycles, name)
-	}
-	return cycles
 }
 
 func findParseRuleByName(parseSection *Node, ruleName string) *Node {

@@ -775,6 +775,23 @@ func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledR
 	return ctx.builder.Rule.Define(compiledExpr), ""
 }
 
+func getParseRuleBodyRoot(body *Node) *Node {
+	if body == nil {
+		return nil
+	}
+	for _, ch := range body.Children() {
+		if ch == nil {
+			continue
+		}
+		k := ch.Kind()
+		if k == NodeParseAlternation || k == NodeParseConcat || k == NodeParseOptional ||
+			k == NodeParseStar || k == NodeParsePlus || k == NodeParseSegment || k == NodeParseGroup {
+			return ch
+		}
+	}
+	return nil
+}
+
 func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 	kind := node.Kind()
 
