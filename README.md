@@ -19,7 +19,7 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
 
 ## Architecture & Pipeline
 
-LangSpec strictly separates language semantics from execution mechanics. You define your language in a `.lspec` file, and the DSL compiler transforms it into runtime structures (`LexerSpec`, `ParserSpec`, `LangSpec`) that drive the generic engine.
+Language definitions are purely declarative data. All parsing algorithms and execution mechanics live in the runtime engine. You define your language in a `.lspec` file, and the DSL compiler transforms it into runtime structures (`LexerSpec`, `ParserSpec`, `LangSpec`) that drive the generic engine.
 
 ```text
 DSL source (.lspec)  →  LangSpecCompilerCompile  →  LangSpecCompileResult
