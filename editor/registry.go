@@ -3,12 +3,12 @@ package editor
 import "cmp"
 
 /*
-OverrideHandler is a function that, given an EditorCtx for a token, returns an EditorOverride.
+OverrideHandler is a function that, given an EditorCtx for a token, returns a slice of EditorOverrides.
 
 Use with OverrideRegistry: register a handler per token so the registry can produce overrides
-when building EditorIR (e.g. line comment with capture, block comment delimited region).
+when building EditorIR (e.g. line comment with capture, block comment delimited region, or 1-to-N splits).
 */
-type OverrideHandler[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] func(ctx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
+type OverrideHandler[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] func(ctx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
 
 /*
 OverrideRegistry maps tokens to override handlers so a single override producer can be built.
@@ -16,7 +16,7 @@ OverrideRegistry maps tokens to override handlers so a single override producer 
 Create with NewOverrideRegistry, register handlers with Register (e.g. from TextPatternBuilder),
 then pass Producer() as the overrideProducer in EditorIRConfigurationCreate. When building
 EditorIR, the engine calls the producer for each token; the producer looks up the token in the
-registry and returns the handler's EditorOverride when registered.
+registry and returns the handler's EditorOverrides when registered.
 */
 type OverrideRegistry[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
 	handlers map[TToken]OverrideHandler[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
@@ -50,20 +50,20 @@ func (r *OverrideRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKi
 Producer returns a function suitable for EditorIRConfiguration.overrideProducer.
 
 The returned function looks up the context's token in the registry; if a handler is
-registered, it is invoked and the result is returned with hasOverride true. Otherwise
-returns (nil, false). When ctx.Token is nil, returns (nil, false).
+registered, it is invoked and the resulting slice of overrides is returned.
+Otherwise returns nil. When ctx.Token is nil, returns nil.
 */
-func (r *OverrideRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) Producer() func(ctx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], bool) {
-	return func(ctx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], bool) {
+func (r *OverrideRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) Producer() func(ctx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
+	return func(ctx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 		if ctx.Token == nil {
-			return nil, false
+			return nil
 		}
 
 		handler, exists := r.handlers[*ctx.Token]
 		if !exists {
-			return nil, false
+			return nil
 		}
 
-		return handler(ctx), true
+		return handler(ctx)
 	}
 }
