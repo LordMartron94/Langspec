@@ -41,6 +41,7 @@ machines or delimited regions instead of the default transition.
 */
 type EditorOverride[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
 	Pattern          *pattern.RegulaAST[TObservation]
+	PatternRegex     *string
 	MatchContext     *TContext
 	Captures         map[int]TContext
 	ForeignPayload   *ForeignMachinePayload[TObservation, TContext]
@@ -60,7 +61,7 @@ type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerS
 
 	tokenHasher      func(token TToken) uint64
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
-	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool)
+	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
 	contextsEqual    func(left, right TContext) bool
 }
 
@@ -73,7 +74,7 @@ func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, T
 	hasher *hash.XXH3Hasher,
 	tokenHasher func(token TToken) uint64,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
-	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) (override *EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], hasOverride bool),
+	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	contextsEqual func(left, right TContext) bool,
 ) *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
@@ -102,14 +103,14 @@ such a catch-all rule when HasFallbackInvalid is true, ensuring no input region 
 ever left unscoped (i.e. no "source"-only fallthrough).
 */
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
-	ID                   string
-	Label                string
-	Context              TContext
-	Transitions          []EditorTransition[TObservation, TContext]
-	HasFallthroughPop    bool
-	FallthroughPopAmount int
-	ImmediatePushTarget  *EditorState[TObservation, TContext]
-	HasFallbackInvalid   bool
+	ID                     string
+	Label                  string
+	Context                TContext
+	Transitions            []EditorTransition[TObservation, TContext]
+	HasFallthroughPop      bool
+	FallthroughPopAmount   int
+	ImmediatePushTarget    *EditorState[TObservation, TContext]
+	HasFallbackInvalid     bool
 	FallbackInvalidContext TContext
 }
 
@@ -166,6 +167,7 @@ ForeignPayload is set for STACK_EMBED. IsLookahead indicates lookahead-only matc
 */
 type EditorTransition[TObservation cmp.Ordered, TContext any] struct {
 	OnPattern      pattern.RegulaAST[TObservation]
+	RegexPattern   *string
 	MatchContext   TContext
 	Targets        []*EditorState[TObservation, TContext]
 	Captures       map[int]TContext

@@ -20,7 +20,7 @@ type ParserCompiler struct {
 	specFile        string
 	allocFn         memarch.AllocationFn
 	diagnosticSink  *dsl.LangSpecDiagnosticSink
-	sublimeOverride func(ec *editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], bool)
+	sublimeOverride func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]
 }
 
 /*
@@ -46,7 +46,7 @@ this producer. Pass the result of OverrideRegistry.Producer() (after registering
 handlers, e.g. from TextPatternBuilder) to supply token overrides for syntax generation.
 If unset, the Sublime toolchain uses no overrides when enabled.
 */
-func WithSublimeOverrides(overrideFn func(ec *editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], bool)) Option {
+func WithSublimeOverrides(overrideFn func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]) Option {
 	return func(c *ParserCompiler) {
 		c.sublimeOverride = overrideFn
 	}

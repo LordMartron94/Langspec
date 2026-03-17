@@ -509,7 +509,6 @@ LangSpec is under active development. **Bugs and limitations may still exist** i
 
 When contributing:
 
-- Follow the project’s style guide (`DEVELOPER_README_STYLE_GUIDE.md`) and architecture (data vs. execution, separation of concerns, no methods for core logic).
 - Do not add `*_test.go` files for general tests; tests live in `_tests.go` or similar under the project’s own test framework.
 
 Thank you for helping improve LangSpec.

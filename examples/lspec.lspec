@@ -1,4 +1,4 @@
---- "LangSpec DSL" v1.0.0 | lspec v1.0.0 ---
+--- "LangSpec DSL" v0.0.0 | lspec v0.1.0 ---
 
 PRAGMA {
 	tool.sublime {
@@ -335,11 +335,14 @@ PARSE {
 	};
 	
 	PARSE_SEGMENT -> transparent gr_PARSE_SEGMENT {
-		PARSE_OP_SUPPRESS | PARSE_OP_NEST | PARSE_GROUP | PARSE_SEGMENT_IDENT_MAPPING
+		PARSE_OP_SUPPRESS
+		| PARSE_OP_NEST
+		| PARSE_GROUP
+		| PARSE_SEGMENT_IDENT_MAPPING_OR_REF
 	};
 	
-	PARSE_SEGMENT_IDENT_MAPPING -> NodeParseSegment {
-		NodeParseNodeName : TokIdentifier
+	PARSE_SEGMENT_IDENT_MAPPING_OR_REF -> NodeParseSegment {
+		NodeParseSymbolReference : TokIdentifier
 		(
 			PARSE_SEGMENT_TAIL
 		)?

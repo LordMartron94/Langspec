@@ -935,8 +935,8 @@ func (b *dslGrammarBuilder) identifierMapping() Rule {
 		rule(tailChoice).
 		build()
 
-	return b.g.sequence(NodeParseSegment, "IDENT_MAPPING").
-		expectToken(NodeParseNodeName, TokIdentifier).
+	return b.g.sequence(NodeParseSegment, "IDENT_MAPPING_OR_REF").
+		expectToken(NodeParseSymbolReference, TokIdentifier).
 		optionalRule(tailSeq).
 		build()
 }
