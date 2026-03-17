@@ -233,10 +233,19 @@ func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[stri
 	}
 }
 
-// markPrattOperatorTargetReferences validates NodeParseSymbolReference nodes (pratt prefix/infix/postfix operator targets).
+// markPrattOperatorTargetReferences validates NodeParseSymbolReference nodes that are pratt prefix/infix/postfix operator targets.
+// Only refs that are direct children of NodePrattOperatorDef are validated; identifier-mapping segments use NodeParseSymbolReference too.
 // Operator targets accept either a token or an expression; tokens are marked used for unused-token reporting.
 func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
-	for _, ref := range ctx.RootNode.FindAllKind(NodeParseSymbolReference) {
+	prattSection := ctx.RootNode.FindFirstKind(NodePrattSection)
+	if prattSection == nil {
+		return
+	}
+	for _, def := range prattSection.FindAllKind(NodePrattOperatorDef) {
+		ref := def.FindFirstKind(NodeParseSymbolReference)
+		if ref == nil {
+			continue
+		}
 		name := getRefName(ref)
 		if name == "" {
 			continue
@@ -952,6 +961,13 @@ func parseExprNullable(node *Node, ruleNullable map[string]bool, ruleBodies map[
 			if ch.Kind() == NodeParseExpressionReference || ch.Kind() == NodeParseTokenReference || ch.Kind() == NodeParseGroup {
 				return parseExprNullable(ch, ruleNullable, ruleBodies)
 			}
+			if ch.Kind() == NodeParseSymbolReference {
+				name := getRefName(ch)
+				if name != "" && ruleBodies[name] != nil {
+					return ruleNullable[name]
+				}
+				return false
+			}
 		}
 		return false
 	default:
@@ -995,6 +1011,16 @@ func parseExprFirstRuleRefs(node *Node, ruleNullable map[string]bool, ruleBodies
 			ch := children[0]
 			if ch.Kind() == NodeParseExpressionReference || ch.Kind() == NodeParseGroup {
 				return parseExprFirstRuleRefs(ch, ruleNullable, ruleBodies, env)
+			}
+			if ch.Kind() == NodeParseSymbolReference {
+				if name := getRefName(ch); name != "" && (env.Rules[name] != nil || env.Pratt[name] != nil) {
+					out[name] = struct{}{}
+				}
+				if groupRef := node.FindFirstKind(NodeParseGroup); groupRef != nil {
+					for k := range parseExprFirstRuleRefs(groupRef, ruleNullable, ruleBodies, env) {
+						out[k] = struct{}{}
+					}
+				}
 			}
 		}
 	}

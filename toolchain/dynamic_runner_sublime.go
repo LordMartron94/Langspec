@@ -22,7 +22,7 @@ var hasher = hash.XXH3HasherCreateWithSeed(6789)
 
 func RunSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
-	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, SublimeContext], bool),
+	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
 ) error {
 	for _, pragma := range compileResult.CompiledToolPragmas {
 		if pragma.ToolName != SublimeToolName {
@@ -48,8 +48,8 @@ func RunSublimeToolchain(
 		}
 
 		if overrideProducer == nil {
-			overrideProducer = func(*editor.EditorCtx[rune, string, string, string, string]) (*editor.EditorOverride[rune, string, string, string, string, SublimeContext], bool) {
-				return nil, false
+			overrideProducer = func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext] {
+				return nil
 			}
 		}
 

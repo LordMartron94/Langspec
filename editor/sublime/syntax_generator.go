@@ -393,10 +393,17 @@ func localTransitionEmissionSignature[TObservation cmp.Ordered, TContext any](
 ) string {
 	var sb strings.Builder
 
-	regexStr, err := tr.OnPattern.ToRegEx()
-	if err != nil {
-		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+	var regexStr string
+	if tr.RegexPattern != nil {
+		regexStr = *tr.RegexPattern
+	} else {
+		var err error
+		regexStr, err = tr.OnPattern.ToRegEx()
+		if err != nil {
+			panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+		}
 	}
+
 	if tr.IsLookahead {
 		regexStr = "(?=" + regexStr + ")"
 	}
@@ -502,9 +509,15 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
 	config ExtractionConfig[TContext],
 	labelToRepresentative map[string]string,
 ) contextEntry {
-	regexStr, err := t.OnPattern.ToRegEx()
-	if err != nil {
-		panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+	var regexStr string
+	if t.RegexPattern != nil {
+		regexStr = *t.RegexPattern
+	} else {
+		var err error
+		regexStr, err = t.OnPattern.ToRegEx()
+		if err != nil {
+			panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
+		}
 	}
 
 	if t.IsLookahead {

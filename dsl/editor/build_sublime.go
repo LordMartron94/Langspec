@@ -2,6 +2,7 @@ package editor
 
 import (
 	"autarch/pattern"
+	"fmt"
 	"foundation/bytes"
 	"foundation/domain"
 	"foundation/hash"
@@ -9,6 +10,7 @@ import (
 	"langspec/dsl/generator"
 	langspeceditor "langspec/editor"
 	"langspec/toolchain"
+	"lexarch"
 )
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
@@ -43,13 +45,16 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		},
 	}
 
+	ctxProducer := toolchain.BuildContextProducer[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](ctxCfg)
+	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
+
 	irConfig := langspeceditor.EditorIRConfigurationCreate(
 		hasher,
 		func(token dsl.LangSpecLexerTokenType) uint64 {
 			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token.String()}, 0x00))
 		},
-		toolchain.BuildContextProducer[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](ctxCfg),
-		BuildEditorOverrideProducer(),
+		ctxProducer,
+		BuildEditorOverrideProducer(ruleset, ctxProducer),
 		func(left, right toolchain.SublimeContext) bool {
 			return left == right
 		},
@@ -68,23 +73,77 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	return toolchain.RunSublimeGenerator(runnerCfg)
 }
 
-func BuildEditorOverrideProducer() func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
-	return func(editorCtx *EditorCtx) (override *EditorOverride, hasOverride bool) {
+func BuildEditorOverrideProducer(
+	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
+) func(editorCtx *EditorCtx) []*EditorOverride {
+	return func(editorCtx *EditorCtx) []*EditorOverride {
 		if editorCtx.Token == nil {
-			return nil, false
+			return nil
+		}
+
+		// Route to the dynamic identifier ref override
+		if *editorCtx.Token == dsl.TokIdentifier && editorCtx.NodeKind != nil && *editorCtx.NodeKind == dsl.NodeParseSymbolReference {
+			return identifierRefOverrides(ruleset, ctxProducer)
 		}
 
 		switch *editorCtx.Token {
 		case dsl.TokLineComment:
-			return lineCommentOverride(), true
+			return []*EditorOverride{lineCommentOverride()}
 		case dsl.TokBlockComment:
-			return blockCommentOverride(), true
+			return []*EditorOverride{blockCommentOverride()}
 		case dsl.TokRegexLiteral:
-			return regExOverride(), true
+			return []*EditorOverride{regExOverride()}
 		default:
-			return nil, false
+			return nil
 		}
 	}
+}
+
+func identifierRefOverrides(
+	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
+) []*EditorOverride {
+	identRegex := getTokenRegex(ruleset, dsl.TokIdentifier)
+	assignRegex := getTokenRegex(ruleset, dsl.TokAssignment)
+
+	mappingRegex := fmt.Sprintf(`%s(?=\s*%s)`, identRegex, assignRegex)
+	refRegex := fmt.Sprintf(`%s(?!\s*%s)`, identRegex, assignRegex)
+
+	// 2. Resolve exact scopes dynamically from the Context Producer
+	mappingNode := dsl.NodeParseNodeName
+	mappingCtx := ctxProducer(&EditorCtx{NodeKind: &mappingNode})
+
+	refNode := dsl.NodeParseExpressionReference
+	refCtx := ctxProducer(&EditorCtx{NodeKind: &refNode})
+
+	return []*EditorOverride{
+		{
+			PatternRegex: &mappingRegex,
+			MatchContext: &mappingCtx,
+		},
+		{
+			PatternRegex: &refRegex,
+			MatchContext: &refCtx,
+		},
+	}
+}
+
+// Helper to extract the regex string natively from your lexer rules
+func getTokenRegex(
+	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+	token dsl.LangSpecLexerTokenType,
+) string {
+	for _, rule := range ruleset.GetRules() {
+		if rule.Token == token {
+			regex, err := rule.Pattern.ToRegEx()
+			if err != nil {
+				panic(fmt.Sprintf("Failed to convert token %v to regex: %v", token, err))
+			}
+			return regex
+		}
+	}
+	panic(fmt.Sprintf("Token %v not found in lexing ruleset", token))
 }
 
 func lineCommentOverride() *EditorOverride {

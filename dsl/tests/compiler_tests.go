@@ -13,7 +13,7 @@ import (
 const testOutput = "assets/testing/generated_lspec_spec.lspec"
 const currentLSpecVersion = "v0.1.0"
 const testGenSubManifestFile = "assets/testing/generated_sublime_manifest.json"
-const testGenSyntaxOutputFile = "assets/testing/generated_lspec_syntax.sublime-syntax"
+const testGenSyntaxOutputFile = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax"
 
 func TestDSLCompiler(t *testing.T) {
 	compiler, scratchAllocFn, sink, teardown := setupTestCompiler()

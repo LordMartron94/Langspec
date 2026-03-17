@@ -912,7 +912,14 @@ func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
-	outputNodeKind := nodeSingleTokenContent(node.FindFirstKind(NodeParseNodeName))
+	outputNodeKindNode := node.FindFirstKind(NodeParseSymbolReference)
+	if outputNodeKindNode == nil {
+		outputNodeKindNode = node.FindFirstKind(NodeParseNodeName)
+	}
+	if outputNodeKindNode == nil {
+		panic("compiler error: emit node missing output kind")
+	}
+	outputNodeKind := nodeSingleTokenContent(outputNodeKindNode)
 	refNode := node.FindFirstKind(NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: emit node missing reference")
@@ -950,7 +957,10 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 }
 
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
-	nameNode := node.FindFirstKind(NodeParseNodeName)
+	nameNode := node.FindFirstKind(NodeParseSymbolReference)
+	if nameNode == nil {
+		nameNode = node.FindFirstKind(NodeParseNodeName)
+	}
 	if nameNode == nil {
 		return compileParseExpression(ctx, node.RequireSingleChild())
 	}

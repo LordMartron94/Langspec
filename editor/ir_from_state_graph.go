@@ -150,11 +150,11 @@ func EditorIRFromStateGraph[
 		})
 
 		for _, p := range pairs {
-			edTr := buildEditorTransitionFromGeneric(
+			edTrs := buildEditorTransitionsFromGeneric(
 				p.tr, stateByID, tokenToRule, config, delimitedStates, sanitizer,
 			)
-			if edTr != nil {
-				s.Transitions = append(s.Transitions, *edTr)
+			if len(edTrs) > 0 {
+				s.Transitions = append(s.Transitions, edTrs...)
 			}
 		}
 
@@ -214,7 +214,7 @@ func EditorIRFromStateGraph[
 	}, nil
 }
 
-func buildEditorTransitionFromGeneric[
+func buildEditorTransitionsFromGeneric[
 	TObservation cmp.Ordered,
 	TToken comparable,
 	TTokenRole comparable,
@@ -228,68 +228,146 @@ func buildEditorTransitionFromGeneric[
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
-) *EditorTransition[TObservation, TContext] {
+) []EditorTransition[TObservation, TContext] {
 
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		Token:    &tr.Token,
 		NodeKind: tr.NodeKind,
 	}
-	override, hasOverride := config.overrideProducer(edCtx)
-	matchCtx := config.contextProducer(edCtx)
+	overrides := config.overrideProducer(edCtx)
 
-	var pat pattern.RegulaAST[TObservation]
-	hasPattern := false
-	if hasOverride && override.Pattern != nil {
-		pat = *override.Pattern
-		hasPattern = true
-	} else if rule, ok := tokenToRule[tr.Token]; ok {
-		pat = rule.Pattern
-		hasPattern = true
-	}
-
-	if !hasPattern {
+	// Fallback to the default single transition if no overrides exist
+	if len(overrides) == 0 {
+		if defaultTr, ok := buildDefaultTransition(tr, edCtx, tokenToRule, config, stateByID); ok {
+			return []EditorTransition[TObservation, TContext]{defaultTr}
+		}
 		return nil
 	}
 
-	if hasOverride && override.MatchContext != nil {
-		matchCtx = *override.MatchContext
-	}
-
-	var captures map[int]TContext
-	if hasOverride {
-		captures = override.Captures
-	}
-
-	if hasOverride && override.ForeignPayload != nil {
-		return &EditorTransition[TObservation, TContext]{
-			OnPattern:      pat,
-			MatchContext:   matchCtx,
-			Captures:       captures,
-			Operation:      STACK_EMBED,
-			ForeignPayload: override.ForeignPayload,
+	// Expand 1-to-N overrides
+	var out []EditorTransition[TObservation, TContext]
+	for _, override := range overrides {
+		if ovrTr, ok := buildOverrideTransition(tr, edCtx, *override, tokenToRule, config, stateByID, delimitedStates, sanitizer); ok {
+			out = append(out, ovrTr)
 		}
 	}
+	return out
+}
 
-	if hasOverride && override.DelimitedPayload != nil {
-		bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
-		return &EditorTransition[TObservation, TContext]{
-			OnPattern:    pat,
-			MatchContext: matchCtx,
-			Captures:     captures,
-			Operation:    STACK_PUSH,
-			Targets:      []*EditorState[TObservation, TContext]{bodyState},
-		}
+func buildDefaultTransition[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+	TContext any,
+](
+	tr lowering.Transition[TToken, TNodeKind],
+	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	stateByID map[string]*EditorState[TObservation, TContext],
+) (EditorTransition[TObservation, TContext], bool) {
+
+	rule, ok := tokenToRule[tr.Token]
+	if !ok {
+		return EditorTransition[TObservation, TContext]{}, false
 	}
 
-	return &EditorTransition[TObservation, TContext]{
-		OnPattern:    pat,
-		MatchContext: matchCtx,
-		Captures:     captures,
+	return EditorTransition[TObservation, TContext]{
+		OnPattern:    rule.Pattern,
+		MatchContext: config.contextProducer(edCtx),
 		Operation:    stackOpFromLowering(tr.Operation),
 		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
 		PopAmount:    determinePopAmount(tr),
 		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
+	}, true
+}
+
+func buildOverrideTransition[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+	TContext any,
+](
+	tr lowering.Transition[TToken, TNodeKind],
+	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	override EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	stateByID map[string]*EditorState[TObservation, TContext],
+	delimitedStates map[string]*EditorState[TObservation, TContext],
+	sanitizer *text.Sanitizer,
+) (EditorTransition[TObservation, TContext], bool) {
+
+	var pat pattern.RegulaAST[TObservation]
+	var regexPat *string
+
+	if override.PatternRegex != nil {
+		regexPat = override.PatternRegex
+	} else if override.Pattern != nil {
+		pat = *override.Pattern
+	} else if rule, ok := tokenToRule[tr.Token]; ok {
+		pat = rule.Pattern
+	} else {
+		return EditorTransition[TObservation, TContext]{}, false
 	}
+
+	matchCtx := config.contextProducer(edCtx)
+	if override.MatchContext != nil {
+		matchCtx = *override.MatchContext
+	}
+
+	if override.ForeignPayload != nil {
+		return EditorTransition[TObservation, TContext]{
+			OnPattern:      pat,
+			RegexPattern:   regexPat,
+			MatchContext:   matchCtx,
+			Captures:       override.Captures,
+			Operation:      STACK_EMBED,
+			ForeignPayload: override.ForeignPayload,
+		}, true
+	}
+
+	if override.DelimitedPayload != nil {
+		bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
+		return EditorTransition[TObservation, TContext]{
+			OnPattern:    pat,
+			RegexPattern: regexPat,
+			MatchContext: matchCtx,
+			Captures:     override.Captures,
+			Operation:    STACK_PUSH,
+			Targets:      []*EditorState[TObservation, TContext]{bodyState},
+		}, true
+	}
+
+	return EditorTransition[TObservation, TContext]{
+		OnPattern:    pat,
+		RegexPattern: regexPat,
+		MatchContext: matchCtx,
+		Captures:     override.Captures,
+		Operation:    stackOpFromLowering(tr.Operation),
+		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
+		PopAmount:    determinePopAmount(tr),
+		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
+	}, true
+}
+
+func resolvePattern[TObservation cmp.Ordered, TToken comparable, TTokenRole comparable](
+	overridePattern *pattern.RegulaAST[TObservation],
+	token TToken,
+	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+) (pattern.RegulaAST[TObservation], bool) {
+	if overridePattern != nil {
+		return *overridePattern, true
+	}
+	if rule, ok := tokenToRule[token]; ok {
+		return rule.Pattern, true
+	}
+	var empty pattern.RegulaAST[TObservation]
+	return empty, false
 }
 
 func resolveTargets[TObservation cmp.Ordered, TContext any](
@@ -406,65 +484,75 @@ func buildAmbientFromStateGraph[
 	sanitizer *text.Sanitizer,
 	tokenToRuleIndex map[TToken]int,
 ) []EditorTransition[TObservation, TContext] {
-	type ruleEntry struct {
-		rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
-		priority int
-	}
-	var candidates []ruleEntry
-	for _, rule := range lexingRuleset.GetRules() {
-		if !grammarTokens[rule.Token] {
-			candidates = append(candidates, ruleEntry{rule: rule, priority: rule.Priority})
-		}
-	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].priority != candidates[j].priority {
-			return candidates[i].priority > candidates[j].priority
-		}
-		// Absolute deterministic tie-breaker
-		return tokenToRuleIndex[candidates[i].rule.Token] < tokenToRuleIndex[candidates[j].rule.Token]
-	})
+	candidates := getSortedAmbientCandidates(lexingRuleset, grammarTokens, tokenToRuleIndex)
 
 	var out []EditorTransition[TObservation, TContext]
 	for _, entry := range candidates {
 		token := entry.rule.Token
 		edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{Token: &token}
-		override, hasOverride := config.overrideProducer(edCtx)
-		matchCtx := config.contextProducer(edCtx)
 
-		var pat pattern.RegulaAST[TObservation]
-		if hasOverride && override.Pattern != nil {
+		out = append(out, buildAmbientTransitionsForToken(
+			entry.rule, edCtx, config, delimitedStates, sanitizer,
+		)...)
+	}
+	return out
+}
+
+func buildAmbientTransitionsForToken[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+	TContext any,
+](
+	rule lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	delimitedStates map[string]*EditorState[TObservation, TContext],
+	sanitizer *text.Sanitizer,
+) []EditorTransition[TObservation, TContext] {
+
+	overrides := config.overrideProducer(edCtx)
+
+	if len(overrides) == 0 {
+		return []EditorTransition[TObservation, TContext]{{
+			OnPattern:    rule.Pattern,
+			MatchContext: config.contextProducer(edCtx),
+			Operation:    STACK_NONE,
+		}}
+	}
+
+	var out []EditorTransition[TObservation, TContext]
+	for _, override := range overrides {
+		pat := rule.Pattern
+		if override.Pattern != nil {
 			pat = *override.Pattern
-		} else {
-			pat = entry.rule.Pattern
 		}
 
-		if hasOverride && override.MatchContext != nil {
+		matchCtx := config.contextProducer(edCtx)
+		if override.MatchContext != nil {
 			matchCtx = *override.MatchContext
 		}
 
-		var captures map[int]TContext
-		if hasOverride {
-			captures = override.Captures
-		}
-
-		if hasOverride && override.ForeignPayload != nil {
+		if override.ForeignPayload != nil {
 			out = append(out, EditorTransition[TObservation, TContext]{
 				OnPattern:      pat,
 				MatchContext:   matchCtx,
-				Captures:       captures,
+				Captures:       override.Captures,
 				Operation:      STACK_EMBED,
 				ForeignPayload: override.ForeignPayload,
 			})
 			continue
 		}
 
-		if hasOverride && override.DelimitedPayload != nil {
+		if override.DelimitedPayload != nil {
 			bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
 			out = append(out, EditorTransition[TObservation, TContext]{
 				OnPattern:    pat,
 				MatchContext: matchCtx,
-				Captures:     captures,
+				Captures:     override.Captures,
 				Operation:    STACK_PUSH,
 				Targets:      []*EditorState[TObservation, TContext]{bodyState},
 			})
@@ -474,9 +562,45 @@ func buildAmbientFromStateGraph[
 		out = append(out, EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
 			MatchContext: matchCtx,
-			Captures:     captures,
+			Captures:     override.Captures,
 			Operation:    STACK_NONE,
 		})
 	}
 	return out
+}
+
+func getSortedAmbientCandidates[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+](
+	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
+	grammarTokens map[TToken]bool,
+	tokenToRuleIndex map[TToken]int,
+) []struct {
+	rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+	priority int
+} {
+	var candidates []struct {
+		rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+		priority int
+	}
+
+	for _, rule := range lexingRuleset.GetRules() {
+		if !grammarTokens[rule.Token] {
+			candidates = append(candidates, struct {
+				rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+				priority int
+			}{rule: rule, priority: rule.Priority})
+		}
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].priority != candidates[j].priority {
+			return candidates[i].priority > candidates[j].priority
+		}
+		return tokenToRuleIndex[candidates[i].rule.Token] < tokenToRuleIndex[candidates[j].rule.Token]
+	})
+
+	return candidates
 }
