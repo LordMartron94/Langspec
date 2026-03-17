@@ -20,4 +20,13 @@
 // Both paths converge in executeSublimeToolchain, which builds the editor IR
 // and invokes the Sublime generator. BuildContextProducerFromManifest turns a
 // SemanticManifest into a context producer for the editor IR.
+//
+// # Go bindings toolchain
+//
+// RunGoBindingsToolchain generates a Go file containing type Token and type Node
+// (string-based) plus one const per token and per grammar node from the compiled
+// spec. Enable it via PRAGMA tool.go_bindings with output-path and package-name.
+// The bootstrap runs this toolchain automatically when the pragma is present and
+// enabled. Use the generated types for type-safe references to tokens and nodes
+// in downstream compilers and tooling.
 package toolchain

@@ -23,4 +23,9 @@
 //     toolchain.RunSublimeToolchainFromMemory. PRAGMA must still set enable = true
 //     and output-path; configuration-path is ignored. The factory is called to
 //     build the override producer used when generating the syntax file.
+//
+// runToolchains also runs the Go bindings toolchain when the spec enables
+// tool.go_bindings in PRAGMA (output-path and package-name set). That toolchain
+// generates a .go file with type Token and type Node and consts for each token
+// and node, for type-safe use in downstream code.
 package bootstrap

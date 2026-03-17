@@ -4,7 +4,6 @@ import (
 	"foundation/system"
 	"langspec"
 	"langspec/dsl"
-	"langspec/dsl/editor"
 	"langspec/dsl/generator"
 	"lexarch"
 	"testing"
@@ -12,13 +11,12 @@ import (
 
 const testOutput = "assets/testing/generated_lspec_spec.lspec"
 const currentLSpecVersion = "v0.1.0"
-const testGenSubManifestFile = "assets/testing/generated_sublime_manifest.json"
 const testGenSyntaxOutputFile = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax"
+const testGoBindingsOutputFile = "assets/testing/generated_go_bindings.go"
 
 func TestDSLCompiler(t *testing.T) {
 	compiler, scratchAllocFn, sink, teardown := setupTestCompiler()
 	defer teardown()
-	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	genCfg := generator.GeneratorConfigCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](
 		currentLSpecVersion,
@@ -29,13 +27,9 @@ func TestDSLCompiler(t *testing.T) {
 		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
 		WithEofToken(dsl.TokEOF).
 		WithSublimeConfiguration(
-			testGenSubManifestFile, testGenSyntaxOutputFile,
-			scopeMap,
-			editor.GetGeneratorBindings(),
-			"invalid.illegal.unexpected-token",
-			".lspec",
-			[]string{".lspec"},
-		)
+			testGenSyntaxOutputFile,
+		).
+		WithGoBindingsConfiguration(testGoBindingsOutputFile, "compiler")
 
 	if err := generator.GenerateLSpec(
 		dsl.LangSpecCompilerGrammarPackage(compiler),

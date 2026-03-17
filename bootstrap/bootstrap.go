@@ -149,6 +149,12 @@ func runToolchains(
 	cfg *ParserCompiler,
 	compileResult *dsl.LangSpecCompileResult,
 ) error {
+	// 1. Run the Go Bindings Toolchain first (it has no external dependencies)
+	if err := toolchain.RunGoBindingsToolchain(compileResult); err != nil {
+		return fmt.Errorf("go bindings toolchain execution failed: %w", err)
+	}
+
+	// 2. Run the Sublime Toolchain
 	// If the host didn't configure Sublime explicitly, fallback to seeing if it was enabled via JSON in the PRAGMA
 	if cfg.sublimeManifest == nil {
 		return toolchain.RunSublimeToolchain(compileResult, nil)
@@ -172,17 +178,17 @@ func runToolchains(
 		return fmt.Errorf("sublime toolchain enabled but missing 'output-path'")
 	}
 
-	// 1. Fulfill dependencies
+	// Fulfill dependencies
 	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
 	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, string, string, string](*cfg.sublimeManifest)
 
-	// 2. Execute factory
+	// Execute factory
 	var overrideProducer func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]
 	if cfg.sublimeFactory != nil {
 		overrideProducer = cfg.sublimeFactory(&ruleset, ctxProducer)
 	}
 
-	// 3. Run pure-memory generation
+	// Run pure-memory generation
 	err := toolchain.RunSublimeToolchainFromMemory(
 		compileResult,
 		*cfg.sublimeManifest,

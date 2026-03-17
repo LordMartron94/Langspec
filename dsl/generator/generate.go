@@ -16,11 +16,6 @@ import (
 
 // ----------------------------------------------------------------- TYPES
 
-type NodeBinding[TToken, TNodeKind comparable] struct {
-	Scopes      []string
-	TokenScopes map[TToken][]string
-}
-
 type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 	targetLSpecVersion string
 
@@ -28,16 +23,14 @@ type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
 
+	// Sublime Toolchain Pragma
 	enableSublime     bool
-	sublimeConfigPath string
 	sublimeOutputPath string
 
-	baseScopes   map[TToken]string
-	nodeBindings map[TNodeKind]NodeBinding[TToken, TNodeKind]
-	invalidScope string
-
-	sublimeFileExtensions []string
-	sublimeScopeExtension string
+	// Go Bindings Toolchain Pragma
+	enableGoBindings      bool
+	goBindingsOutputPath  string
+	goBindingsPackageName string
 
 	emitRegex bool
 
@@ -63,8 +56,6 @@ func GeneratorConfigCreate[TToken, TTokenRole, TNodeKind comparable](
 		nodeKindFormatter: func(kind TNodeKind) string {
 			return fmt.Sprintf("%v", kind)
 		},
-		baseScopes:      make(map[TToken]string),
-		nodeBindings:    make(map[TNodeKind]NodeBinding[TToken, TNodeKind]),
 		columnThreshold: 80,
 		ignoredRoles:    skippedRoles,
 		eofToken:        nil,
@@ -102,23 +93,29 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEofToken(token TTok
 }
 
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithSublimeConfiguration(
-	configPath, outputPath string,
-	baseScopes map[TToken]string,
-	bindings map[TNodeKind]NodeBinding[TToken, TNodeKind],
-	invalidScope string,
-	scopeExtension string,
-	fileExtensions []string,
+	outputPath string,
 ) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.enableSublime = true
-	g.sublimeConfigPath = configPath
 	g.sublimeOutputPath = outputPath
+	return g
+}
 
-	g.baseScopes = baseScopes
-	g.nodeBindings = bindings
-	g.invalidScope = invalidScope
-
-	g.sublimeFileExtensions = fileExtensions
-	g.sublimeScopeExtension = scopeExtension
+/*
+WithGoBindingsConfiguration enables the go_bindings toolchain in the generated
+.lspec PRAGMA. The emitted PRAGMA will set tool.go_bindings with enable = true,
+output-path = outputPath, and package-name = packageName. When the .lspec is
+later compiled (e.g. via bootstrap or LangSpecCompilerCompile), RunGoBindingsToolchain
+writes a Go file at outputPath defining type Token, type Node, and consts for each
+token and node. Use this when generating .lspec from a grammar so that compiling
+that spec produces automatic Go bindings for tokens and nodes as types.
+*/
+func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithGoBindingsConfiguration(
+	outputPath string,
+	packageName string,
+) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
+	g.enableGoBindings = true
+	g.goBindingsOutputPath = outputPath
+	g.goBindingsPackageName = packageName
 	return g
 }
 
@@ -134,11 +131,7 @@ func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 		return fmt.Errorf("given path '%s' is not an lspec path", outputPath)
 	}
 
-	if err := writeLSpecDocument(grammarPackage, lexingRuleSet, outputPath, configuration); err != nil {
-		return err
-	}
-
-	return writeSublimeConfiguration(configuration)
+	return writeLSpecDocument(grammarPackage, lexingRuleSet, outputPath, configuration)
 }
 
 func writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState comparable](
@@ -169,17 +162,20 @@ func createGenerator[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 		grammarPackage:     grammarPackage,
 		lexingRuleSet:      lexingRuleSet,
 		targetLSpecVersion: configuration.targetLSpecVersion,
-		enableSublime:      configuration.enableSublime,
 		tokenFormatter:     configuration.tokenFormatter,
 		tokenRoleFormatter: configuration.tokenRoleFormatter,
 		nodeKindFormatter:  configuration.nodeKindFormatter,
 		emitRegex:          configuration.emitRegex,
-		baseScopes:         configuration.baseScopes,
 		columnThreshold:    configuration.columnThreshold,
 		ignoredTokenRoles:  configuration.ignoredRoles,
 		eofToken:           configuration.eofToken,
-		sublimeConfigPath:  configuration.sublimeConfigPath,
-		sublimeOutputPath:  configuration.sublimeOutputPath,
+
+		enableSublime:     configuration.enableSublime,
+		sublimeOutputPath: configuration.sublimeOutputPath,
+
+		enableGoBindings:      configuration.enableGoBindings,
+		goBindingsOutputPath:  configuration.goBindingsOutputPath,
+		goBindingsPackageName: configuration.goBindingsPackageName,
 	}
 }
 
@@ -190,17 +186,18 @@ type generator[TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	lexingRuleSet  *lexarch.LexingRuleset[rune, TToken, TTokenRole]
 
 	targetLSpecVersion string
-	enableSublime      bool
 	emitRegex          bool
 
 	tokenFormatter     func(token TToken) string
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
 
-	sublimeConfigPath string
+	enableSublime     bool
 	sublimeOutputPath string
 
-	baseScopes map[TToken]string
+	enableGoBindings      bool
+	goBindingsOutputPath  string
+	goBindingsPackageName string
 
 	ignoredTokenRoles []TTokenRole
 	eofToken          *TToken
@@ -231,8 +228,16 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildHeader() Do
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSection() Doc {
 	var bodyDocs []Doc
+
 	if g.enableSublime {
 		bodyDocs = append(bodyDocs, g.buildSublimePragma())
+	}
+
+	if g.enableGoBindings {
+		if len(bodyDocs) > 0 {
+			bodyDocs = append(bodyDocs, line(), line())
+		}
+		bodyDocs = append(bodyDocs, g.buildGoBindingsPragma())
 	}
 
 	if len(bodyDocs) == 0 {
@@ -249,14 +254,27 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSecti
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSublimePragma() Doc {
 	outPath := `"` + g.sublimeOutputPath + `"`
-	cfgPath := `"` + g.sublimeConfigPath + `"`
 
 	return concat(
 		doctext(fmt.Sprintf("tool.%s {", toolchain.SublimeToolName)),
 		nest(1, concat(
 			line(), doctext(fmt.Sprintf("%s = true;", toolchain.SublimeEnableKey)),
 			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.SublimeOutputPathKey, outPath)),
-			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.SublimeConfigurationPathKey, cfgPath)),
+		)),
+		line(), doctext("}"),
+	)
+}
+
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildGoBindingsPragma() Doc {
+	outPath := `"` + g.goBindingsOutputPath + `"`
+	pkgName := `"` + g.goBindingsPackageName + `"`
+
+	return concat(
+		doctext(fmt.Sprintf("tool.%s {", toolchain.GoBindingsToolName)),
+		nest(1, concat(
+			line(), doctext(fmt.Sprintf("%s = true;", toolchain.GoBindingsEnableKey)),
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.GoBindingsOutputPathKey, outPath)),
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.GoBindingsPackageNameKey, pkgName)),
 		)),
 		line(), doctext("}"),
 	)
@@ -481,7 +499,10 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRo
 		attributes = append(attributes, "EOF=true")
 	}
 
-	meta := fmt.Sprintf("%%%% %s %%%%", strings.Join(attributes, " "))
+	meta := ""
+	if len(attributes) > 0 {
+		meta = fmt.Sprintf("%%%% %s %%%%", strings.Join(attributes, " "))
+	}
 
 	return lexRow{
 		Priority: rule.Priority,
@@ -793,9 +814,6 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapChoice(g *syntaxa.Grammar[TToken
 }
 
 func (d *parseDecompiler[TToken, TNodeKind]) choiceChildDoc(parent *syntaxa.Grammar[TToken, TNodeKind], child *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	// if parent.OutputNodeKind != nil && child.Kind == syntaxa.GToken && child.OutputNodeKind == nil {
-	// 	return doctext(d.tokenFormatter(child.Token))
-	// }
 	return d.walk(child)
 }
 

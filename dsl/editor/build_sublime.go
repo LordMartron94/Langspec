@@ -7,7 +7,6 @@ import (
 	"foundation/domain"
 	"foundation/hash"
 	"langspec/dsl"
-	"langspec/dsl/generator"
 	langspeceditor "langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
@@ -21,7 +20,7 @@ type EditorCtx = langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.
 type EditorOverride = langspeceditor.EditorOverride[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind, toolchain.SublimeContext]
 
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
-	manifest := langSpecEditorManifest
+	manifest := LangSpecEditorManifest
 	manifest.BaseTokenScopes = dsl.LangSpecCompilerScopeMap(compiler)
 
 	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](manifest)
@@ -178,7 +177,7 @@ func regExOverride() *EditorOverride {
 	}
 }
 
-var langSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
+var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
 	InvalidScope: "invalid.illegal.unexpected-token",
 	NodeBindings: map[dsl.LangSpecParserNodeKind]toolchain.NodeBinding[dsl.LangSpecLexerTokenType]{
 		dsl.NodeDSLName:            {Scopes: []string{"entity.name.language"}},
@@ -219,16 +218,4 @@ var langSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 		dsl.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
 		dsl.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
 	},
-}
-
-func GetGeneratorBindings() map[dsl.LangSpecParserNodeKind]generator.NodeBinding[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind] {
-	out := make(map[dsl.LangSpecParserNodeKind]generator.NodeBinding[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind])
-
-	for kind, b := range langSpecEditorManifest.NodeBindings {
-		out[kind] = generator.NodeBinding[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
-			Scopes:      b.Scopes,
-			TokenScopes: b.TokenScopes,
-		}
-	}
-	return out
 }
