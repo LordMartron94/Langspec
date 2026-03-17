@@ -41,7 +41,7 @@ func (b *TextPatternBuilder[TToken, TTokenRole, TLexerState, TNodeKind, TContext
 	matchContext TContext,
 	punctuationContext TContext,
 ) OverrideHandler[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
-	return func(_ *EditorCtx[rune, TToken, TTokenRole, TLexerState, TNodeKind]) *EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
+	return func(_ *EditorCtx[rune, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 		prefixPattern := pattern.LiteralString(b.factory, prefix).Capture()
 		notTerminator := b.factory.NegatedClass(
 			b.factory.Range('\n', '\n'),
@@ -50,13 +50,13 @@ func (b *TextPatternBuilder[TToken, TTokenRole, TLexerState, TNodeKind, TContext
 
 		newPattern := prefixPattern.Then(notTerminator)
 
-		return &EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
+		return []*EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{{
 			Pattern:      &newPattern,
 			MatchContext: &matchContext,
 			Captures: map[int]TContext{
 				1: punctuationContext,
 			},
-		}
+		}}
 	}
 }
 
@@ -76,11 +76,11 @@ func (b *TextPatternBuilder[TToken, TTokenRole, TLexerState, TNodeKind, TContext
 	openContext TContext,
 	closeContext TContext,
 ) OverrideHandler[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
-	return func(_ *EditorCtx[rune, TToken, TTokenRole, TLexerState, TNodeKind]) *EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
+	return func(_ *EditorCtx[rune, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext] {
 		openPattern := pattern.LiteralString(b.factory, open)
 		closePattern := pattern.LiteralString(b.factory, close)
 
-		return &EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
+		return []*EditorOverride[rune, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{{
 			Pattern:      &openPattern,
 			MatchContext: &openContext,
 			DelimitedPayload: &DelimitedPayload[rune, TContext]{
@@ -89,6 +89,6 @@ func (b *TextPatternBuilder[TToken, TTokenRole, TLexerState, TNodeKind, TContext
 				ClosePattern: closePattern,
 				CloseContext: closeContext,
 			},
-		}
+		}}
 	}
 }
