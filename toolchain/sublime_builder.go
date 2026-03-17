@@ -2,12 +2,24 @@ package toolchain
 
 import (
 	"cmp"
+	"fmt"
+	"foundation/bytes"
+	"foundation/hash"
+	"langspec/dsl"
 	"langspec/editor"
 	"langspec/editor/sublime"
 	"lexarch"
-	"strings"
 	"syntaxa"
 )
+
+const (
+	SublimeToolName             = "sublime"
+	SublimeOutputPathKey        = "output-path"
+	SublimeConfigurationPathKey = "configuration-path"
+	SublimeEnableKey            = "enable"
+)
+
+var hasher = hash.XXH3HasherCreateWithSeed(6789)
 
 type SublimeContext struct {
 	Scope     string
@@ -22,6 +34,116 @@ type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerSta
 	BaseScope      string
 	OutputPath     string
 	ScopeSuffix    string
+}
+
+// ----------------------------------------------------------------- ENTRY POINTS
+
+/*
+RunSublimeToolchain is the legacy JSON-driven entry point (used by LangSpec compiling itself).
+It reads the configuration path from the pragma and loads the manifest from disk.
+*/
+func RunSublimeToolchain(
+	compileResult *dsl.LangSpecCompileResult,
+	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
+) error {
+	for _, pragma := range compileResult.CompiledToolPragmas {
+		if pragma.ToolName != SublimeToolName {
+			continue
+		}
+
+		configPath := pragma.Settings[SublimeConfigurationPathKey]
+		outputPath := pragma.Settings[SublimeOutputPathKey]
+		enabled := pragma.Settings[SublimeEnableKey]
+
+		if enabled == "false" {
+			return nil
+		}
+		if enabled != "true" {
+			return fmt.Errorf("unexpected enabled setting value: '%s'", enabled)
+		}
+
+		sublimeCfg, err := LoadSublimeConfigFromJSON(configPath)
+		if err != nil {
+			return err
+		}
+
+		return executeSublimeToolchain(
+			compileResult,
+			sublimeCfg.Manifest,
+			overrideProducer,
+			outputPath,
+			sublimeCfg.FileExtensions,
+			sublimeCfg.ScopeExtension,
+		)
+	}
+	return nil
+}
+
+/*
+RunSublimeToolchainFromMemory is the pure Go entry point (used by bootstrapped languages).
+It bypasses JSON loading and uses the provided SemanticManifest directly.
+*/
+func RunSublimeToolchainFromMemory(
+	compileResult *dsl.LangSpecCompileResult,
+	manifest SemanticManifest[string, string],
+	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
+	outputPath string,
+	fileExtensions []string,
+	scopeExtension string,
+) error {
+	return executeSublimeToolchain(
+		compileResult,
+		manifest,
+		overrideProducer,
+		outputPath,
+		fileExtensions,
+		scopeExtension,
+	)
+}
+
+// ----------------------------------------------------------------- CORE EXECUTION
+
+func executeSublimeToolchain(
+	compileResult *dsl.LangSpecCompileResult,
+	manifest SemanticManifest[string, string],
+	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
+	outputPath string,
+	fileExtensions []string,
+	scopeExtension string,
+) error {
+	if overrideProducer == nil {
+		overrideProducer = func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext] {
+			return nil
+		}
+	}
+
+	ctxProducer := BuildContextProducerFromManifest[rune, string, string, string, string](manifest)
+
+	irConfig := editor.EditorIRConfigurationCreate(
+		hasher,
+		func(token string) uint64 {
+			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token}, 0x00))
+		},
+		ctxProducer,
+		overrideProducer,
+		func(left, right SublimeContext) bool {
+			return left == right
+		},
+	)
+
+	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
+
+	runnerCfg := &SublimeRunnerConfig[rune, string, string, string, string]{
+		LexerRuleset:   &ruleset,
+		GrammarPackage: &compileResult.CompiledGrammarPackage,
+		IRConfig:       irConfig,
+		FileExtensions: fileExtensions,
+		BaseScope:      fmt.Sprintf("source%s", scopeExtension),
+		OutputPath:     outputPath,
+		ScopeSuffix:    scopeExtension,
+	}
+
+	return RunSublimeGenerator(runnerCfg)
 }
 
 func RunSublimeGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
@@ -50,61 +172,4 @@ func RunSublimeGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerSta
 			},
 		},
 	)
-}
-
-type ContextProducerConfig[TToken, TNodeKind comparable] struct {
-	InvalidScope string
-	GetBaseScope func(token TToken) string
-	GetNodeScope func(nodeKind TNodeKind, token *TToken) string
-}
-
-func BuildContextProducer[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
-	cfg ContextProducerConfig[TToken, TNodeKind],
-) func(ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) SublimeContext {
-	return func(ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) SublimeContext {
-		if ctx.IsInvalidContext {
-			return SublimeContext{Scope: cfg.InvalidScope}
-		}
-
-		if ctx.IsNest {
-			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
-		}
-
-		// 1. Node override has highest priority
-		if ctx.NodeKind != nil {
-			if scope := cfg.GetNodeScope(*ctx.NodeKind, ctx.Token); scope != "" {
-				return SublimeContext{Scope: scope}
-			}
-		}
-
-		// 2. Fallback to base token
-		if ctx.Token != nil {
-			if scope := cfg.GetBaseScope(*ctx.Token); scope != "" {
-				return SublimeContext{Scope: scope}
-			}
-		}
-
-		return SublimeContext{}
-	}
-}
-
-// --- UNIVERSAL STRING UTILITIES ---
-
-func applyScopeSuffix(scope, suffix string) string {
-	if scope == "" {
-		return ""
-	}
-	return scope + suffix
-}
-
-func nestLabelToMetaScope(label string) string {
-	if label == "" {
-		return ""
-	}
-	lower := strings.ToLower(label)
-	lower = strings.TrimSuffix(lower, "_nest")
-	lower = strings.TrimSuffix(lower, " nest")
-	lower = strings.ReplaceAll(lower, " ", "-")
-	lower = strings.ReplaceAll(lower, "_", "-")
-	return "meta." + lower + ".body"
 }
