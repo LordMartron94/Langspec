@@ -1,6 +1,6 @@
 # LangSpec
 
-LangSpec is a language specification and parsing ecosystem. It provides a meta-language (the LangSpec DSL) for describing lexers and grammars, plus tooling to parse source files and to generate editor integrations (e.g. Sublime Text syntax definitions). The `.lspec` grammar itself does **not** include logic for specifying validation—validation is semantic and would require imperative programming, so it is implemented on the Go side (see package **`validation`** and compiler validation stages).
+LangSpec is a language specification and parsing ecosystem. It provides a meta-language (the LangSpec DSL) for describing lexers and grammars, plus tooling to parse source files, to generate editor integrations (e.g. Sublime Text syntax definitions), and to generate **automatic Go bindings** (Token and Node types and constants) for type-safe use in downstream compilers and tooling. The `.lspec` grammar itself does **not** include logic for specifying validation—validation is semantic and would require imperative programming, so it is implemented on the Go side (see package **`validation`** and compiler validation stages).
 
 ## Overview
 
@@ -121,7 +121,7 @@ Sublime Text syntax is generated from the editor IR, which is built from a **Gra
 
 ### Package `toolchain`
 
-- Helpers for tools (e.g. Sublime config keys and tool names) used by the DSL and generator. The Sublime toolchain supports **two manifest sources**: (1) **JSON manifest** — **`RunSublimeToolchain`** reads PRAGMA **configuration-path**, loads **`SublimeConfiguration`** via **`LoadSublimeConfigFromJSON`**, and runs the pipeline; (2) **in-memory manifest** — **`RunSublimeToolchainFromMemory`** takes a **`SemanticManifest`** and metadata (output path, file extensions, scope extension) directly, used by the bootstrap when **`WithSublimeToolchain`** is set. Both paths use **`BuildContextProducerFromManifest`** to build the context producer for the editor IR.
+- Helpers for tools used by the DSL and generator. **Sublime toolchain:** supports two manifest sources — (1) **JSON manifest**: **`RunSublimeToolchain`** reads PRAGMA **configuration-path**, loads **`SublimeConfiguration`** via **`LoadSublimeConfigFromJSON`**, and runs the pipeline; (2) **in-memory manifest**: **`RunSublimeToolchainFromMemory`** takes a **`SemanticManifest`** and metadata directly, used by the bootstrap when **`WithSublimeToolchain`** is set. Both use **`BuildContextProducerFromManifest`** for the editor IR. **Go bindings toolchain:** **`RunGoBindingsToolchain`** generates a Go source file with **Token** and **Node** types (string-based) and one const per token and per grammar node when **tool.go_bindings** is enabled in PRAGMA; use the generated package for type-safe token and node references in downstream compilers.
 
 ---
 
@@ -253,7 +253,39 @@ Example (conceptual): register line and block comment handlers for your language
 | Sublime syntax for **your language** with **JSON manifest** | Enable **PRAGMA** `tool.sublime` with **output-path** and **configuration-path**; compile then **`toolchain.RunSublimeToolchain(compileResult, overrideProducer)`** or **`bootstrap.CompileParserFromSpec(...)`** (no **WithSublimeToolchain**). |
 | Sublime syntax for **your language** with **in-memory manifest** | Enable **PRAGMA** `tool.sublime` with **output-path**; call **`bootstrap.CompileParserFromSpec(..., WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension))`** or **`toolchain.RunSublimeToolchainFromMemory(...)`** manually. **configuration-path** is ignored. |
 | No overrides | Pass **`nil`** as override producer (or nil **SublimeOverrideFactory** when using **WithSublimeToolchain**). |
-| Line/block comment or custom token behavior | Implement an override producer (e.g. **`OverrideRegistry`** + **`TextPatternBuilder`**), or a **SublimeOverrideFactory** that returns one; optionally adapt typed → string for the string-typed toolchain. |
+| Line/block comment or custom token behavior | Implement an override producer (e.g. **`OverrideRegistry`** + **`TextPatternBuilder`**), or a **`SublimeOverrideFactory`** that returns one; optionally adapt typed → string for the string-typed toolchain. |
+
+---
+
+## Generating Go bindings for tokens and nodes
+
+LangSpec can **automatically generate** a Go source file that defines **Token** and **Node** as named types plus one const per lexical token and per grammar node from your compiled spec. This gives you type-safe references to tokens and nodes in downstream code (e.g. validation, codegen, or tooling) instead of magic strings.
+
+### How it works
+
+1. **Enable the toolchain in PRAGMA** — In your `.lspec` file, add a **tool.go_bindings** block with **enable** = true, **output-path** (path to the generated `.go` file), and **package-name** (Go package name for the generated file).
+
+2. **Compile the spec** — When you compile via **`bootstrap.CompileParserFromSpec`** or manually call **`toolchain.RunGoBindingsToolchain(compileResult)`** after **`LangSpecCompilerCompile`**, the toolchain runs if **tool.go_bindings** is enabled. It collects all tokens from the lexer ruleset and all node kinds from the grammar, then writes a single `.go` file.
+
+3. **Generated file** — The file contains:
+   - **`type Token string`** and a **`const`** block with one constant per token (e.g. `TokIdentifier`, `TokStringLiteral`).
+   - **`type Node string`** and a **`const`** block with one constant per grammar node (e.g. `NodeStatement`, `NodeExpression`).
+
+4. **Use the types** — Import the generated package in your compiler or tooling and use **Token** / **Node** for switch cases, map keys, and function parameters so the type system catches typos and invalid values.
+
+### PRAGMA example
+
+```lspec
+PRAGMA {
+  tool.go_bindings {
+    enable = true;
+    output-path = "path/to/bindings.go";
+    package-name = "mylang";
+  }
+}
+```
+
+The bootstrap runs **`RunGoBindingsToolchain`** automatically when this pragma is present and enabled (before the Sublime toolchain). When **emitting** an `.lspec` from a grammar via the **generator** package, use **`WithGoBindingsConfiguration(outputPath, packageName)`** on the generator config so the emitted PRAGMA includes **tool.go_bindings** with the given path and package name.
 
 ---
 
@@ -289,12 +321,20 @@ Exactly one header at the top:
 
 Optional. Contains tool-specific configuration blocks.
 
+- **tool.sublime** — Sublime syntax generation: **enable**, **output-path**, and optionally **configuration-path** (JSON manifest). See **Generating a Sublime Text syntax file**.
+- **tool.go_bindings** — Go bindings generation: **enable** = true, **output-path** = path to generated `.go` file, **package-name** = Go package name. Generates **Token** and **Node** types and consts. See **Generating Go bindings for tokens and nodes**.
+
 ```lspec
 PRAGMA {
   tool.sublime {
     enable = true;
     output-path = "path";
     configuration-path = "path";
+  }
+  tool.go_bindings {
+    enable = true;
+    output-path = "path/to/bindings.go";
+    package-name = "mylang";
   }
 }
 ```
