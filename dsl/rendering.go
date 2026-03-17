@@ -159,26 +159,8 @@ func renderSingleLineHighlight(
 		nextCol := advanceFn(r, currentCol)
 		width := nextCol - currentCol
 
-		// 1. Sanitize the source line so the terminal cannot stretch it
-		if r == '\t' {
-			sourceBuilder.WriteString(strings.Repeat(" ", width))
-		} else {
-			sourceBuilder.WriteRune(r)
-		}
-
-		// 2. Build the perfectly aligned marker beneath it
-		if currentCol < startCol {
-			markerBuilder.WriteString(strings.Repeat(" ", width))
-		} else if currentCol >= startCol && currentCol < endCol {
-			if currentCol == startCol {
-				markerBuilder.WriteString("^")
-				if width > 1 {
-					markerBuilder.WriteString(strings.Repeat("~", width-1))
-				}
-			} else {
-				markerBuilder.WriteString(strings.Repeat("~", width))
-			}
-		}
+		sourceBuilder.WriteString(sanitizeRune(r, width))
+		markerBuilder.WriteString(buildMarkerFragment(currentCol, startCol, endCol, width))
 
 		currentCol = nextCol
 	}
@@ -194,6 +176,33 @@ func renderSingleLineHighlight(
 	fmt.Fprintf(w, " %4d | %s\n", lineNum, sourceBuilder.String())
 	fmt.Fprint(w, "      | ")
 	fmt.Fprintln(w, markerBuilder.String())
+}
+
+func sanitizeRune(r rune, width int) string {
+	if r == '\t' {
+		return strings.Repeat(" ", width)
+	}
+	return string(r)
+}
+
+func buildMarkerFragment(currentCol, startCol, endCol, width int) string {
+	if currentCol < startCol {
+		return strings.Repeat(" ", width)
+	}
+
+	// Guarantee the caret renders the exact moment we hit the target
+	if currentCol == startCol {
+		if width > 1 && endCol > startCol {
+			return "^" + strings.Repeat("~", width-1)
+		}
+		return "^"
+	}
+
+	if currentCol < endCol {
+		return strings.Repeat("~", width)
+	}
+
+	return ""
 }
 
 func renderMultiLineHighlight(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
