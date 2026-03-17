@@ -329,7 +329,7 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	var cfgDump string
 	if cfg, _, _ := lowering.ToPatternGrammar(grammarPackage.Root, grammarPackage.AdditionalRules, grammarPackage.Grammars); cfg != nil {
 		cfgDump = cfg.DebugDump(
-			pattern.NewContextaCleanFormatter(LangSpecLexerTokenType.String),
+			pattern.NewContextaCleanFormatter[LangSpecLexerTokenType, struct{}](LangSpecLexerTokenType.String),
 		)
 	}
 
