@@ -813,6 +813,8 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return compileGroup(ctx, node)
 	case NodeParseSegment:
 		return compileParseSegment(ctx, node)
+	case NodeRepetition:
+		return compileParseRepetition(ctx, node)
 	default:
 		panic(fmt.Errorf("compiler error: unsupported parse expression kind: '%s'", kind))
 	}
@@ -990,6 +992,48 @@ func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 	}
 
 	return compileRuleReference(ctx, nameNode, targetName)
+}
+
+func compileParseRepetition(ctx *parseCompileCtx, node *Node) CompiledRule {
+	children := node.Children()
+	if len(children) < 2 {
+		panic("compiler error: repetition node missing target or bounds")
+	}
+
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	innerRule := compileParseExpression(&subCtx, children[0])
+
+	minVal, maxVal := extractRepetitionBounds(children[1])
+
+	return buildRepetitionRule(ctx, innerRule, minVal, maxVal)
+}
+
+func extractRepetitionBounds(boundsNode *Node) (int, int) {
+	minVal := 0
+	maxVal := -1 // Unbounded
+
+	if minNode := boundsNode.FindFirstKind(NodeRepetitionMin); minNode != nil {
+		minVal = extractIntContent(minNode)
+	}
+
+	if maxNode := boundsNode.FindFirstKind(NodeRepetitionMax); maxNode != nil {
+		maxVal = extractIntContent(maxNode)
+	}
+
+	return minVal, maxVal
+}
+
+func buildRepetitionRule(ctx *parseCompileCtx, innerRule CompiledRule, min, max int) CompiledRule {
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentRepeat(ctx.grammarID, min, max, innerRule)
+		}
+		return ctx.builder.Rule.Repeat(ctx.grammarID, ctx.nodeKind, min, max, innerRule)
+	}
+
+	label := parseCtxLabel(ctx, "REPETITION")
+	return ctx.builder.Rule.TransparentRepeat(label, min, max, innerRule)
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
