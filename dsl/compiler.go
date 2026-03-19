@@ -854,7 +854,17 @@ func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
 		compiled := compileParseExpression(&subCtx, child)
 		rules = append(rules, compiled)
 	}
-	return ctx.builder.Rule.Choice(parseCtxLabel(ctx, "CHOICE"), rules...)
+
+	choiceRule := ctx.builder.Rule.Choice(parseCtxLabel(&subCtx, "CHOICE"), rules...)
+
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentSequence(ctx.grammarID, choiceRule)
+		}
+		return ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, choiceRule)
+	}
+
+	return choiceRule
 }
 
 func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -892,7 +902,16 @@ func compileOptional(ctx *parseCompileCtx, node *Node) CompiledRule {
 	subCtx.rootLevel = false
 	innerRule := compileParseExpression(&subCtx, child)
 
-	return ctx.builder.Rule.Optional(innerRule)
+	optRule := ctx.builder.Rule.Optional(innerRule)
+
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentSequence(ctx.grammarID, optRule)
+		}
+		return ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, optRule)
+	}
+
+	return optRule
 }
 
 func compilePlus(ctx *parseCompileCtx, node *Node) CompiledRule {
