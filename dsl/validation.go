@@ -348,25 +348,73 @@ func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 
 	for _, ref := range ctx.RootNode.FindAllKind(NodeParseExpressionReference) {
-		name := getRefName(ref)
-		if name == "" {
-			continue
-		}
-		kind := resolveParseRefSymbolKind(env, name)
-		switch kind {
-		case parseRefSymbolRule, parseRefSymbolPratt:
-			if kind == parseRefSymbolPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
-				ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
-			}
-			continue
-		case parseRefSymbolToken:
-			msg := fmt.Sprintf("token '%s' referenced as an expression. Did you forget an output mapping ('Node = %s') or the 'virtual' keyword?", name, name)
-			ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), msg, ref)
-			continue
-		default:
-			ctx.ReportError(codeForUnresolvedParseRef(ref).String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
+		validateParseExpressionReference(ctx, env, ref)
+	}
+	for _, ref := range ctx.RootNode.FindAllKind(NodeParseSymbolReference) {
+		if symbolReferenceIsBareParseSegmentGrammarRef(ref) {
+			validateBareParseSegmentSymbolReference(ctx, env, ref)
 		}
 	}
+}
+
+func validateParseExpressionReference(ctx *ValidationCtx, env *SemanticEnv, ref *Node) {
+	name := getRefName(ref)
+	if name == "" {
+		return
+	}
+	kind := resolveParseRefSymbolKind(env, name)
+	switch kind {
+	case parseRefSymbolRule, parseRefSymbolPratt:
+		if kind == parseRefSymbolPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
+			ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
+		}
+	case parseRefSymbolToken:
+		ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), messageTokenNotAllowedBareInParse(name), ref)
+	default:
+		ctx.ReportError(codeForUnresolvedParseRef(ref).String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
+	}
+}
+
+/*
+validateBareParseSegmentSymbolReference checks NodeParseSymbolReference in a parse segment
+without output mapping (= token / = group). A declared token is not valid there: tokens must
+use `virtual <tok>` or `<node name> = <token reference>`. Rule/pratt names are valid bare references.
+*/
+func validateBareParseSegmentSymbolReference(ctx *ValidationCtx, env *SemanticEnv, ref *Node) {
+	name := getRefName(ref)
+	if name == "" {
+		return
+	}
+	kind := resolveParseRefSymbolKind(env, name)
+	switch kind {
+	case parseRefSymbolRule, parseRefSymbolPratt:
+		if kind == parseRefSymbolPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
+			ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
+		}
+	case parseRefSymbolToken:
+		ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), messageTokenNotAllowedBareInParse(name), ref)
+	default:
+		ctx.ReportError(codeForUnresolvedParseRef(ref).String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
+	}
+}
+
+/*
+symbolReferenceIsBareParseSegmentGrammarRef is true when ref is the leading identifier of
+identifierMapping with no "= …" tail (bare Foo vs Foo = Tok / Foo = ( … )). Without the tail,
+Foo is a rule/pratt reference, or (if it names a lexer token) an invalid bare token use.
+*/
+func symbolReferenceIsBareParseSegmentGrammarRef(ref *Node) bool {
+	if ref == nil || ref.Kind() != NodeParseSymbolReference {
+		return false
+	}
+	parent := ref.Parent()
+	if parent == nil || parent.Kind() != NodeParseSegment {
+		return false
+	}
+	if parent.FindFirstKind(NodeParseTokenReference) != nil || parent.FindFirstKind(NodeParseGroup) != nil {
+		return false
+	}
+	return true
 }
 
 // ------------------------------------------------------------- REACHABILITY (STAGE 1)
@@ -702,6 +750,13 @@ func resolveParseRefSymbolKind(env *SemanticEnv, name string) parseRefSymbolKind
 		return parseRefSymbolPratt
 	}
 	return parseRefSymbolNone
+}
+
+func messageTokenNotAllowedBareInParse(name string) string {
+	return fmt.Sprintf(
+		"token '%s' cannot appear bare in a parse expression; use `virtual %s` or an output mapping (`<node name> : %s`)",
+		name, name, name,
+	)
 }
 
 func codeForUnresolvedParseRef(ref *Node) ValidationCode {
