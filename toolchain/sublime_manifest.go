@@ -147,13 +147,13 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 
 	if token != nil && len(binding.TokenScopes) > 0 {
 		if ts, match := binding.TokenScopes[*token]; match && len(ts) > 0 {
-			ctx.Scope = ts[0]
+			ctx.Scope = joinSublimeScopes(ts)
 			return ctx, true
 		}
 	}
 
 	if len(binding.Scopes) > 0 {
-		ctx.Scope = binding.Scopes[0]
+		ctx.Scope = joinSublimeScopes(binding.Scopes)
 		return ctx, true
 	}
 
@@ -162,11 +162,38 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 
 // --- UNIVERSAL STRING UTILITIES ---
 
+// joinSublimeScopes joins non-empty scopes with spaces (Sublime stacked scopes in one scope: field).
+func joinSublimeScopes(scopes []string) string {
+	var b strings.Builder
+	for _, s := range scopes {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(s)
+	}
+	return b.String()
+}
+
+// applyScopeSuffix appends suffix to each space-separated scope segment.
 func applyScopeSuffix(scope, suffix string) string {
 	if scope == "" {
 		return ""
 	}
-	return scope + suffix
+	if suffix == "" {
+		return scope
+	}
+	parts := strings.Fields(scope)
+	if len(parts) == 0 {
+		return ""
+	}
+	for i := range parts {
+		parts[i] = parts[i] + suffix
+	}
+	return strings.Join(parts, " ")
 }
 
 func nestLabelToMetaScope(label string) string {
