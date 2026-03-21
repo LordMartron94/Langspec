@@ -12,7 +12,7 @@ import (
 	"syntaxa"
 )
 
-// PRAGMA keys for the Sublime toolchain (tool.sublime { ... } in .lspec).
+/* PRAGMA keys for the Sublime toolchain (tool.sublime { ... } in .lspec). */
 const (
 	SublimeToolName             = "sublime"
 	SublimeOutputPathKey        = "output-path"
@@ -22,16 +22,19 @@ const (
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
 
-// SublimeContext carries the scope and optional meta-scope used when building
-// Sublime Text syntax rules from the editor IR.
+/*
+SublimeContext carries the scope and optional meta-scope used when building Sublime Text syntax
+rules from the editor IR.
+*/
 type SublimeContext struct {
 	Scope     string
 	MetaScope string
 }
 
-// SublimeRunnerConfig holds the lexer, grammar, IR config, file extensions,
-// base scope, output path, and scope suffix for a single Sublime generator run.
-// Used by RunSublimeGenerator after the toolchain has built the editor IR.
+/*
+SublimeRunnerConfig holds the lexer, grammar, IR config, file extensions, base scope, output path,
+and scope suffix for a single Sublime generator run. Used after the toolchain has built the editor IR.
+*/
 type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	LexerRuleset   *lexarch.LexingRuleset[TObservation, TToken, TTokenRole]
 	GrammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
@@ -138,11 +141,11 @@ func RunSublimeToolchainFromMemory(
 	)
 }
 
-// ----------------------------------------------------------------- CORE EXECUTION
-
-// executeSublimeToolchain is the shared implementation for both manifest sources.
-// It builds the editor IR (context producer from manifest, optional override producer),
-// then runs the Sublime generator. Called by RunSublimeToolchain and RunSublimeToolchainFromMemory.
+/*
+executeSublimeToolchain is the shared implementation for both manifest sources.
+It builds the editor IR (context producer from manifest, optional override producer),
+then runs the Sublime generator. Called by RunSublimeToolchain and RunSublimeToolchainFromMemory.
+*/
 func executeSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],

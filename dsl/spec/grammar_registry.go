@@ -60,6 +60,7 @@ func LangSpecGrammarIDFromNodeWithSuffix(node LangSpecParserNodeKind, suffix str
 	return syntaxa.GrammarLabel(name)
 }
 
+/* LangSpecGrammarIDFromNode returns a stable syntaxa.GrammarLabel for the given node kind (no suffix). */
 func LangSpecGrammarIDFromNode(node LangSpecParserNodeKind) syntaxa.GrammarLabel {
 	return LangSpecGrammarIDFromNodeWithSuffix(node, "")
 }

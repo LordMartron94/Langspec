@@ -16,6 +16,7 @@ import (
 
 // ----------------------------------------------------------------- TYPES
 
+/* GeneratorConfig controls emitted .lspec layout and optional tool PRAGMA blocks for maintainer generation. */
 type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 	targetLSpecVersion string
 
@@ -41,6 +42,7 @@ type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 	eofToken *TToken
 }
 
+/* GeneratorConfigCreate returns a config with default formatters and the given skipped lexer roles. */
 func GeneratorConfigCreate[TToken, TTokenRole, TNodeKind comparable](
 	targetLSpecVersion string,
 	skippedRoles []TTokenRole,
@@ -62,31 +64,37 @@ func GeneratorConfigCreate[TToken, TTokenRole, TNodeKind comparable](
 	}
 }
 
+/* WithEmitRegEx sets whether regex literals are emitted in generated output. */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEmitRegEx(value bool) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.emitRegex = value
 	return g
 }
 
+/* WithTokenFormatter sets the formatter used for token names in emitted .lspec text. */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithTokenFormatter(formatter func(token TToken) string) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.tokenFormatter = formatter
 	return g
 }
 
+/* WithTokenRoleFormatter sets the formatter for token role names in emitted output. */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithTokenRoleFormatter(formatter func(tokenRole TTokenRole) string) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.tokenRoleFormatter = formatter
 	return g
 }
 
+/* WithNodeKindFormatter sets the formatter for parser node kind names in emitted output. */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithNodeKindFormatter(formatter func(kind TNodeKind) string) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.nodeKindFormatter = formatter
 	return g
 }
 
+/* WithColumnThresholdHint sets a soft column width for wrapping generated lines. */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithColumnThresholdHint(amount int) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.columnThreshold = amount
 	return g
 }
 
+/* WithEofToken sets the EOF token value referenced in generated LEX sections. */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEofToken(token TToken) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.eofToken = &token
 	return g
@@ -103,11 +111,11 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithSublimeConfiguratio
 /*
 WithGoBindingsConfiguration enables the go_bindings toolchain in the generated
 .lspec PRAGMA. The emitted PRAGMA will set tool.go_bindings with enable = true,
-output-path = outputPath, and package-name = packageName. When the .lspec is
-later compiled (e.g. via bootstrap or LangSpecCompilerCompile), RunGoBindingsToolchain
-writes a Go file at outputPath defining type Token, type Node, and consts for each
-token and node. Use this when generating .lspec from a grammar so that compiling
-that spec produces automatic Go bindings for tokens and nodes as types.
+output-path = outputPath, and package-name = packageName. Emitting bindings requires
+a codegen step (e.g. bootstrap.RunToolchainsFromSpecFile or RunGoBindingsFromSpecFile);
+CompileParserFromSpec and LangSpecCompilerCompile alone do not write files. When run,
+RunGoBindingsToolchain writes a Go file at outputPath defining type Token, type Node,
+and consts for each token and node.
 */
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithGoBindingsConfiguration(
 	outputPath string,
@@ -121,6 +129,7 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithGoBindingsConfigura
 
 // ----------------------------------------------------------------- ENTRY
 
+/* GenerateLSpec writes a .lspec file from the given grammar package and lexer ruleset using configuration. */
 func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
 	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],

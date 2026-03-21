@@ -14,6 +14,11 @@ import (
 	"syntaxa/rule"
 )
 
+/*
+LexerSpec, ParserSpec, RuleRegistry, LexerRuleset, CompiledRule, and CompilerRuleBuilder are the
+compiler-facing aliases for langspec, lexarch, syntaxa, and rule types using string lexer tokens
+and string parse node kinds (the DSL compiler's token/kind representation).
+*/
 type LexerSpec = langspec.LexerSpec[rune, string, string, string]
 type ParserSpec = langspec.ParserSpec[rune, string, string, string, string]
 type RuleRegistry = syntaxa.RuleRegistry[rune, string, string, string, string]
@@ -23,11 +28,13 @@ type LexerRuleset = lexarch.LexingRuleset[rune, string, string]
 type CompiledRule = syntaxa.ParserRule[rune, string, string, string, string]
 type CompilerRuleBuilder = rule.RuleBuilder[rune, string, string, string, string]
 
+/* ToolPragma is one parsed PRAGMA toolchain line: tool name and key/value settings. */
 type ToolPragma struct {
 	ToolName string
 	Settings map[string]string
 }
 
+/* CompiledLangSpec is compileTree output: lexer/parser specs, lowered grammar, EOF token, and pragmas. */
 type CompiledLangSpec struct {
 	dslName    string
 	dslVersion string
@@ -140,8 +147,6 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	}
 }
 
-// ------------------------------- HEADER -------------------------------
-
 func getInfoFromHeader(headerNode *Node) (string, string, string) {
 	dslName := nodeFormattedContent(headerNode.FindFirstKind(dslspec.NodeDSLName), dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
 
@@ -162,8 +167,6 @@ func getEOFToken(rootNode *Node) string {
 
 	return eofToken
 }
-
-// ------------------------------- PRAGMAS -------------------------------
 
 func extractPragmas(rootNode *Node) []ToolPragma {
 	section := rootNode.FindFirstKind(dslspec.NodePragmaSection)
@@ -226,8 +229,6 @@ func extractPragmas(rootNode *Node) []ToolPragma {
 	}
 	return out
 }
-
-// ------------------------------- LEX -------------------------------
 
 func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {
 	ruleset := lexarch.LexingRulesetCreate[rune, string, string](
@@ -391,8 +392,6 @@ func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.Regula
 		panic(fmt.Errorf("engine error: unsupported pattern kind: '%s'", kind))
 	}
 }
-
-// --- PATTERNS
 
 func concatToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
 	children := node.Children()
@@ -591,8 +590,6 @@ func classToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] 
 	return ctx.c.factory.Class(ranges...)
 }
 
-// --- ATOMS
-
 func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 	content := nodeFormattedContent(node, dslspec.ATTRIBUTE_CHAR_LITERAL_VALUE)
 	return c.factory.Literal([]rune(content)...)
@@ -625,8 +622,6 @@ func patternRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[r
 
 	return targetPattern
 }
-
-// ------------------------------- PRATT & PARSE -------------------------------
 
 func grammarSubLabel(ruleName string, role string, counts map[string]int) syntaxa.GrammarLabel {
 	n := counts[role]
@@ -819,8 +814,6 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		panic(fmt.Errorf("compiler error: unsupported parse expression kind: '%s'", kind))
 	}
 }
-
-// ------------------------------- EXPRESSION HANDLERS -------------------------------
 
 func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
 	flatNodes := node.FlattenByKind(dslspec.NodeParseConcat)
@@ -1180,8 +1173,6 @@ func buildPrattConfig(
 	return config
 }
 
-// ------------------------------- PRATT CATEGORIES -------------------------------
-
 func compilePrattPrimary(
 	builder *CompilerRuleBuilder,
 	grammarID syntaxa.GrammarLabel,
@@ -1317,8 +1308,10 @@ func compilePrattImplicitOp(node *Node) *rule.PrattImplicitInfix[string, string]
 	}
 }
 
-// ------------------------------- PRATT OPERATOR BUILDERS -------------------------------
-
+/*
+OperatorTarget is a resolved Pratt operator binding: whether the target is a parse rule or a lexer token,
+the symbol name, and the parse node kind for the operator's AST node.
+*/
 type OperatorTarget struct {
 	IsRule   bool
 	Ref      string
@@ -1368,8 +1361,6 @@ func extractInfixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int, int
 	rightBP := extractIntContent(defNode.FindFirstKind(dslspec.NodePrattRightPrecedenceValue))
 	return target, leftBP, rightBP
 }
-
-// -------------------------------------------------------- HELPERS
 
 func extractIntContent(node *Node) int {
 	rawContent := lexemeRawContent(node.Tokens()[0])

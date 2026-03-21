@@ -2,9 +2,7 @@ package semantics
 
 import . "langspec/dsl/spec"
 
-// ------------------------------------------------------------- SEMANTIC ENVIRONMENT
-
-// SemanticSymbolKind identifies which symbol table a duplicate belongs to.
+/* SemanticSymbolKind identifies which symbol table a duplicate belongs to. */
 type SemanticSymbolKind uint8
 
 const (
@@ -14,8 +12,10 @@ const (
 	SymbolKindPratt
 )
 
-// SemanticEnv holds the resolved symbol tables for tokens, patterns, parse rules, and pratt expressions.
-// Built from the LST by BuildSemanticEnv and used by validation and compilation for reference resolution.
+/*
+SemanticEnv holds the resolved symbol tables for tokens, patterns, parse rules, and pratt expressions.
+Built from the LST by BuildSemanticEnv and used by validation and compilation for reference resolution.
+*/
 type SemanticEnv struct {
 	Tokens   map[string]*Node
 	Patterns map[string]*Node
@@ -26,13 +26,14 @@ type SemanticEnv struct {
 	LocalPratt    map[string]bool
 }
 
-// OnDuplicateFunc is called when a duplicate symbol is found during env build.
-// kind identifies the symbol table; name is the symbol name; node is the duplicate declaration.
-// Pass nil to BuildSemanticEnv to skip reporting (e.g. in the compiler).
+/*
+OnDuplicateFunc is called when a duplicate symbol is found during env build.
+kind identifies the symbol table; name is the symbol name; node is the duplicate declaration.
+Pass nil to BuildSemanticEnv to skip reporting (e.g. in the compiler).
+*/
 type OnDuplicateFunc func(kind SemanticSymbolKind, name string, node *Node)
 
-// BuildSemanticEnv builds the semantic environment from the LST root.
-// When onDuplicate is non-nil and a duplicate symbol is found, it is called with kind, name, and the duplicate node.
+/* BuildSemanticEnv builds the semantic environment from the LST root. When onDuplicate is non-nil and a duplicate symbol is found, it is called with kind, name, and the duplicate node. */
 func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 	env := &SemanticEnv{
 		Tokens:        make(map[string]*Node),
@@ -132,6 +133,7 @@ func buildEnvPratt(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 	}
 }
 
+/* PatternRefTargetName returns the raw lexeme text of a pattern reference node (the referenced name). */
 func PatternRefTargetName(patternRef *Node) string {
 	return string(patternRef.Tokens()[0].Raw)
 }

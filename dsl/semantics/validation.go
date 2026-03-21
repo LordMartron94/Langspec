@@ -11,10 +11,12 @@ import (
 	. "langspec/dsl/spec"
 )
 
-// ------------------------------------------------------------- TYPES
-
+/* ValidationCtx is the validation stage context type for LangSpec LST validation. */
 type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 
+/*
+ValidationCode is a stable machine-readable diagnostic code for LangSpec validation (e.g. V_PAT001).
+*/
 type ValidationCode string
 
 const (
@@ -58,6 +60,7 @@ const (
 	VALIDATION_SYMBOL_NAME_COLLISION ValidationCode = "V_SYM001"
 )
 
+/* String returns the code string (implements fmt.Stringer). */
 func (v ValidationCode) String() string {
 	return string(v)
 }
@@ -68,9 +71,9 @@ func attributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 	)
 }
 
-// ------------------------------------------------------------- STAGES REGISTRATION
-
-// ValidationStages returns the ordered LST validation stages for the LangSpec DSL compiler.
+/*
+ValidationStages returns the ordered LST validation stages for the LangSpec DSL compiler.
+*/
 func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage] {
 	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]{
 		{

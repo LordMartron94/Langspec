@@ -17,9 +17,16 @@ var hasher = hash.XXH3HasherCreateWithSeed(6789)
 
 var runeFactory = pattern.RegulaASTFactoryCreate(domain.DiscreteDomainRuneCreate())
 
+/* EditorCtx is the editor context type for LangSpec DSL Sublime override wiring. */
 type EditorCtx = langspeceditor.EditorCtx[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]
+
+/* EditorOverride is the override type for LangSpec DSL Sublime generation. */
 type EditorOverride = langspeceditor.EditorOverride[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind, toolchain.SublimeContext]
 
+/*
+BuildSublimeSyntaxForDSL builds editor IR from the compiled DSL and writes a Sublime syntax file to syntaxFile.
+It does not read PRAGMA; the caller supplies the output path (e.g. from maintainer scripts).
+*/
 func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string) error {
 	manifest := LangSpecEditorManifest
 	manifest.BaseTokenScopes = dsl.LangSpecCompilerScopeMap(compiler)
@@ -53,6 +60,10 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	return toolchain.RunSublimeGenerator(runnerCfg)
 }
 
+/*
+BuildEditorOverrideProducer returns an override producer for LangSpec DSL tokens (comments, regex, symbol refs).
+Pass the result into EditorIRConfigurationCreate together with ctxProducer from the manifest.
+*/
 func BuildEditorOverrideProducer(
 	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
 	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,

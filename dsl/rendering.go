@@ -11,10 +11,7 @@ import (
 	"text/tabwriter"
 )
 
-// -----------------------------------------------------------------------------
-// SYNTAX ERRORS
-// -----------------------------------------------------------------------------
-
+/* RenderSyntaxErrorsWithContext writes a formatted report of syntax errors with source context to w. */
 func RenderSyntaxErrorsWithContext(
 	w io.Writer,
 	source []rune,
@@ -48,10 +45,6 @@ func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError[rune]) {
 	}
 	fmt.Fprintf(w, "[%s] (rule=%s) %s at %d:%d\n", typeStr, e.Rule, e.Message, e.StartLine, e.StartColumn)
 }
-
-// -----------------------------------------------------------------------------
-// VALIDATION ENTRIES
-// -----------------------------------------------------------------------------
 
 func renderValidationEntries(
 	w io.Writer,
@@ -120,10 +113,6 @@ func renderFallbackValidationSpan(
 		fmt.Fprintf(w, "      Absolute Span: %d - %d\n", entry.Start, entry.End)
 	}
 }
-
-// -----------------------------------------------------------------------------
-// SHARED DIAGNOSTIC HIGHLIGHTING
-// -----------------------------------------------------------------------------
 
 func renderDiagnosticContext(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
 	if !isValidSpanRange(startL, endL, len(lines)) {
@@ -272,10 +261,7 @@ func splitLinesRunes(runes []rune) [][]rune {
 	return lines
 }
 
-// -----------------------------------------------------------------------------
-// DEBUG DUMPS & TRACES
-// -----------------------------------------------------------------------------
-
+/* RenderParseTrace writes a tabular parse trace to w using formatToken for token display. */
 func RenderParseTrace[TToken any](
 	w io.Writer,
 	trace *syntaxa.ParseTrace[TToken],
@@ -355,6 +341,7 @@ func formatRecoveryStatus(attempted, recovered, landed bool) string {
 	return "FAILED"
 }
 
+/* RenderLSTDump writes a labeled LST debug dump string to w. */
 func RenderLSTDump(w io.Writer, dump string) {
 	if w == nil || dump == "" {
 		return
@@ -364,6 +351,7 @@ func RenderLSTDump(w io.Writer, dump string) {
 	fmt.Fprintln(w, "=========================")
 }
 
+/* RenderGrammarDumps writes grammar and optional CFG debug dumps to w. */
 func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump, cfgDump string) {
 	if w == nil {
 		return

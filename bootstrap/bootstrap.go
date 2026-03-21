@@ -12,18 +12,21 @@ import (
 
 // ----------------------------------------------------------------- CONFIGURATION
 
-// SublimeOverrideFactory is a function that, given the compiled ruleset and
-// context producer, returns an override producer for the Sublime toolchain. Used
-// when WithSublimeToolchain is set so the host can supply token overrides (e.g.
-// line/block comment, embedded regions) from typed Go code.
+/*
+SublimeOverrideFactory is a function that, given the compiled ruleset and context producer,
+returns an override producer for the Sublime toolchain. Used when WithSublimeToolchain is set
+so the host can supply token overrides (e.g. line/block comment, embedded regions) from typed Go code.
+*/
 type SublimeOverrideFactory func(
 	ruleset *lexarch.LexingRuleset[rune, string, string],
 	ctxProducer func(ctx *editor.EditorCtx[rune, string, string, string, string]) toolchain.SublimeContext,
 ) func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]
 
-// ParserCompiler holds configuration for the bootstrap pipeline (spec file,
-// allocator, diagnostic sink, optional Sublime in-memory manifest and factory).
-// Built by buildConfig from CompileParserFromSpec options; not used directly by callers.
+/*
+ParserCompiler holds configuration for the bootstrap pipeline (spec file, allocator, diagnostic
+sink, optional Sublime in-memory manifest and factory). Built by buildConfig from
+CompileParserFromSpec options; not used directly by callers.
+*/
 type ParserCompiler struct {
 	specFile       string
 	allocFn        memarch.AllocationFn
@@ -35,8 +38,10 @@ type ParserCompiler struct {
 	scopeExtension  string
 }
 
+/* Option configures a ParserCompiler when passed to CompileParserFromSpec or RunToolchainsFromSpecFile. */
 type Option func(*ParserCompiler)
 
+/* WithDiagnosticSink sets compile diagnostics output for DSL compilation inside bootstrap. */
 func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
 	return func(c *ParserCompiler) {
 		c.diagnosticSink = sink

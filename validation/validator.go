@@ -1,7 +1,3 @@
-// Package validation provides LST (Lossless Syntax Tree) validation stages and reporting.
-// Validation is semantic and imperative; the .lspec grammar has no construct for defining
-// validation rules. Callers configure stages and optional run state (typed via TState),
-// then run the validator on a parsed LST.
 package validation
 
 import (
@@ -22,6 +18,7 @@ const (
 	VALIDATION_SEVERITY_FATAL
 )
 
+/* String returns a fixed-width name for the severity (for logging and display). */
 func (v ValidationSeverity) String() string {
 	switch v {
 	case VALIDATION_SEVERITY_DIAGNOSTIC:

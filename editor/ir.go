@@ -9,6 +9,7 @@ import (
 	"syntaxa/lowering"
 )
 
+/* ROOT_LABEL is the label for the synthetic root state in EditorIR. */
 const ROOT_LABEL = "root"
 
 /*

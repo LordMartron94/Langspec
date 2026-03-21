@@ -17,13 +17,19 @@ import (
 
 // --------------------------------------------------------------- TYPE ALIASES
 
+/* LexingRuleset is the lexing ruleset type for the LangSpec DSL lexer (rune observations). */
 type LexingRuleset = lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 
+/* ValidationStage is a validation stage for the DSL LST when grammar package state is not yet available. */
 type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 
+/* ValidationStageCtx is the per-stage context for early DSL validation passes. */
 type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
+
+/* NodeFinalizationCtx is the syntaxa finalization context for DSL parse nodes. */
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
+/* AttributeAs reads a typed attribute from a DSL LST node, delegating to syntaxa.AttributeAs. */
 func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
 	return syntaxa.AttributeAs[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, TAttribute](
 		node, attributeName,
@@ -158,6 +164,10 @@ LangSpecCompilerCompile compiles a .lspec file and returns a structured result p
 When the file is not .lspec or lexing fails, result is nil. Otherwise result is populated
 with the parsed LST, trace, syntax errors, and validation entries (if validation ran).
 Diagnostic output is written only when config's DiagnosticSink is set.
+
+It does not execute PRAGMA toolchains (go_bindings, Sublime, etc.); those require a separate
+codegen step such as bootstrap.RunToolchainsFromSpecFile using the same spec path or a
+LangSpecCompileResult from bootstrap.RunToolchainsFromCompileResult.
 */
 func LangSpecCompilerCompile(
 	compiler *LangSpecCompiler,
@@ -273,11 +283,13 @@ func LangSpecCompilerCompile(
 	return result, err
 }
 
+/* CompilerDebugConfig selects optional debug output for LangSpecCompilerDebugResult. */
 type CompilerDebugConfig struct {
 	DebugParseTrace bool
 	DebugLST        bool
 }
 
+/* LangSpecCompilerDebugLexemes lexes sourceFile and writes lexeme debug output to the compiler diagnostic writer. */
 func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string) error {
 	session := langSpecCompilerSessionGet(compiler, sourceFile)
 
@@ -294,6 +306,7 @@ func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string)
 	return nil
 }
 
+/* LangSpecCompilerDebugGrammar writes grammar and grammar-package debug dumps to the diagnostic writer. */
 func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	grammarDump := compiler.programRule.GetGrammar().DebugDump(
 		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType, LangSpecParserNodeKind]{
@@ -331,6 +344,7 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	RenderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump, cfgDump)
 }
 
+/* LangSpecCompilerDebugResult writes parse trace and/or LST dump for result per config. */
 func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
 	if config.DebugParseTrace {
 		RenderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })

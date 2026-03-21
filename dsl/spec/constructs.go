@@ -19,8 +19,6 @@ type TokenDefinition struct {
 	Close    *pattern.RegulaAST[rune]
 }
 
-// ----------------------------------------------------------- TOKEN BUILDER
-
 /*
 TokenBuilder configures a single token via a fluent API.
 DefineToken starts the chain; Build returns the TokenDefinition.

@@ -16,6 +16,7 @@ import (
 const headerLine = "# ======================================================\n"
 const timeFormat = "2006-01-02 15:04:05 MST"
 
+/* ExtractionConfig maps editor IR contexts to YAML scope and meta_scope strings for Sublime output. */
 type ExtractionConfig[TContext any] struct {
 	ExtractScope     func(TContext) string
 	ExtractMetaScope func(TContext) string
@@ -47,6 +48,9 @@ type contextsSection struct {
 	Contexts map[string][]contextEntry `yaml:"contexts"`
 }
 
+/*
+GenerateSyntaxFile serializes editor IR to a Sublime Text .sublime-syntax YAML file at outputFile.
+*/
 func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	ir *editor.EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	fileExtensions []string,
