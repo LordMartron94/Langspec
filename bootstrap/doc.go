@@ -1,31 +1,32 @@
-// Package bootstrap orchestrates the other LangSpec subpackages so that creating a
-// parser and optional editor assets from a .lspec file is a single call.
+// Package bootstrap wires LangSpec DSL compilation to a runtime LangParser and exposes
+// separate entry points for codegen toolchains (go bindings, Sublime syntax).
 //
-// Use CompileParserFromSpec(specFile, alloc, opts...) to compile the DSL, run
-// toolchains (e.g. Sublime syntax generation when enabled in PRAGMA), and
-// return a LangParser.
+// # Runtime: parser from a spec
 //
-// Options: WithDiagnosticSink for human-readable diagnostics; WithSublimeToolchain
-// to supply an in-memory manifest and override factory for the Sublime toolchain.
+// Use CompileParserFromSpec(specFile, alloc, opts...) to compile the DSL and return
+// a LangParser. This does not run toolchains (no generated files). Options:
+// WithDiagnosticSink for human-readable compile diagnostics. WithSublimeToolchain is
+// not used by CompileParserFromSpec (ignored); use RunToolchainsFromSpecFile for that.
+//
+// # Codegen: toolchains
+//
+// Use RunGoBindingsFromSpecFile(specFile, alloc, opts...) to emit go_bindings only (first
+// codegen step when generated Token/Node types must exist before the rest of the package
+// compiles). Use RunToolchainsFromSpecFile(specFile, alloc, opts...) to run go_bindings and
+// Sublime per PRAGMA. Same options as RunToolchainsFromCompileResult for the full pipeline,
+// including WithSublimeToolchain for an in-memory manifest and override factory.
+//
+// Use RunToolchainsFromCompileResult when you already have a LangSpecCompileResult
+// (e.g. after dsl.LangSpecCompilerCompile).
 //
 // # Sublime toolchain: JSON vs in-memory manifest
 //
-// The bootstrap supports two ways to drive the Sublime toolchain:
+// When RunToolchainsFromSpecFile / RunToolchainsFromCompileResult runs without
+// WithSublimeToolchain, toolchain.RunSublimeToolchain loads the manifest from the JSON
+// file at PRAGMA configuration-path (enable, output-path, configuration-path).
 //
-//  1. JSON manifest: If WithSublimeToolchain is not used, runToolchains calls
-//     toolchain.RunSublimeToolchain(compileResult, nil). That reads PRAGMA
-//     (enable, output-path, configuration-path) and loads the manifest from the
-//     JSON file at configuration-path. Override producer is nil unless the caller
-//     invokes the toolchain separately with one.
+// With WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension), the
+// in-memory manifest is used and configuration-path is ignored; factory may be nil.
 //
-//  2. In-memory manifest: If WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension)
-//     is used, runToolchains uses the supplied manifest and calls
-//     toolchain.RunSublimeToolchainFromMemory. PRAGMA must still set enable = true
-//     and output-path; configuration-path is ignored. The factory is called to
-//     build the override producer used when generating the syntax file.
-//
-// runToolchains also runs the Go bindings toolchain when the spec enables
-// tool.go_bindings in PRAGMA (output-path and package-name set). That toolchain
-// generates a .go file with type Token and type Node and consts for each token
-// and node, for type-safe use in downstream code.
+// Toolchains also run the Go bindings generator when tool.go_bindings is enabled in PRAGMA.
 package bootstrap

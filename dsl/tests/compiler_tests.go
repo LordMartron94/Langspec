@@ -5,7 +5,6 @@ import (
 	"langspec"
 	"langspec/bootstrap"
 	"langspec/dsl"
-	dsleditor "langspec/dsl/editor"
 	"langspec/dsl/generator"
 	dslspec "langspec/dsl/spec"
 	"lexarch"
@@ -74,11 +73,8 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 		t.Fatalf("LSpec file generation failed with error: %s", err.Error())
 	}
 
-	stringManifest := adaptManifest(dsleditor.LangSpecEditorManifest, dsl.LangSpecCompilerScopeMap(compiler))
-
 	parser, err := bootstrap.CompileParserFromSpec(testOutput, scratchAllocFn,
 		bootstrap.WithDiagnosticSink(sink),
-		bootstrap.WithSublimeToolchain(stringManifest, nil, []string{".lspec"}, ".lspec"),
 	)
 	if err != nil {
 		t.Fatalf("bootstrap.CompileParserFromSpec failed: %s", err.Error())

@@ -44,9 +44,9 @@ func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
 }
 
 /*
-WithSublimeToolchain configures the bootstrap to use an in-memory Sublime
-manifest and override factory. When present, runToolchains uses
-toolchain.RunSublimeToolchainFromMemory instead of loading a JSON config from
+WithSublimeToolchain configures RunToolchainsFromSpecFile / RunToolchainsFromCompileResult
+to use an in-memory Sublime manifest and override factory. When set,
+toolchain.RunSublimeToolchainFromMemory is used instead of loading JSON from
 PRAGMA configuration-path.
 
 Use cases:
@@ -78,15 +78,15 @@ func WithSublimeToolchain(
 // ----------------------------------------------------------------- BOOTSTRAP PIPELINE
 
 /*
-CompileParserFromSpec compiles a .lspec file and returns a LangParser ready to
-parse source. It runs the DSL compiler, then toolchains (e.g. Sublime when
-enabled in PRAGMA), then builds the parser from the compile result.
+CompileParserFromSpec compiles a .lspec file and returns a LangParser ready to parse
+source. It runs the DSL compiler only (no go_bindings or Sublime toolchains). Use
+RunToolchainsFromSpecFile or RunToolchainsFromCompileResult at codegen time (e.g. //go:generate).
 
 Prerequisites:
 - specFile must be a path to a valid .lspec file; alloc must be a valid allocation function.
 
-Edge cases:
-- If WithSublimeToolchain was not used, the Sublime toolchain runs only when PRAGMA enables it and supplies configuration-path (JSON manifest). If WithSublimeToolchain was used, the in-memory manifest is used and configuration-path is ignored.
+Options such as WithDiagnosticSink apply; WithSublimeToolchain is ignored here because
+toolchains are not run (use RunToolchainsFromSpecFile for Sublime/go bindings generation).
 */
 func CompileParserFromSpec(
 	specFile string,
@@ -100,18 +100,47 @@ func CompileParserFromSpec(
 		return nil, err
 	}
 
-	if err := runToolchains(cfg, compileResult); err != nil {
-		return nil, err
-	}
-
 	return createParser(cfg, compileResult), nil
 }
 
 /*
-RunToolchainsFromCompileResult runs the same go_bindings and sublime toolchain steps as
-CompileParserFromSpec (go bindings first, then sublime). Use after dsl.LangSpecCompilerCompile
-when you need toolchains without building a LangParser. Options such as WithSublimeToolchain
-apply the same way as for CompileParserFromSpec; spec file and allocator are not used here.
+RunToolchainsFromSpecFile compiles the .lspec at specFile and runs toolchains (go bindings,
+then Sublime) per PRAGMA and options. Use from //go:generate or build scripts; do not use
+for runtime parser creation.
+
+Options: WithDiagnosticSink; WithSublimeToolchain for in-memory manifest (same as RunToolchainsFromCompileResult).
+Without WithSublimeToolchain, Sublime uses JSON at PRAGMA configuration-path when enabled.
+*/
+func RunToolchainsFromSpecFile(specFile string, alloc memarch.AllocationFn, opts ...Option) error {
+	cfg := buildConfig(specFile, alloc, opts...)
+	compileResult, err := compileDSL(cfg)
+	if err != nil {
+		return err
+	}
+	return runToolchains(cfg, compileResult)
+}
+
+/*
+RunGoBindingsFromSpecFile compiles the .lspec and runs only the go_bindings toolchain per PRAGMA.
+WithSublimeToolchain is ignored. Use as the first //go:generate step when a host package defines
+manifests or other code that references generated Token/Node types from tool.go_bindings output
+before that file exists.
+
+Options: WithDiagnosticSink only (same compile path as RunToolchainsFromSpecFile).
+*/
+func RunGoBindingsFromSpecFile(specFile string, alloc memarch.AllocationFn, opts ...Option) error {
+	cfg := buildConfig(specFile, alloc, opts...)
+	compileResult, err := compileDSL(cfg)
+	if err != nil {
+		return err
+	}
+	return toolchain.RunGoBindingsToolchain(compileResult)
+}
+
+/*
+RunToolchainsFromCompileResult runs go_bindings and sublime toolchain steps (go bindings first,
+then sublime) on an existing compile result. Use when you already have LangSpecCompilerCompile
+output; spec file and allocator are not used here.
 */
 func RunToolchainsFromCompileResult(
 	compileResult *dsl.LangSpecCompileResult,

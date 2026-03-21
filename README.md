@@ -12,8 +12,9 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
 - [The LangSpec DSL](#the-langspec-dsl)
 - [Validation](#validation)
 - [Tooling & Integration](#tooling--integration)
-  - [Sublime Text Syntax](#sublime-text-syntax)
+  - [Codegen vs runtime](#codegen-vs-runtime)
   - [Go Bindings](#go-bindings)
+  - [Sublime Text Syntax](#sublime-text-syntax)
 - [Packages & API](#packages--api)
 - [Contributing](#contributing)
 
@@ -25,7 +26,7 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
 | --- | --- | --- |
 | **Role** | Generic engine: turn **already-built** lexer/parser specs into a lexer, parser, and LST for **your** language’s source text. | Meta-language and pipeline: **define** languages in `.lspec`, **parse** those files, validate the definition, and **lower** them into the core types (`LexerSpec`, `ParserSpec`, `LangSpec`). |
 | **Knows about** | Token types, node kinds, grammars, and LST shape **you** supply as Go types / compiled specs. | The `.lspec` syntax, PRAGMA/tool blocks, and the **LangSpec DSL’s** own lexer, parser, and validation stages. |
-| **Typical entry points** | `LangSpecCreate`, `LangParserCreate`, `LangParserParseFile` — feed source in the language described by your specs. | `LangSpecCompilerCompile` (or `bootstrap.CompileParserFromSpec` to also run toolchains and get a ready-made `LangParser`). |
+| **Typical entry points** | `LangSpecCreate`, `LangParserCreate`, `LangParserParseFile` — feed source in the language described by your specs. | `LangSpecCompilerCompile` or `bootstrap.CompileParserFromSpec` for a ready-made `LangParser` (compile only; no file-generating toolchains). |
 | **Dependency** | Depends on `lexarch`, `syntaxa`, etc.; **does not** import `langspec/dsl`. | Depends on the core: the DSL compiler **outputs** the same structures the core consumes. |
 
 In short: **core = run a language; DSL = describe and compile that language from a `.lspec` file.** The DSL is itself implemented with the core (self-hosting): the `.lspec` format is parsed using lexer/parser specs produced from the DSL definition in `dsl/spec`.
@@ -168,13 +169,34 @@ You must implement semantic validation for your target grammar yourself. You hav
 
 ## Tooling & Integration
 
+### Codegen vs runtime
+
+`bootstrap.CompileParserFromSpec` only compiles the `.lspec` and builds a `LangParser` — it does **not** run go_bindings or Sublime generation. To emit those artifacts, run toolchains explicitly:
+
+- **`bootstrap.RunToolchainsFromSpecFile(specPath, alloc, opts...)`** — compile the spec and run go_bindings + Sublime per PRAGMA and options (e.g. `WithSublimeToolchain` for in-memory manifest).
+- **`bootstrap.RunToolchainsFromCompileResult(result, opts...)`** — same, when you already have a `LangSpecCompileResult`.
+
+From the `libs/langspec` module root, the generic CLI is:
+
+```bash
+go run ./cmd/langspec-toolchain -spec path/to/lang.lspec
+```
+
+It uses **`cliutil`**: same scratch allocator and `RunToolchains` wiring you would write in a custom `main`.
+
+**Typed manifests (generated `Token`/`Node`):** the `go run` binary must **not** import your compiler package on the first step, or the package will not compile until bindings exist. Use **two** minimal `main` packages (e.g. `cmd/gen/bindings` then `cmd/gen/toolchains`), each a few lines calling `cliutil.NewGenerator` and `RunGoBindingsOnly` / `RunToolchains` with options from your package.
+
+JSON-driven Sublime requires `tool.sublime` with `configuration-path` set in PRAGMA. In-memory Sublime (no JSON) requires `RunToolchainsFromSpecFile` (or `cliutil.Generator.RunToolchains`) with `WithSublimeToolchain` from a second generator binary that imports your compiler.
+
 ### Go Bindings
 
 LangSpec can generate type-safe `Token` and `Node` constants from your spec to replace fragile string literals in your Go code.
 
 1. Add `tool.go_bindings` to your `PRAGMA` block.
-2. Compile the spec via `bootstrap.CompileParserFromSpec` (or manually call `toolchain.RunGoBindingsToolchain`).
+2. Run toolchains via `RunToolchainsFromSpecFile` (or `langspec-toolchain` above), or call `toolchain.RunGoBindingsToolchain` with a compile result.
 3. Import the generated package to use strict `Token` and `Node` types in your compiler tooling.
+
+Relative `output-path` values are resolved from the current working directory and its parents: if `src/compiler/out.go` is written but the generator runs from `src/compiler`, the toolchain picks the ancestor where `src/compiler/` already exists (typically the repo root), so paths anchored at the repository root work.
 
 ### Sublime Text Syntax
 
@@ -183,10 +205,10 @@ LangSpec can generate type-safe `Token` and `Node` constants from your spec to r
 LangSpec builds a Push-Down Automaton IR to generate `.sublime-syntax` YAML files. This can be driven via JSON or in-memory Go configurations.
 
 **Path 1: Using a JSON Manifest**
-Add `tool.sublime` to your `PRAGMA` block, specifying `configuration-path`. Compile via `bootstrap.CompileParserFromSpec`. The toolchain will read the JSON, map node/token bindings to scopes, and generate the YAML.
+Add `tool.sublime` to your `PRAGMA` block with `configuration-path` pointing at a JSON manifest. Run `RunToolchainsFromSpecFile` or `langspec-toolchain` so the toolchain reads the JSON and generates the YAML.
 
 **Path 2: In-Memory Manifest (Advanced)**
-Pass `WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension)` to the bootstrap. The `configuration-path` in PRAGMA will be ignored, allowing dynamic, Go-driven generation.
+Call `RunToolchainsFromSpecFile` (or `RunToolchainsFromCompileResult`) with `WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension)`. PRAGMA must still set `enable` and `output-path`; `configuration-path` is ignored.
 
 _Note: Complex overrides (like region-based block comments) cannot be expressed in JSON. You must provide a Go-based `OverrideProducer` via the `editor` registry._
 
@@ -203,7 +225,8 @@ The workspace relies on synchronized git submodules (`lexarch`, `syntaxa`, `auta
 - **`validation`:** Go-side LST validation framework.
 - **`editor` / `editor/sublime`:** Generic push-down automaton IR and YAML generator for syntax highlighting.
 - **`toolchain`:** Helpers for executing Go bindings and Sublime integrations.
-- **`bootstrap`:** High-level wrappers (`CompileParserFromSpec`, `RunToolchainsFromCompileResult`) to go from a `.lspec` file to a parser and to run toolchains after a compile.
+- **`bootstrap`:** `CompileParserFromSpec` builds a `LangParser` from a `.lspec` (no codegen). `RunToolchainsFromSpecFile` / `RunToolchainsFromCompileResult` run go_bindings and Sublime generation for `//go:generate` or CI.
+- **`cliutil`:** Shared scratch allocator + `Generator` wrapping `RunGoBindingsFromSpecFile` and `RunToolchainsFromSpecFile` for thin `//go:generate` commands.
 
 ---
 

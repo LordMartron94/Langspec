@@ -11,7 +11,8 @@ import (
 	"testing"
 )
 
-const testClientDSLFile = "assets/testing/generated_lspec_spec.lspec"
+// Same canonical example as compiler_tests / examples/lspec.lspec PRAGMA (go_bindings → libs/langspec/examples/generated_go_bindings.go).
+const testClientDSLFile = "libs/langspec/examples/lspec.lspec"
 
 func TestClientDSLToolchain(t *testing.T) {
 	compiler, _, _, teardown := setupTestCompiler()

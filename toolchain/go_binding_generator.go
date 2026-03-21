@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"foundation/system"
 	"langspec/dsl"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syntaxa"
@@ -31,6 +33,7 @@ Use cases:
 Prerequisites:
 - compileResult must be a valid LangSpecCompileResult from a successful compile.
 - The .lspec must contain a tool.go_bindings PRAGMA with enable = true, output-path, and package-name set.
+- Relative output-path is resolved against cwd and ancestors (see resolveGoBindingsOutputPath) so repo-root paths like src/compiler/foo.go work when the generator runs from src/compiler.
 
 Edge cases:
 - Returns nil without error if no tool.go_bindings PRAGMA is present or enable is not "true".
@@ -61,14 +64,37 @@ func RunGoBindingsToolchain(compileResult *dsl.LangSpecCompileResult) error {
 			return fmt.Errorf("go_bindings toolchain enabled but missing 'package-name'")
 		}
 
-		return executeGoBindingsToolchain(compileResult, outputPath, packageName)
+		resolved, err := resolveGoBindingsOutputPath(outputPath)
+		if err != nil {
+			return fmt.Errorf("go_bindings output-path: %w", err)
+		}
+		return executeGoBindingsToolchain(compileResult, resolved, packageName)
 	}
 	return nil
 }
 
-// executeGoBindingsToolchain collects unique tokens from the lexer ruleset and
-// unique node kinds from the grammar package, then writes a .go file with
-// type Token string, type Node string, and const blocks. Called by RunGoBindingsToolchain.
+func resolveGoBindingsOutputPath(outputPath string) (string, error) {
+	outputPath = filepath.Clean(outputPath)
+	if filepath.IsAbs(outputPath) {
+		return outputPath, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for d := cwd; ; d = filepath.Dir(d) {
+		candidate := filepath.Join(d, outputPath)
+		parent := filepath.Dir(candidate)
+		if fi, statErr := os.Stat(parent); statErr == nil && fi.IsDir() {
+			return filepath.Clean(candidate), nil
+		}
+		if d == filepath.Dir(d) {
+			break
+		}
+	}
+	return filepath.Join(cwd, outputPath), nil
+}
+
 func executeGoBindingsToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	outputPath string,
