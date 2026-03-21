@@ -12,7 +12,7 @@ import (
 )
 
 const testOutput = "libs/langspec/examples/lspec.lspec"
-const currentLSpecVersion = "v0.1.0"
+const currentLSpecVersion = "v1.0.0"
 const testGenSyntaxOutputFile = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax"
 const testGoBindingsOutputFile = "libs/langspec/examples/generated_go_bindings.go"
 

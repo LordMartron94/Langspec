@@ -71,6 +71,8 @@ LangSpec uses a custom meta-language to define both lexing and parsing rules in 
 --- "MyLang" v1.0.0 | lspec v1.0.0 ---
 ```
 
+The `lspec v…` segment declares a target LangSpec compiler version. That value is currently irrelevant to behavior (it need not match other projects’ `.lspec` files); in the future it may influence compatibility or migration pipelines.
+
 ### 2. PRAGMA (Optional)
 
 Configures tooling like editor integrations or code generation.
@@ -225,7 +227,7 @@ The workspace relies on synchronized git submodules (`lexarch`, `syntaxa`, `auta
 - **`validation`:** Go-side LST validation framework.
 - **`editor` / `editor/sublime`:** Generic push-down automaton IR and YAML generator for syntax highlighting.
 - **`toolchain`:** Helpers for executing Go bindings and Sublime integrations.
-- **`bootstrap`:** `CompileParserFromSpec` builds a `LangParser` from a `.lspec` (no codegen). `RunToolchainsFromSpecFile` / `RunToolchainsFromCompileResult` run go_bindings and Sublime generation for `//go:generate` or CI.
+- **`bootstrap`:** `CompileParserFromSpec` builds a `LangParser` from a `.lspec` (no codegen). `RunGoBindingsFromSpecFile` emits go_bindings only; `RunToolchainsFromSpecFile` / `RunToolchainsFromCompileResult` run go_bindings and Sublime per PRAGMA for `//go:generate` or CI.
 - **`cliutil`:** Shared scratch allocator + `Generator` wrapping `RunGoBindingsFromSpecFile` and `RunToolchainsFromSpecFile` for thin `//go:generate` commands.
 
 ---

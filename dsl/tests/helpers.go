@@ -7,7 +7,6 @@ import (
 	"memcore"
 	"memforge"
 	"syntaxa"
-	"syntaxa/lowering"
 )
 
 // setupTestCompiler returns the compiler, alloc tools, and a deterministic teardown func.
@@ -44,48 +43,6 @@ func setupTestCompiler() (
 	}
 
 	return compiler, scratchAllocFn, sink, teardown
-}
-
-func debugCompilation(
-	enable bool,
-	compiler *dsl.LangSpecCompiler,
-	result *dsl.LangSpecCompileResult,
-	sink *dsl.LangSpecDiagnosticSink,
-) {
-	if !enable {
-		return
-	}
-
-	dsl.LangSpecCompilerDebugGrammar(compiler)
-	dsl.LangSpecCompilerDebugResult(compiler, result, &dsl.CompilerDebugConfig{
-		DebugParseTrace: true,
-		DebugLST:        true,
-	})
-
-	grammarDump := result.CompiledGrammarPackage.EntryRuleParserRule.GetGrammar().DebugDump(
-		syntaxa.GrammarDebugFormatter[string, string]{
-			FormatKind:           syntaxa.GrammarKind.String,
-			FormatToken:          func(s string) string { return s },
-			FormatOutputNodeKind: func(s string) string { return s },
-			FormatRange: func(min int, max *int) string {
-				if max == nil {
-					return fmt.Sprintf("[%d..∞]", min)
-				}
-				return fmt.Sprintf("[%d..%d]", min, *max)
-			},
-			FormatGrammarLabel: func(label syntaxa.GrammarLabel) string {
-				return "(" + string(label) + ")"
-			},
-		},
-	)
-
-	grammarPackageDump := result.CompiledGrammarPackage.DebugDump(syntaxa.GrammarPackageDebugFormatter[rune, string, string, string, string]{
-		FormatToken: func(s string) string { return s },
-	},
-		func() *syntaxa.GrammarAnalysis[string] { return lowering.GetAnalysis(&result.CompiledGrammarPackage) },
-	)
-
-	dsl.RenderGrammarDumps(sink.Writer, grammarDump, grammarPackageDump, "")
 }
 
 func debugParseResult(
