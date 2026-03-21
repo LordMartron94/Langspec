@@ -286,7 +286,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokOptional, "keyword.operator.optional", "?", 0},
 		{TokRange, "keyword.operator.range", "..", 0},
 		{TokStar, "keyword.operator.star", "*", 0},
-		{TokKWLSpec, "keyword.declaration", "lspec", 2},
+		{TokKWLSpec, "keyword.lspec", "lspec", 2},
 		{TokKWPragma, "keyword.pragma", "PRAGMA", 2},
 		{TokKWTool, "keyword.tool", "tool", 2},
 		{TokKWLex, "keyword.declaration.lex", "LEX", 2},
