@@ -1,4 +1,4 @@
-package dsl
+package semantics
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"strings"
 	"syntaxa"
 	"syntaxa/lowering"
+
+	. "langspec/dsl/spec"
 )
 
 // ------------------------------------------------------------- TYPES
@@ -60,11 +62,16 @@ func (v ValidationCode) String() string {
 	return string(v)
 }
 
-const programRuleName = "PROGRAM"
+func attributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
+	return syntaxa.AttributeAs[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, TAttribute](
+		node, attributeName,
+	)
+}
 
 // ------------------------------------------------------------- STAGES REGISTRATION
 
-func getValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage] {
+// ValidationStages returns the ordered LST validation stages for the LangSpec DSL compiler.
+func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage] {
 	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]{
 		{
 			Name:        "Symbol Binding & Environment",
@@ -211,7 +218,7 @@ func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
 	ctx.RootNode.FindFirstKind(NodeParseSection).WalkPre(func(node *Node) (bool, bool) {
 		if node.Kind() == NodeParseTokenReference || node.Kind() == NodeParseNestOpenToken || node.Kind() == NodeParseNestCloseToken {
-			name := getIdentifierValue(node)
+			name := IdentifierValue(node)
 			if name == "" {
 				return false, false
 			}
@@ -246,7 +253,7 @@ func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, use
 		if ref == nil {
 			continue
 		}
-		name := getRefName(ref)
+		name := RefName(ref)
 		if name == "" {
 			continue
 		}
@@ -272,7 +279,7 @@ func validateAndMarkToken(ctx *ValidationCtx, env *SemanticEnv, used map[string]
 		return
 	}
 
-	name := getIdentifierValue(tokenNode)
+	name := IdentifierValue(tokenNode)
 	if _, exists := env.Tokens[name]; !exists {
 		reportUnresolvedToken(ctx, tokenNode, name)
 	} else {
@@ -306,7 +313,7 @@ func getIgnoredRoles(ctx *ValidationCtx) map[string]bool {
 	}
 
 	for _, roleNode := range ignoreSec.FindAllKind(NodeParseIgnoreRole) {
-		ignored[getIdentifierValue(roleNode)] = true
+		ignored[IdentifierValue(roleNode)] = true
 	}
 	return ignored
 }
@@ -322,7 +329,7 @@ func getTokenRole(tokenNameNode *Node) string {
 		return ""
 	}
 
-	return getIdentifierValue(roleNode)
+	return IdentifierValue(roleNode)
 }
 
 func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
@@ -343,8 +350,8 @@ func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
 }
 
 func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
-	if _, ok := env.Rules[programRuleName]; !ok {
-		ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("parse section must define entry rule '%s'", programRuleName), ctx.RootNode)
+	if _, ok := env.Rules[ProgramRuleName]; !ok {
+		ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("parse section must define entry rule '%s'", ProgramRuleName), ctx.RootNode)
 	}
 
 	for _, ref := range ctx.RootNode.FindAllKind(NodeParseExpressionReference) {
@@ -358,7 +365,7 @@ func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
 }
 
 func validateParseExpressionReference(ctx *ValidationCtx, env *SemanticEnv, ref *Node) {
-	name := getRefName(ref)
+	name := RefName(ref)
 	if name == "" {
 		return
 	}
@@ -381,7 +388,7 @@ without output mapping (= token / = group). A declared token is not valid there:
 use `virtual <tok>` or `<node name> = <token reference>`. Rule/pratt names are valid bare references.
 */
 func validateBareParseSegmentSymbolReference(ctx *ValidationCtx, env *SemanticEnv, ref *Node) {
-	name := getRefName(ref)
+	name := RefName(ref)
 	if name == "" {
 		return
 	}
@@ -433,7 +440,7 @@ func processReachability(ctx *ValidationCtx) {
 func checkPatternCycles(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
 	for name, node := range env.Patterns {
 		if cycle := findCycleInPatternDeps(name, deps); cycle != nil {
-			_, nameNode := extractPatternDefName(node)
+			_, nameNode := ExtractPatternDefName(node)
 			ctx.ReportError(VALIDATION_CYCLIC_PATTERN_REF.String(), fmt.Sprintf("cyclic reference detected: %s", formatCycle(cycle)), nameNode)
 		}
 	}
@@ -446,14 +453,14 @@ func checkPatternReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[str
 			continue
 		}
 		if !reachable[name] {
-			_, nameNode := extractPatternDefName(node)
+			_, nameNode := ExtractPatternDefName(node)
 			ctx.ReportWarning(VALIDATION_UNREACHABLE_PATTERN.String(), fmt.Sprintf("pattern '%s' is never referenced (unreachable)", name), nameNode)
 		}
 	}
 }
 
 func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
-	reachable := computeReachableParseRules(deps, programRuleName)
+	reachable := computeReachableParseRules(deps, ProgramRuleName)
 	if reachable == nil {
 		return
 	}
@@ -801,7 +808,7 @@ func enclosingPrattDef(node *Node) *Node {
 func buildPatternDependencyMap(root *Node, env *SemanticEnv) map[string][]string {
 	out := make(map[string][]string)
 	for _, def := range root.FindAllKind(NodePatternDefinition) {
-		name, _ := extractPatternDefName(def)
+		name, _ := ExtractPatternDefName(def)
 		if name == "" {
 			continue
 		}
@@ -824,7 +831,7 @@ func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]s
 	parseSection := root.FindFirstKind(NodeParseSection)
 	if parseSection != nil {
 		for _, rule := range parseSection.FindAllKind(NodeParseRule) {
-			name := getParseRuleName(rule.FindFirstKind(NodeParseRuleName))
+			name := ParseRuleName(rule.FindFirstKind(NodeParseRuleName))
 			if name != "" {
 				out[name] = extractAllRuleRefs(rule, env)
 			}
@@ -834,7 +841,7 @@ func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]s
 	prattSection := root.FindFirstKind(NodePrattSection)
 	if prattSection != nil {
 		for _, prattDef := range prattSection.FindAllKind(NodePrattExprDef) {
-			name := getIdentifierValue(prattDef.FindFirstKind(NodePrattExprName))
+			name := IdentifierValue(prattDef.FindFirstKind(NodePrattExprName))
 			if name != "" {
 				out[name] = extractAllRuleRefs(prattDef, env)
 			}
@@ -848,7 +855,7 @@ func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	var refs []string
 
 	container.WalkPre(func(node *Node) (bool, bool) {
-		name := getRefName(node)
+		name := RefName(node)
 		if name == "" {
 			return false, false
 		}
@@ -977,7 +984,7 @@ func collectLexRules(root *Node) []lexRuleInfo {
 		if tokenNameNode == nil {
 			continue
 		}
-		tokenName, ok := AttributeAs[string](tokenNameNode, ATTRIBUTE_LITERAL_STRING_VALUE)
+		tokenName, ok := attributeAs[string](tokenNameNode, ATTRIBUTE_LITERAL_STRING_VALUE)
 		if !ok {
 			continue
 		}
@@ -1070,7 +1077,7 @@ func validateNegationSubtree(node *Node, report func(offending *Node)) {
 func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 	for _, rule := range parseSection.FindAllKind(NodeParseRule) {
 		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		if getParseRuleName(nameNode) == ruleName {
+		if ParseRuleName(nameNode) == ruleName {
 			return rule
 		}
 	}

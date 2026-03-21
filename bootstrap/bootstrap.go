@@ -107,6 +107,23 @@ func CompileParserFromSpec(
 	return createParser(cfg, compileResult), nil
 }
 
+/*
+RunToolchainsFromCompileResult runs the same go_bindings and sublime toolchain steps as
+CompileParserFromSpec (go bindings first, then sublime). Use after dsl.LangSpecCompilerCompile
+when you need toolchains without building a LangParser. Options such as WithSublimeToolchain
+apply the same way as for CompileParserFromSpec; spec file and allocator are not used here.
+*/
+func RunToolchainsFromCompileResult(
+	compileResult *dsl.LangSpecCompileResult,
+	opts ...Option,
+) error {
+	cfg := &ParserCompiler{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return runToolchains(cfg, compileResult)
+}
+
 // ----------------------------------------------------------------- SINGLE-RESPONSIBILITY HELPERS
 
 func buildConfig(
@@ -140,7 +157,9 @@ func compileDSL(
 		return nil, fmt.Errorf("DSL compilation failed: %w", err)
 	}
 
-	fmt.Fprintf(cfg.diagnosticSink.Writer, "Successfully created compiler for '%s @ %s' using LangSpec %s.\n\n", result.LanguageName, result.LanguageVersion, result.TargetLangspecVersion)
+	if cfg.diagnosticSink != nil && cfg.diagnosticSink.Writer != nil {
+		fmt.Fprintf(cfg.diagnosticSink.Writer, "Successfully created compiler for '%s @ %s' using LangSpec %s.\n\n", result.LanguageName, result.LanguageVersion, result.TargetLangspecVersion)
+	}
 
 	return result, nil
 }

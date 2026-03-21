@@ -168,10 +168,12 @@ The workspace relies on synchronized git submodules (`lexarch`, `syntaxa`, `auta
 
 * **`langspec` (Root):** Public API for parsers and specs (`LangSpecCreate`, `LangParserCreate`, `LangParserParseFile`).
 * **`dsl`:** The DSL compiler (`LangSpecCompilerCompile`).
+* **`dsl/spec`:** Meta-language definition (lexer/parser enums and grammar construction for `.lspec`).
+* **`dsl/semantics`:** Semantic environment and DSL-specific LST validation stages.
 * **`validation`:** Go-side LST validation framework.
 * **`editor` / `editor/sublime`:** Generic push-down automaton IR and YAML generator for syntax highlighting.
 * **`toolchain`:** Helpers for executing Go bindings and Sublime integrations.
-* **`bootstrap`:** High-level wrappers (`CompileParserFromSpec`) to quickly go from a `.lspec` file to a ready-to-use parser.
+* **`bootstrap`:** High-level wrappers (`CompileParserFromSpec`, `RunToolchainsFromCompileResult`) to go from a `.lspec` file to a parser and to run toolchains after a compile.
 
 ---
 

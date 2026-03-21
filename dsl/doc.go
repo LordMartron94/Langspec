@@ -35,4 +35,9 @@
 //
 // Editor integration for the DSL (e.g. Sublime Text syntax generation) lives in
 // subpackage dsl/editor, which consumes this package and the generic editor IR.
+//
+// Related packages:
+//   - dsl/spec: meta-language definition (token/node kinds, self-hosted lexer/parser grammar for .lspec)
+//   - dsl/semantics: semantic environment and LST validation stages for the DSL
+//   - dsl/generator: emits a checked-in .lspec from the live grammar (maintainer tooling)
 package dsl

@@ -1,10 +1,13 @@
 package tests
 
 import (
+	"langspec/bootstrap"
 	"langspec/dsl"
 	dsleditor "langspec/dsl/editor"
+	dslspec "langspec/dsl/spec"
 	"langspec/editor"
 	"langspec/toolchain"
+	"lexarch"
 	"testing"
 )
 
@@ -19,7 +22,6 @@ func TestClientDSLToolchain(t *testing.T) {
 		t.Fatalf("Client compilation failed with error: %s", err.Error())
 	}
 
-	// 1. Extract tool configuration from Pragmas to simulate the bootstrap pipeline
 	var sublimePragma *dsl.ToolPragma
 	for _, pragma := range compileResult.CompiledToolPragmas {
 		if pragma.ToolName == toolchain.SublimeToolName {
@@ -32,28 +34,24 @@ func TestClientDSLToolchain(t *testing.T) {
 		t.Skip("Sublime toolchain not enabled in spec pragma")
 	}
 
-	outputPath := sublimePragma.Settings[toolchain.SublimeOutputPathKey]
 	stringManifest := adaptManifest(dsleditor.LangSpecEditorManifest, dsl.LangSpecCompilerScopeMap(compiler))
 
-	// 2. Use the MEMORY path properly
-	// We pass the manifest, the adapter, and the metadata directly.
-	err = toolchain.RunSublimeToolchainFromMemory(
+	err = bootstrap.RunToolchainsFromCompileResult(
 		compileResult,
-		stringManifest,
-		adaptGoOverrideProducer(compiler),
-		outputPath,
-		[]string{".lspec"},
-		".lspec",
+		bootstrap.WithSublimeToolchain(
+			stringManifest,
+			func(
+				_ *lexarch.LexingRuleset[rune, string, string],
+				_ func(*editor.EditorCtx[rune, string, string, string, string]) toolchain.SublimeContext,
+			) func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
+				return adaptGoOverrideProducer(compiler)
+			},
+			[]string{".lspec"},
+			".lspec",
+		),
 	)
-
 	if err != nil {
-		t.Fatalf("Memory-based Sublime Toolchain failed: %s", err.Error())
-	}
-
-	// 3. Run Go Bindings
-	err = toolchain.RunGoBindingsToolchain(compileResult)
-	if err != nil {
-		t.Fatalf("Go Binding Toolchain failed: %s", err.Error())
+		t.Fatalf("Toolchains failed: %s", err.Error())
 	}
 }
 
@@ -68,12 +66,10 @@ func adaptManifest(
 		NodeBindings:    make(map[string]toolchain.NodeBinding[string]),
 	}
 
-	// Map Base Token Scopes (using the compiler's dynamic scope map)
 	for tok, scope := range scopeMap {
 		stringManifest.BaseTokenScopes[tok.String()] = scope
 	}
 
-	// Map Node Bindings
 	for kind, binding := range typed.NodeBindings {
 		tokenScopes := make(map[string][]string)
 		for tok, scopes := range binding.TokenScopes {
@@ -97,27 +93,24 @@ func adaptGoOverrideProducer(
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
-	// Recreate native context producer
 	manifest := dsleditor.LangSpecEditorManifest
 	manifest.BaseTokenScopes = scopeMap
 
 	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind](manifest)
 
-	// Build the native producer WITH dependencies
 	nativeProducer := dsleditor.BuildEditorOverrideProducer(ruleset, ctxProducer)
 
 	tokenMap := map[string]dsl.LangSpecLexerTokenType{
-		dsl.TokLineComment.String():  dsl.TokLineComment,
-		dsl.TokBlockComment.String(): dsl.TokBlockComment,
-		dsl.TokRegexLiteral.String(): dsl.TokRegexLiteral,
-		dsl.TokIdentifier.String():   dsl.TokIdentifier,
+		dslspec.TokLineComment.String():  dslspec.TokLineComment,
+		dslspec.TokBlockComment.String(): dslspec.TokBlockComment,
+		dslspec.TokRegexLiteral.String(): dslspec.TokRegexLiteral,
+		dslspec.TokIdentifier.String():   dslspec.TokIdentifier,
 	}
 
 	nodeMap := map[string]dsl.LangSpecParserNodeKind{
-		dsl.NodeParseSymbolReference.String(): dsl.NodeParseSymbolReference,
+		dslspec.NodeParseSymbolReference.String(): dslspec.NodeParseSymbolReference,
 	}
 
-	// Return slice of VALUES
 	return func(ctx *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
 		var nativeToken *dsl.LangSpecLexerTokenType
 		var nativeNode *dsl.LangSpecParserNodeKind

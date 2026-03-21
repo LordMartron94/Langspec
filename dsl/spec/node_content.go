@@ -1,14 +1,14 @@
-package dsl
+package spec
 
 import (
 	"strings"
 )
 
 /*
-nodeSingleTokenContent returns the raw string content of the node's single token.
+NodeSingleTokenContent returns the raw string content of the node's single token.
 Panics if node is nil or the node does not have exactly one token.
 */
-func nodeSingleTokenContent(node *Node) string {
+func NodeSingleTokenContent(node *Node) string {
 	if node == nil {
 		panic("engine error: extraction called on nil node")
 	}
@@ -20,35 +20,35 @@ func nodeSingleTokenContent(node *Node) string {
 }
 
 /*
-getIdentifierValue returns the raw string content of the node's single token.
+IdentifierValue returns the raw string content of the node's single token.
 Panics if node does not have exactly one token. Use for identifier-like nodes.
 */
-func getIdentifierValue(node *Node) string {
-	return nodeSingleTokenContent(node)
+func IdentifierValue(node *Node) string {
+	return NodeSingleTokenContent(node)
 }
 
 /*
-getTrimmedIdentifierNodeContent returns the trimmed raw content of the node's first token,
+TrimmedIdentifierNodeContent returns the trimmed raw content of the node's first token,
 or empty string if node is nil or has no tokens. Use when the node may be absent.
 */
-func getTrimmedIdentifierNodeContent(node *Node) string {
+func TrimmedIdentifierNodeContent(node *Node) string {
 	if node == nil || len(node.Tokens()) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(nodeSingleTokenContent(node))
+	return strings.TrimSpace(NodeSingleTokenContent(node))
 }
 
 /*
-getRefName returns the trimmed identifier content of a reference node, or empty string if nil or no tokens.
+RefName returns the trimmed identifier content of a reference node, or empty string if nil or no tokens.
 */
-func getRefName(node *Node) string {
+func RefName(node *Node) string {
 	if node == nil || len(node.Tokens()) == 0 {
 		return ""
 	}
 
 	kind := node.Kind()
 	if kind == NodeParseExpressionReference || kind == NodeParseTokenReference || kind == NodeParseSymbolReference {
-		return strings.TrimSpace(getIdentifierValue(node))
+		return strings.TrimSpace(IdentifierValue(node))
 	}
 
 	if kind == NodeParseNodeName {
@@ -58,7 +58,7 @@ func getRefName(node *Node) string {
 			hasGroupTail := parent.FindFirstKind(NodeParseGroup) != nil
 
 			if !hasTokenTail && !hasGroupTail {
-				return strings.TrimSpace(getIdentifierValue(node))
+				return strings.TrimSpace(IdentifierValue(node))
 			}
 		}
 	}
@@ -67,16 +67,16 @@ func getRefName(node *Node) string {
 }
 
 /*
-getParseRuleName returns the trimmed name from a parse rule name node.
+ParseRuleName returns the trimmed name from a parse rule name node.
 */
-func getParseRuleName(nameNode *Node) string {
-	return getTrimmedIdentifierNodeContent(nameNode)
+func ParseRuleName(nameNode *Node) string {
+	return TrimmedIdentifierNodeContent(nameNode)
 }
 
 /*
-extractPatternDefName returns the pattern definition name and the name node, or ("", nil) if absent.
+ExtractPatternDefName returns the pattern definition name and the name node, or ("", nil) if absent.
 */
-func extractPatternDefName(def *Node) (string, *Node) {
+func ExtractPatternDefName(def *Node) (string, *Node) {
 	nameNode := def.FindFirstKind(NodePatternDefName)
 	if nameNode == nil || len(nameNode.Tokens()) == 0 {
 		return "", nil

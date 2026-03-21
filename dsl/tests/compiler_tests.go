@@ -3,29 +3,63 @@ package tests
 import (
 	"foundation/system"
 	"langspec"
+	"langspec/bootstrap"
 	"langspec/dsl"
+	dsleditor "langspec/dsl/editor"
 	"langspec/dsl/generator"
+	dslspec "langspec/dsl/spec"
 	"lexarch"
 	"testing"
 )
 
-const testOutput = "assets/testing/generated_lspec_spec.lspec"
+const testOutput = "libs/langspec/examples/lspec.lspec"
 const currentLSpecVersion = "v0.1.0"
 const testGenSyntaxOutputFile = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax"
-const testGoBindingsOutputFile = "assets/testing/generated_go_bindings.go"
+const testGoBindingsOutputFile = "libs/langspec/examples/generated_go_bindings.go"
 
-func TestDSLCompiler(t *testing.T) {
+// TestMaintainerGenerateLSpecExample regenerates the checked-in example .lspec from the live DSL
+// grammar (maintainer workflow; not what end users do).
+func TestMaintainerGenerateLSpecExample(t *testing.T) {
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	genCfg := generator.GeneratorConfigCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](
+		currentLSpecVersion,
+		[]dsl.LangSpecLexerTokenRole{dslspec.LANG_SPEC_COMMENT_ROLE, dslspec.LANG_SPEC_WHITESPACE_ROLE},
+	).
+		WithTokenFormatter(dsl.LangSpecLexerTokenType.String).
+		WithTokenRoleFormatter(dsl.LangSpecLexerTokenRole.String).
+		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
+		WithEofToken(dslspec.TokEOF).
+		WithSublimeConfiguration(
+			testGenSyntaxOutputFile,
+		).
+		WithGoBindingsConfiguration(testGoBindingsOutputFile, "compiler")
+
+	if err := generator.GenerateLSpec(
+		dsl.LangSpecCompilerGrammarPackage(compiler),
+		dsl.LangSpecCompilerLexingRuleSet(compiler),
+		testOutput,
+		genCfg,
+	); err != nil {
+		t.Fatalf("LSpec file generation failed with error: %s", err.Error())
+	}
+}
+
+// TestParseGeneratedLSpecViaBootstrap regenerates the example .lspec, then builds a LangParser using
+// the same bootstrap entry point as clients (CompileParserFromSpec) and parses the file.
+func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 	compiler, scratchAllocFn, sink, teardown := setupTestCompiler()
 	defer teardown()
 
 	genCfg := generator.GeneratorConfigCreate[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind](
 		currentLSpecVersion,
-		[]dsl.LangSpecLexerTokenRole{dsl.LANG_SPEC_COMMENT_ROLE, dsl.LANG_SPEC_WHITESPACE_ROLE},
+		[]dsl.LangSpecLexerTokenRole{dslspec.LANG_SPEC_COMMENT_ROLE, dslspec.LANG_SPEC_WHITESPACE_ROLE},
 	).
 		WithTokenFormatter(dsl.LangSpecLexerTokenType.String).
 		WithTokenRoleFormatter(dsl.LangSpecLexerTokenRole.String).
 		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
-		WithEofToken(dsl.TokEOF).
+		WithEofToken(dslspec.TokEOF).
 		WithSublimeConfiguration(
 			testGenSyntaxOutputFile,
 		).
@@ -40,29 +74,22 @@ func TestDSLCompiler(t *testing.T) {
 		t.Fatalf("LSpec file generation failed with error: %s", err.Error())
 	}
 
-	result, err := dsl.LangSpecCompilerCompile(compiler, testOutput)
-	if err != nil {
-		t.Fatalf("Compilation failed with error: %s", err.Error())
-	}
+	stringManifest := adaptManifest(dsleditor.LangSpecEditorManifest, dsl.LangSpecCompilerScopeMap(compiler))
 
-	// Toggle to true to see full visual output
-	debugCompilation(false, compiler, result, sink)
-
-	result.CompiledLexerSpec.WithCompilationMode(lexarch.Glushkov)
-	langParserConfig := langspec.LangParserConfigurationCreate(
-		langspec.LangSpecCreate(result.CompiledLexerSpec, result.CompiledParserSpec),
-		scratchAllocFn,
+	parser, err := bootstrap.CompileParserFromSpec(testOutput, scratchAllocFn,
+		bootstrap.WithDiagnosticSink(sink),
+		bootstrap.WithSublimeToolchain(stringManifest, nil, []string{".lspec"}, ".lspec"),
 	)
-
-	langParser := langspec.LangParserCreate(langParserConfig)
-	defer langspec.LangParserDestroy(langParser)
+	if err != nil {
+		t.Fatalf("bootstrap.CompileParserFromSpec failed: %s", err.Error())
+	}
+	defer langspec.LangParserDestroy(parser)
 
 	session := langspec.LangParserSessionCreate[rune](testOutput, nil, false)
 	contentRune, _ := system.FileReadAllRunes(testOutput)
 
-	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(langParser, session)
+	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(parser, session)
 
-	// Toggle to true to see Parse Traces and LST output
 	debugParseResult(false, sink, trace, rootNode)
 
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {

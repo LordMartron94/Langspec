@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-const testSublimeSyntaxFile = "assets/testing/lspec.sublime-syntax"
+const testSublimeSyntaxFile = "libs/langspec/examples/lspec.sublime-syntax"
 
 func TestBuildSublimeSyntaxForDSL(t *testing.T) {
 	compiler, _, _, teardown := setupTestCompiler()

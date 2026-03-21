@@ -1,4 +1,4 @@
-package dsl
+package spec
 
 import (
 	"autarch/pattern"

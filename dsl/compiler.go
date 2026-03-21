@@ -4,6 +4,8 @@ import (
 	"autarch/pattern"
 	"fmt"
 	"langspec"
+	dslspec "langspec/dsl/spec"
+	"langspec/dsl/semantics"
 	"lexarch"
 	"strconv"
 	"strings"
@@ -14,8 +16,6 @@ import (
 
 type LexerSpec = langspec.LexerSpec[rune, string, string, string]
 type ParserSpec = langspec.ParserSpec[rune, string, string, string, string]
-
-type GrammarPackage = syntaxa.GrammarPackage[rune, string, string, string, string]
 type RuleRegistry = syntaxa.RuleRegistry[rune, string, string, string, string]
 
 type LexerRuleset = lexarch.LexingRuleset[rune, string, string]
@@ -77,9 +77,9 @@ type parseCompileCtx struct {
 }
 
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
-	dslName, dslVersion, langspecTargetVersion := getInfoFromHeader(rootNode.FindFirstKind(NodeHeader))
+	dslName, dslVersion, langspecTargetVersion := getInfoFromHeader(rootNode.FindFirstKind(dslspec.NodeHeader))
 
-	env := BuildSemanticEnv(rootNode, nil)
+	env := semantics.BuildSemanticEnv(rootNode, nil)
 
 	eofToken := getEOFToken(rootNode)
 	domain := lexarch.LexarchRuneDomain()
@@ -143,9 +143,9 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 // ------------------------------- HEADER -------------------------------
 
 func getInfoFromHeader(headerNode *Node) (string, string, string) {
-	dslName := nodeFormattedContent(headerNode.FindFirstKind(NodeDSLName), ATTRIBUTE_LITERAL_STRING_VALUE)
+	dslName := nodeFormattedContent(headerNode.FindFirstKind(dslspec.NodeDSLName), dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
 
-	versions := headerNode.FindAllKind(NodeVersion)
+	versions := headerNode.FindAllKind(dslspec.NodeVersion)
 	dslVersion := lexemeRawContent(versions[0].Tokens()[0])
 	langSpecTargetVersion := lexemeRawContent(versions[1].Tokens()[0])
 
@@ -153,7 +153,7 @@ func getInfoFromHeader(headerNode *Node) (string, string, string) {
 }
 
 func getEOFToken(rootNode *Node) string {
-	lexerSection := rootNode.FindFirstKind(NodeLexSection)
+	lexerSection := rootNode.FindFirstKind(dslspec.NodeLexSection)
 
 	eofToken := checkForEOFLexeme(lexerSection)
 	if eofToken == "" {
@@ -166,54 +166,54 @@ func getEOFToken(rootNode *Node) string {
 // ------------------------------- PRAGMAS -------------------------------
 
 func extractPragmas(rootNode *Node) []ToolPragma {
-	section := rootNode.FindFirstKind(NodePragmaSection)
+	section := rootNode.FindFirstKind(dslspec.NodePragmaSection)
 	if section == nil {
 		return nil
 	}
 
 	var out []ToolPragma
-	for _, block := range section.FindAllKind(NodePragmaBlock) {
+	for _, block := range section.FindAllKind(dslspec.NodePragmaBlock) {
 		// 1. Step into the key wrapper first
-		keyNode := block.FindFirstKind(NodePragmaBlockKey)
+		keyNode := block.FindFirstKind(dslspec.NodePragmaBlockKey)
 		if keyNode == nil {
 			continue
 		}
 
 		// 2. Now extract the prefix from the key node
-		blockKeyPrefix := keyNode.FindFirstKind(NodePragmaBlockKeyPrefix)
+		blockKeyPrefix := keyNode.FindFirstKind(dslspec.NodePragmaBlockKeyPrefix)
 		if blockKeyPrefix == nil {
 			continue
 		}
 
-		keyPrefix := getTrimmedIdentifierNodeContent(blockKeyPrefix)
+		keyPrefix := dslspec.TrimmedIdentifierNodeContent(blockKeyPrefix)
 		if keyPrefix != "tool" {
 			continue
 		}
 
 		// 3. Extract the segments from the key node, not the whole block
-		segments := keyNode.FindAllKind(NodePragmaBlockKeySegment)
+		segments := keyNode.FindAllKind(dslspec.NodePragmaBlockKeySegment)
 		if len(segments) != 1 {
 			panic(fmt.Errorf("tool pragma key must have exactly 1 segment, got=%d", len(segments)))
 		}
-		toolName := getTrimmedIdentifierNodeContent(segments[0])
+		toolName := dslspec.TrimmedIdentifierNodeContent(segments[0])
 
 		settings := make(map[string]string)
-		settingNodes := block.FindAllKind(NodePragmaConfiguration)
+		settingNodes := block.FindAllKind(dslspec.NodePragmaConfiguration)
 		for _, config := range settingNodes {
-			settingKey := getTrimmedIdentifierNodeContent(config.FindFirstKind(NodePragmaKey))
-			settingValueNode := config.FindFirstKind(NodePragmaValue)
+			settingKey := dslspec.TrimmedIdentifierNodeContent(config.FindFirstKind(dslspec.NodePragmaKey))
+			settingValueNode := config.FindFirstKind(dslspec.NodePragmaValue)
 
 			var settingValue string
 			settingValueToken := settingValueNode.Tokens()[0].Token
-			if settingValueToken == TokStringLiteral {
-				settingValueRetrieved, exist := AttributeAs[string](settingValueNode, ATTRIBUTE_LITERAL_STRING_VALUE)
+			if settingValueToken == dslspec.TokStringLiteral {
+				settingValueRetrieved, exist := AttributeAs[string](settingValueNode, dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
 				if !exist {
 					panic("engine-error: setting value node does not have string")
 				}
 
 				settingValue = settingValueRetrieved
 			} else {
-				settingValue = getTrimmedIdentifierNodeContent(settingValueNode)
+				settingValue = dslspec.TrimmedIdentifierNodeContent(settingValueNode)
 			}
 
 			settings[settingKey] = settingValue
@@ -234,7 +234,7 @@ func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {
 		lexarch.TokenResolutionStepLongestThenPriority[string],
 	)
 
-	lexSection := ctx.rootNode.FindFirstKind(NodeLexSection)
+	lexSection := ctx.rootNode.FindFirstKind(dslspec.NodeLexSection)
 	lexRules := c.gatherRules(lexSection, ctx)
 
 	for _, rule := range lexRules {
@@ -252,7 +252,7 @@ type lexRule struct {
 }
 
 func (c *compiler) gatherRules(sectionNode *Node, ctx *patternCompileCtx) []lexRule {
-	rules := sectionNode.FindAllKind(NodeLexRule)
+	rules := sectionNode.FindAllKind(dslspec.NodeLexRule)
 	out := make([]lexRule, 0, len(rules))
 
 	for _, rule := range rules {
@@ -266,18 +266,18 @@ func (c *compiler) gatherRules(sectionNode *Node, ctx *patternCompileCtx) []lexR
 
 func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexRule {
 	priority := 0
-	if priorityNode, ok := nodeContains(ruleNode, NodeLexRulePriority); ok {
+	if priorityNode, ok := nodeContains(ruleNode, dslspec.NodeLexRulePriority); ok {
 		priority = extractIntContent(priorityNode)
 	}
 
-	tokenName := nodeSingleTokenContent(ruleNode.FindFirstKind(NodeLexRuleTokenName))
-	tokenRole := nodeSingleTokenContent(ruleNode.FindFirstKind(NodeLexRuleRole))
+	tokenName := dslspec.NodeSingleTokenContent(ruleNode.FindFirstKind(dslspec.NodeLexRuleTokenName))
+	tokenRole := dslspec.NodeSingleTokenContent(ruleNode.FindFirstKind(dslspec.NodeLexRuleRole))
 
 	var tokenPattern pattern.RegulaAST[rune]
-	patternNode := ruleNode.FindFirstKind(NodeLexRulePattern)
+	patternNode := ruleNode.FindFirstKind(dslspec.NodeLexRulePattern)
 
 	if patternNode == nil {
-		patternNode = ruleNode.FindFirstKind(NodePatternRef)
+		patternNode = ruleNode.FindFirstKind(dslspec.NodePatternRef)
 	}
 
 	if patternNode == nil {
@@ -285,8 +285,8 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 	}
 
 	switch patternNode.Kind() {
-	case NodePatternRef:
-		target := PatternRefTargetName(patternNode)
+	case dslspec.NodePatternRef:
+		target := semantics.PatternRefTargetName(patternNode)
 		if ctx.env.Patterns[target] == nil {
 			panic(fmt.Errorf("unresolved pattern reference: '%s'", target))
 		}
@@ -296,8 +296,8 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 		}
 		tokenPattern = p
 
-	case NodeLexRulePattern:
-		content := nodeFormattedContent(patternNode, ATTRIBUTE_REGEX_LITERAL_VALUE)
+	case dslspec.NodeLexRulePattern:
+		content := nodeFormattedContent(patternNode, dslspec.ATTRIBUTE_REGEX_LITERAL_VALUE)
 		p, err := pattern.RegexToRegula(content, c.factory)
 		if err != nil {
 			panic(fmt.Errorf("engine error while converting regex to pattern: %w", err))
@@ -322,16 +322,16 @@ func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
 	ctx.patternTable = out
 	ctx.variables = temp
 
-	patternSection := ctx.rootNode.FindFirstKind(NodePatternSection)
-	definitions := patternSection.FindAllKind(NodePatternDefinition)
+	patternSection := ctx.rootNode.FindFirstKind(dslspec.NodePatternSection)
+	definitions := patternSection.FindAllKind(dslspec.NodePatternDefinition)
 
 	for _, definition := range definitions {
-		defName := lexemeRawContent(definition.FindFirstKind(NodePatternDefName).Tokens()[0])
+		defName := lexemeRawContent(definition.FindFirstKind(dslspec.NodePatternDefName).Tokens()[0])
 
 		var exprNode *Node
 		for _, child := range definition.Children() {
 			kind := child.Kind()
-			if kind != NodePatternDefName && kind != NodeLocalVariable {
+			if kind != dslspec.NodePatternDefName && kind != dslspec.NodeLocalVariable {
 				exprNode = child
 				break
 			}
@@ -357,35 +357,35 @@ func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.Regula
 	kind := node.Kind()
 
 	switch kind {
-	case NodeCharLiteral:
+	case dslspec.NodeCharLiteral:
 		return c.charLiteralToPattern(node)
-	case NodeStringLiteral:
+	case dslspec.NodeStringLiteral:
 		return c.stringLiteralToPattern(node)
-	case NodePatternRegEx:
+	case dslspec.NodePatternRegEx:
 		return c.regexLiteralToPattern(node)
-	case NodePatternRef:
+	case dslspec.NodePatternRef:
 		return patternRefToPattern(ctx, node)
-	case NodePatternConcat:
+	case dslspec.NodePatternConcat:
 		return concatToPattern(ctx, node)
-	case NodePatternAlternation:
+	case dslspec.NodePatternAlternation:
 		return alternationToPattern(ctx, node)
-	case NodePatternRange:
+	case dslspec.NodePatternRange:
 		return ctx.c.rangeToPattern(node)
-	case NodePatternStar:
+	case dslspec.NodePatternStar:
 		return starToPattern(ctx, node)
-	case NodePatternPlus:
+	case dslspec.NodePatternPlus:
 		return plusToPattern(ctx, node)
-	case NodePatternOptional:
+	case dslspec.NodePatternOptional:
 		return optionalToPattern(ctx, node)
-	case NodeRepetition:
+	case dslspec.NodeRepetition:
 		return repetitionToPattern(ctx, node)
-	case NodePatternGroup:
+	case dslspec.NodePatternGroup:
 		return groupToPattern(ctx, node)
-	case NodePatternNegation:
+	case dslspec.NodePatternNegation:
 		return ctx.c.negationToPattern(node)
-	case NodePatternAny:
+	case dslspec.NodePatternAny:
 		return c.factory.NegatedClass()
-	case NodePatternClass:
+	case dslspec.NodePatternClass:
 		return classToPattern(ctx, node)
 	default:
 		panic(fmt.Errorf("engine error: unsupported pattern kind: '%s'", kind))
@@ -458,12 +458,12 @@ func repetitionToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[r
 	maxVal := -1 // Unbounded
 
 	// Query for Min
-	if minNode := boundsNode.FindFirstKind(NodeRepetitionMin); minNode != nil {
+	if minNode := boundsNode.FindFirstKind(dslspec.NodeRepetitionMin); minNode != nil {
 		minVal = extractIntContent(minNode)
 	}
 
 	// Query for Max
-	if maxNode := boundsNode.FindFirstKind(NodeRepetitionMax); maxNode != nil {
+	if maxNode := boundsNode.FindFirstKind(dslspec.NodeRepetitionMax); maxNode != nil {
 		maxVal = extractIntContent(maxNode)
 	}
 
@@ -487,15 +487,15 @@ func (c *compiler) extractNegationRanges(node *Node, out *[]pattern.CharRange[ru
 	kind := node.Kind()
 
 	switch kind {
-	case NodeCharLiteral:
+	case dslspec.NodeCharLiteral:
 		*out = append(*out, c.extractCharRange(node))
-	case NodePatternRange:
+	case dslspec.NodePatternRange:
 		*out = append(*out, c.extractPatternRange(node))
-	case NodePatternClass:
+	case dslspec.NodePatternClass:
 		c.extractClassRanges(node, out)
-	case NodePatternGroup:
+	case dslspec.NodePatternGroup:
 		c.extractGroupRanges(node, out)
-	case NodePatternAlternation:
+	case dslspec.NodePatternAlternation:
 		c.extractAlternationRanges(node, out)
 	default:
 		panic(fmt.Sprintf("semantic error: negation (!) applied to invalid node kind '%s'", kind))
@@ -504,16 +504,16 @@ func (c *compiler) extractNegationRanges(node *Node, out *[]pattern.CharRange[ru
 
 func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]) {
 	for _, child := range node.Children() {
-		item := child.Unwrap(NodePatternClassItem)
+		item := child.Unwrap(dslspec.NodePatternClassItem)
 
 		switch item.Kind() {
-		case NodeCharLiteral:
+		case dslspec.NodeCharLiteral:
 			lo := c.extractCharLiteralValue(item)
 			*out = append(*out, c.factory.Range(lo, lo))
 
-		case NodePatternClassItem:
+		case dslspec.NodePatternClassItem:
 			children := item.Children()
-			if len(children) == 2 && children[1].Kind() == NodePatternRange {
+			if len(children) == 2 && children[1].Kind() == dslspec.NodePatternRange {
 
 				lo := c.extractCharLiteralValue(children[0])
 
@@ -536,13 +536,13 @@ func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]
 func (c *compiler) extractCharLiteralValue(node *Node) rune {
 
 	// Cleanly drill through any Pratt expression wrappers (Segments or Groups)
-	coreNode := node.Unwrap(NodePatternSegment, NodePatternGroup)
+	coreNode := node.Unwrap(dslspec.NodePatternSegment, dslspec.NodePatternGroup)
 
-	if coreNode.Kind() != NodeCharLiteral {
+	if coreNode.Kind() != dslspec.NodeCharLiteral {
 		panic(fmt.Sprintf("semantic error: expected character literal, got %v", coreNode.Kind()))
 	}
 
-	content := nodeFormattedContent(coreNode, ATTRIBUTE_CHAR_LITERAL_VALUE)
+	content := nodeFormattedContent(coreNode, dslspec.ATTRIBUTE_CHAR_LITERAL_VALUE)
 	runes := []rune(content)
 
 	if len(runes) != 1 {
@@ -563,7 +563,7 @@ func (c *compiler) extractAlternationRanges(node *Node, out *[]pattern.CharRange
 }
 
 func (c *compiler) extractCharRange(node *Node) pattern.CharRange[rune] {
-	content := nodeFormattedContent(node, ATTRIBUTE_CHAR_LITERAL_VALUE)
+	content := nodeFormattedContent(node, dslspec.ATTRIBUTE_CHAR_LITERAL_VALUE)
 	runes := []rune(content)
 
 	if len(runes) != 1 {
@@ -594,17 +594,17 @@ func classToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] 
 // --- ATOMS
 
 func (c *compiler) charLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
-	content := nodeFormattedContent(node, ATTRIBUTE_CHAR_LITERAL_VALUE)
+	content := nodeFormattedContent(node, dslspec.ATTRIBUTE_CHAR_LITERAL_VALUE)
 	return c.factory.Literal([]rune(content)...)
 }
 
 func (c *compiler) stringLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
-	content := nodeFormattedContent(node, ATTRIBUTE_LITERAL_STRING_VALUE)
+	content := nodeFormattedContent(node, dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
 	return c.factory.Literal([]rune(content)...)
 }
 
 func (c *compiler) regexLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
-	content := nodeFormattedContent(node, ATTRIBUTE_REGEX_LITERAL_VALUE)
+	content := nodeFormattedContent(node, dslspec.ATTRIBUTE_REGEX_LITERAL_VALUE)
 	compiled, err := pattern.RegexToRegula(content, c.factory)
 	if err != nil {
 		panic(fmt.Errorf("compiler error while converting regex to Regula: %w", err))
@@ -614,7 +614,7 @@ func (c *compiler) regexLiteralToPattern(node *Node) pattern.RegulaAST[rune] {
 }
 
 func patternRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	targetName := PatternRefTargetName(node)
+	targetName := semantics.PatternRefTargetName(node)
 	if ctx.env.Patterns[targetName] == nil {
 		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
 	}
@@ -645,13 +645,13 @@ func parseCtxLabel(ctx *parseCompileCtx, role string) syntaxa.GrammarLabel {
 }
 
 func collectSyncTokens(ruleNode *Node) []string {
-	syncNode := ruleNode.FindFirstKind(NodeRuleModifierSync)
+	syncNode := ruleNode.FindFirstKind(dslspec.NodeRuleModifierSync)
 	if syncNode == nil {
 		return nil
 	}
 	var out []string
-	for _, tNode := range syncNode.FindAllKind(NodeSyncToken) {
-		out = append(out, nodeSingleTokenContent(tNode))
+	for _, tNode := range syncNode.FindAllKind(dslspec.NodeSyncToken) {
+		out = append(out, dslspec.NodeSingleTokenContent(tNode))
 	}
 	return out
 }
@@ -675,16 +675,16 @@ func getParserSpecInfo(
 	registry := ruleBuilder.GetRegistry()
 
 	skipRoles := make([]string, 0)
-	if parseSection := rootNode.FindFirstKind(NodeParseSection); parseSection != nil {
-		if ignoreSection := parseSection.FindFirstKind(NodeParseIgnoreSection); ignoreSection != nil {
-			for _, roleNode := range ignoreSection.FindAllKind(NodeParseIgnoreRole) {
-				skipRoles = append(skipRoles, nodeSingleTokenContent(roleNode))
+	if parseSection := rootNode.FindFirstKind(dslspec.NodeParseSection); parseSection != nil {
+		if ignoreSection := parseSection.FindFirstKind(dslspec.NodeParseIgnoreSection); ignoreSection != nil {
+			for _, roleNode := range ignoreSection.FindAllKind(dslspec.NodeParseIgnoreRole) {
+				skipRoles = append(skipRoles, dslspec.NodeSingleTokenContent(roleNode))
 			}
 		}
 	}
 
-	programRuleNode := env.Rules[programRuleName]
-	rootNodeKind := nodeSingleTokenContent(programRuleNode.FindFirstKind(NodeParseNodeName))
+	programRuleNode := env.Rules[semantics.ProgramRuleName]
+	rootNodeKind := dslspec.NodeSingleTokenContent(programRuleNode.FindFirstKind(dslspec.NodeParseNodeName))
 
 	var entryRule CompiledRule
 	var entryOverride syntaxa.GrammarLabel
@@ -694,14 +694,14 @@ func getParserSpecInfo(
 			builder:     ruleBuilder,
 			env:         env,
 			grammarID:   syntaxa.GrammarLabel(ruleName),
-			nodeKind:    nodeSingleTokenContent(ruleNode.FindFirstKind(NodeParseNodeName)),
+			nodeKind:    dslspec.NodeSingleTokenContent(ruleNode.FindFirstKind(dslspec.NodeParseNodeName)),
 			ruleName:    ruleName,
 			counts:      make(map[string]int),
 			rootLevel:   true,
-			transparent: ruleNode.FindFirstKind(NodeRuleModifierTransparent) != nil,
+			transparent: ruleNode.FindFirstKind(dslspec.NodeRuleModifierTransparent) != nil,
 		}
 		compiled, override := compileParseRuleDefinition(ctx, ruleNode)
-		if ruleName == programRuleName {
+		if ruleName == semantics.ProgramRuleName {
 			entryRule = compiled
 			if override != "" {
 				entryOverride = override
@@ -734,7 +734,7 @@ func getParserSpecInfo(
 func buildParseRuleBodyMapForCompile(rules map[string]*Node) map[string]*Node {
 	out := make(map[string]*Node, len(rules))
 	for ruleName, ruleNode := range rules {
-		bodyNode := ruleNode.FindFirstKind(NodeParseRuleBody)
+		bodyNode := ruleNode.FindFirstKind(dslspec.NodeParseRuleBody)
 		if bodyNode == nil {
 			continue
 		}
@@ -750,7 +750,7 @@ func buildParseRuleBodyMapForCompile(rules map[string]*Node) map[string]*Node {
 }
 
 func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledRule, syntaxa.GrammarLabel) {
-	bodyNode := ruleNode.FindFirstKind(NodeParseRuleBody)
+	bodyNode := ruleNode.FindFirstKind(dslspec.NodeParseRuleBody)
 	if bodyNode == nil {
 		panic("compiler error: parse rule missing body")
 	}
@@ -779,8 +779,8 @@ func getParseRuleBodyRoot(body *Node) *Node {
 			continue
 		}
 		k := ch.Kind()
-		if k == NodeParseAlternation || k == NodeParseConcat || k == NodeParseOptional ||
-			k == NodeParseStar || k == NodeParsePlus || k == NodeParseSegment || k == NodeParseGroup {
+		if k == dslspec.NodeParseAlternation || k == dslspec.NodeParseConcat || k == dslspec.NodeParseOptional ||
+			k == dslspec.NodeParseStar || k == dslspec.NodeParsePlus || k == dslspec.NodeParseSegment || k == dslspec.NodeParseGroup {
 			return ch
 		}
 	}
@@ -791,29 +791,29 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 	kind := node.Kind()
 
 	switch kind {
-	case NodeParseConcat:
+	case dslspec.NodeParseConcat:
 		return compileConcat(ctx, node)
-	case NodeParseAlternation:
+	case dslspec.NodeParseAlternation:
 		return compileAlternation(ctx, node)
-	case NodeParseModifierPredict:
+	case dslspec.NodeParseModifierPredict:
 		return compilePredict(ctx, node)
-	case NodeParseOptional:
+	case dslspec.NodeParseOptional:
 		return compileOptional(ctx, node)
-	case NodeParseExpressionReference, NodeParseTokenReference:
+	case dslspec.NodeParseExpressionReference, dslspec.NodeParseTokenReference:
 		return compileReference(ctx, node)
-	case NodeParsePlus:
+	case dslspec.NodeParsePlus:
 		return compilePlus(ctx, node)
-	case NodeParseStar:
+	case dslspec.NodeParseStar:
 		return compileStar(ctx, node)
-	case NodeParseOpSuppress:
+	case dslspec.NodeParseOpSuppress:
 		return compileVirtual(ctx, node)
-	case NodeParseOpNest:
+	case dslspec.NodeParseOpNest:
 		return compileNest(ctx, node)
-	case NodeParseGroup:
+	case dslspec.NodeParseGroup:
 		return compileGroup(ctx, node)
-	case NodeParseSegment:
+	case dslspec.NodeParseSegment:
 		return compileParseSegment(ctx, node)
-	case NodeRepetition:
+	case dslspec.NodeRepetition:
 		return compileParseRepetition(ctx, node)
 	default:
 		panic(fmt.Errorf("compiler error: unsupported parse expression kind: '%s'", kind))
@@ -823,7 +823,7 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 // ------------------------------- EXPRESSION HANDLERS -------------------------------
 
 func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
-	flatNodes := node.FlattenByKind(NodeParseConcat)
+	flatNodes := node.FlattenByKind(dslspec.NodeParseConcat)
 
 	rules := make([]CompiledRule, 0, len(flatNodes))
 	subCtx := *ctx
@@ -833,7 +833,7 @@ func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
 	}
 
 	if ctx.rootLevel {
-		if ctx.ruleName == programRuleName {
+		if ctx.ruleName == semantics.ProgramRuleName {
 			return ctx.builder.Rule.Root(ctx.grammarID, ctx.nodeKind, false, rules...)
 		}
 		if ctx.transparent {
@@ -845,7 +845,7 @@ func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
-	flatNodes := node.FlattenByKind(NodeParseAlternation)
+	flatNodes := node.FlattenByKind(dslspec.NodeParseAlternation)
 
 	rules := make([]CompiledRule, 0, len(flatNodes))
 	subCtx := *ctx
@@ -878,15 +878,15 @@ func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 	innerRule := compileParseExpression(ctx, targetNode)
 
-	lookaheads := listNode.FindAllKind(NodePredictLookahead)
+	lookaheads := listNode.FindAllKind(dslspec.NodePredictLookahead)
 	type prediction struct {
 		offset int
 		token  string
 	}
 	var preds []prediction
 	for _, la := range lookaheads {
-		offset := extractIntContent(la.FindFirstKind(NodePredictOffset))
-		token := nodeSingleTokenContent(la.FindFirstKind(NodePredictToken))
+		offset := extractIntContent(la.FindFirstKind(dslspec.NodePredictOffset))
+		token := dslspec.NodeSingleTokenContent(la.FindFirstKind(dslspec.NodePredictToken))
 		preds = append(preds, prediction{offset, token})
 	}
 	lookaheadSlice := make([]syntaxa.Lookahead[string], len(preds))
@@ -945,32 +945,32 @@ func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
-	outputNodeKindNode := node.FindFirstKind(NodeParseSymbolReference)
+	outputNodeKindNode := node.FindFirstKind(dslspec.NodeParseSymbolReference)
 	if outputNodeKindNode == nil {
-		outputNodeKindNode = node.FindFirstKind(NodeParseNodeName)
+		outputNodeKindNode = node.FindFirstKind(dslspec.NodeParseNodeName)
 	}
 	if outputNodeKindNode == nil {
 		panic("compiler error: emit node missing output kind")
 	}
-	outputNodeKind := nodeSingleTokenContent(outputNodeKindNode)
-	refNode := node.FindFirstKind(NodeParseTokenReference)
+	outputNodeKind := dslspec.NodeSingleTokenContent(outputNodeKindNode)
+	refNode := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: emit node missing reference")
 	}
-	targetToken := nodeSingleTokenContent(refNode)
+	targetToken := dslspec.NodeSingleTokenContent(refNode)
 	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), outputNodeKind, targetToken)
 }
 
 func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, customNodeKind string) CompiledRule {
 	innerExpr := groupNode.RequireSingleChild()
 
-	flatAlts := innerExpr.FlattenByKind(NodeParseAlternation)
+	flatAlts := innerExpr.FlattenByKind(dslspec.NodeParseAlternation)
 
 	tokens := make([]string, 0, len(flatAlts))
 	for _, alt := range flatAlts {
-		refNode := alt.FindFirstKind(NodeParseTokenReference)
+		refNode := alt.FindFirstKind(dslspec.NodeParseTokenReference)
 		if refNode == nil {
-			if alt.Kind() == NodeParseTokenReference || alt.Kind() == NodeParseExpressionReference {
+			if alt.Kind() == dslspec.NodeParseTokenReference || alt.Kind() == dslspec.NodeParseExpressionReference {
 				refNode = alt
 			}
 		}
@@ -979,7 +979,7 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 			panic(fmt.Sprintf("compiler error: emit-one-of alternatives for '%s' must be token references", customNodeKind))
 		}
 
-		tokens = append(tokens, getIdentifierValue(refNode))
+		tokens = append(tokens, dslspec.IdentifierValue(refNode))
 	}
 
 	if len(tokens) == 0 {
@@ -990,24 +990,24 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 }
 
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
-	nameNode := node.FindFirstKind(NodeParseSymbolReference)
+	nameNode := node.FindFirstKind(dslspec.NodeParseSymbolReference)
 	if nameNode == nil {
-		nameNode = node.FindFirstKind(NodeParseNodeName)
+		nameNode = node.FindFirstKind(dslspec.NodeParseNodeName)
 	}
 	if nameNode == nil {
 		return compileParseExpression(ctx, node.RequireSingleChild())
 	}
 
-	targetName := getIdentifierValue(nameNode)
+	targetName := dslspec.IdentifierValue(nameNode)
 
-	groupRef := node.FindFirstKind(NodeParseGroup)
+	groupRef := node.FindFirstKind(dslspec.NodeParseGroup)
 	if groupRef != nil {
 		return compileEmitOneOfWithCustomName(ctx, groupRef, targetName)
 	}
 
-	tokenRef := node.FindFirstKind(NodeParseTokenReference)
+	tokenRef := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if tokenRef != nil {
-		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), targetName, getIdentifierValue(tokenRef))
+		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), targetName, dslspec.IdentifierValue(tokenRef))
 	}
 
 	return compileRuleReference(ctx, nameNode, targetName)
@@ -1032,11 +1032,11 @@ func extractRepetitionBounds(boundsNode *Node) (int, int) {
 	minVal := 0
 	maxVal := -1 // Unbounded
 
-	if minNode := boundsNode.FindFirstKind(NodeRepetitionMin); minNode != nil {
+	if minNode := boundsNode.FindFirstKind(dslspec.NodeRepetitionMin); minNode != nil {
 		minVal = extractIntContent(minNode)
 	}
 
-	if maxNode := boundsNode.FindFirstKind(NodeRepetitionMax); maxNode != nil {
+	if maxNode := boundsNode.FindFirstKind(dslspec.NodeRepetitionMax); maxNode != nil {
 		maxVal = extractIntContent(maxNode)
 	}
 
@@ -1056,17 +1056,17 @@ func buildRepetitionRule(ctx *parseCompileCtx, innerRule CompiledRule, min, max 
 }
 
 func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
-	refNode := node.FindFirstKind(NodeParseTokenReference)
+	refNode := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: virtual node missing reference")
 	}
-	targetToken := nodeSingleTokenContent(refNode)
+	targetToken := dslspec.NodeSingleTokenContent(refNode)
 	return ctx.builder.Token.ExpectVirtual(parseCtxLabel(ctx, "VIRTUAL"), targetToken)
 }
 
 func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
-	openToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestOpenToken))
-	closeToken := nodeSingleTokenContent(node.FindFirstKind(NodeParseNestCloseToken))
+	openToken := dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestOpenToken))
+	closeToken := dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestCloseToken))
 
 	innerRule := extractNestInnerRule(ctx, node, closeToken)
 	if syncTokens := collectSyncTokens(node); len(syncTokens) > 0 {
@@ -1085,11 +1085,11 @@ func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) C
 	subCtx := *ctx
 	subCtx.rootLevel = false
 
-	if bodyNode := node.FindFirstKind(NodeParseNestBody); bodyNode != nil {
+	if bodyNode := node.FindFirstKind(dslspec.NodeParseNestBody); bodyNode != nil {
 		return compileParseExpression(&subCtx, bodyNode.RequireSingleChild())
 	}
 
-	if refNode := node.FindFirstKind(NodeParseExpressionReference); refNode != nil {
+	if refNode := node.FindFirstKind(dslspec.NodeParseExpressionReference); refNode != nil {
 		return compileParseExpression(&subCtx, refNode)
 	}
 
@@ -1097,7 +1097,7 @@ func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) C
 }
 
 func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
-	targetName := nodeSingleTokenContent(node)
+	targetName := dslspec.NodeSingleTokenContent(node)
 	_, isToken := ctx.env.Tokens[targetName]
 	_, isRule := ctx.env.Rules[targetName]
 	_, isPratt := ctx.env.Pratt[targetName]
@@ -1118,12 +1118,12 @@ func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName strin
 
 // compileGroup compiles a parse group. Uses Unwrap so nested groups (e.g. ( ( expr ) )) yield the innermost expression.
 func compileGroup(ctx *parseCompileCtx, node *Node) CompiledRule {
-	inner := node.Unwrap(NodeParseGroup)
+	inner := node.Unwrap(dslspec.NodeParseGroup)
 	return compileParseExpression(ctx, inner)
 }
 
 func compileTokenMatch(ctx *parseCompileCtx, node *Node) CompiledRule {
-	targetToken := nodeSingleTokenContent(node)
+	targetToken := dslspec.NodeSingleTokenContent(node)
 	if ctx.rootLevel {
 		if ctx.transparent {
 			return ctx.builder.Token.ExpectVirtual(ctx.grammarID, targetToken)
@@ -1141,7 +1141,7 @@ func compilePrattExprDef(
 ) CompiledRule {
 	grammarID := syntaxa.GrammarLabel(ruleName)
 
-	bodyNode := ruleNode.FindFirstKind(NodePrattExprBody)
+	bodyNode := ruleNode.FindFirstKind(dslspec.NodePrattExprBody)
 	if bodyNode == nil {
 		panic("compiler error: pratt rule missing body")
 	}
@@ -1163,15 +1163,15 @@ func buildPrattConfig(
 
 	for _, actualCat := range bodyNode.Children() {
 		switch actualCat.Kind() {
-		case NodePrattPrimary:
+		case dslspec.NodePrattPrimary:
 			config.Primary = compilePrattPrimary(builder, grammarID, actualCat)
-		case NodePrattPrefix:
+		case dslspec.NodePrattPrefix:
 			config.PrefixOps, config.PrefixRuleOps = compilePrattPrefixOps(builder, env, grammarID, actualCat)
-		case NodePrattInfix:
+		case dslspec.NodePrattInfix:
 			config.InfixOps, config.InfixRuleOps = compilePrattInfixOps(builder, env, grammarID, actualCat)
-		case NodePrattPostfix:
+		case dslspec.NodePrattPostfix:
 			config.PostfixOps, config.PostfixRuleOps = compilePrattPostfixOps(builder, env, grammarID, actualCat)
-		case NodePrattImplicit:
+		case dslspec.NodePrattImplicit:
 			config.ImplicitInfix = compilePrattImplicitOp(actualCat)
 		default:
 			panic(fmt.Errorf("compiler error: unknown pratt category: %s", actualCat.Kind()))
@@ -1187,15 +1187,15 @@ func compilePrattPrimary(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) CompiledRule {
-	body := node.FindFirstKind(NodePrattPrimaryBody)
-	refNode := body.FindFirstKind(NodePrattPrimaryRef)
+	body := node.FindFirstKind(dslspec.NodePrattPrimaryBody)
+	refNode := body.FindFirstKind(dslspec.NodePrattPrimaryRef)
 	if refNode == nil {
 		panic("compiler error: pratt primary body missing ref")
 	}
-	if refChild := refNode.FindFirstKind(NodeParseExpressionReference); refChild != nil {
+	if refChild := refNode.FindFirstKind(dslspec.NodeParseExpressionReference); refChild != nil {
 		refNode = refChild
 	}
-	targetRuleName := getRefName(refNode)
+	targetRuleName := dslspec.RefName(refNode)
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 
 	return builder.Rule.Reference(grammarID, targetGrammarID)
@@ -1207,7 +1207,7 @@ func compilePrattPrefixOps(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattPrefixOp[string, string], []rule.PrattPrefixRuleOp[rune, string, string, string, string]) {
-	bodyNode := node.FindFirstKind(NodePrattPrefixBody)
+	bodyNode := node.FindFirstKind(dslspec.NodePrattPrefixBody)
 
 	tokOps := make([]rule.PrattPrefixOp[string, string], 0)
 	ruleOps := make([]rule.PrattPrefixRuleOp[rune, string, string, string, string], 0)
@@ -1240,7 +1240,7 @@ func compilePrattInfixOps(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattInfixOp[string, string], []rule.PrattInfixRuleOp[rune, string, string, string, string]) {
-	bodyNode := node.FindFirstKind(NodePrattInfixBody)
+	bodyNode := node.FindFirstKind(dslspec.NodePrattInfixBody)
 
 	tokOps := make([]rule.PrattInfixOp[string, string], 0)
 	ruleOps := make([]rule.PrattInfixRuleOp[rune, string, string, string, string], 0)
@@ -1275,7 +1275,7 @@ func compilePrattPostfixOps(
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
 ) ([]rule.PrattPostfixOp[string, string], []rule.PrattPostfixRuleOp[rune, string, string, string, string]) {
-	bodyNode := node.FindFirstKind(NodePrattPostfixBody)
+	bodyNode := node.FindFirstKind(dslspec.NodePrattPostfixBody)
 
 	tokOps := make([]rule.PrattPostfixOp[string, string], 0)
 	ruleOps := make([]rule.PrattPostfixRuleOp[rune, string, string, string, string], 0)
@@ -1303,12 +1303,12 @@ func compilePrattPostfixOps(
 }
 
 func compilePrattImplicitOp(node *Node) *rule.PrattImplicitInfix[string, string] {
-	body := node.FindFirstKind(NodePrattImplicitBody)
-	def := body.FindFirstKind(NodePrattImplicitDef)
+	body := node.FindFirstKind(dslspec.NodePrattImplicitBody)
+	def := body.FindFirstKind(dslspec.NodePrattImplicitDef)
 
-	nodeKind := nodeSingleTokenContent(def.FindFirstKind(NodeParseNodeName))
-	leftBP := extractIntContent(def.FindFirstKind(NodePrattLeftPrecedenceValue))
-	rightBP := extractIntContent(def.FindFirstKind(NodePrattRightPrecedenceValue))
+	nodeKind := dslspec.NodeSingleTokenContent(def.FindFirstKind(dslspec.NodeParseNodeName))
+	leftBP := extractIntContent(def.FindFirstKind(dslspec.NodePrattLeftPrecedenceValue))
+	rightBP := extractIntContent(def.FindFirstKind(dslspec.NodePrattRightPrecedenceValue))
 
 	return &rule.PrattImplicitInfix[string, string]{
 		LeftBP:   leftBP,
@@ -1326,12 +1326,12 @@ type OperatorTarget struct {
 }
 
 func extractOperatorTarget(defNode *Node, env *SemanticEnv) OperatorTarget {
-	nodeKind := nodeSingleTokenContent(defNode.FindFirstKind(NodeParseNodeName))
-	refNode := defNode.FindFirstKind(NodeParseSymbolReference)
+	nodeKind := dslspec.NodeSingleTokenContent(defNode.FindFirstKind(dslspec.NodeParseNodeName))
+	refNode := defNode.FindFirstKind(dslspec.NodeParseSymbolReference)
 	if refNode == nil {
 		panic("compiler error: pratt operator target missing reference")
 	}
-	refName := nodeSingleTokenContent(refNode)
+	refName := dslspec.NodeSingleTokenContent(refNode)
 
 	if env.Tokens[refName] != nil {
 		return OperatorTarget{
@@ -1352,20 +1352,20 @@ func extractOperatorTarget(defNode *Node, env *SemanticEnv) OperatorTarget {
 
 func extractPrefixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int) {
 	target := extractOperatorTarget(defNode, env)
-	rightBP := extractIntContent(defNode.FindFirstKind(NodePrattRightPrecedenceValue))
+	rightBP := extractIntContent(defNode.FindFirstKind(dslspec.NodePrattRightPrecedenceValue))
 	return target, rightBP
 }
 
 func extractPostfixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int) {
 	target := extractOperatorTarget(defNode, env)
-	leftBP := extractIntContent(defNode.FindFirstKind(NodePrattLeftPrecedenceValue))
+	leftBP := extractIntContent(defNode.FindFirstKind(dslspec.NodePrattLeftPrecedenceValue))
 	return target, leftBP
 }
 
 func extractInfixData(defNode *Node, env *SemanticEnv) (OperatorTarget, int, int) {
 	target := extractOperatorTarget(defNode, env)
-	leftBP := extractIntContent(defNode.FindFirstKind(NodePrattLeftPrecedenceValue))
-	rightBP := extractIntContent(defNode.FindFirstKind(NodePrattRightPrecedenceValue))
+	leftBP := extractIntContent(defNode.FindFirstKind(dslspec.NodePrattLeftPrecedenceValue))
+	rightBP := extractIntContent(defNode.FindFirstKind(dslspec.NodePrattRightPrecedenceValue))
 	return target, leftBP, rightBP
 }
 
@@ -1388,12 +1388,12 @@ func nodeContains(node *Node, target LangSpecParserNodeKind) (*Node, bool) {
 }
 
 func nodeHasMetaByPred(node *Node, pred func(metaKVPNode *Node) bool) bool {
-	meta, ok := nodeContains(node, NodeMetaSection)
+	meta, ok := nodeContains(node, dslspec.NodeMetaSection)
 	if !ok {
 		return false
 	}
 
-	kvps := meta.FindAllKind(NodeMetaKeyValuePair)
+	kvps := meta.FindAllKind(dslspec.NodeMetaKeyValuePair)
 	for _, kvp := range kvps {
 		if pred(kvp) {
 			return true
@@ -1404,29 +1404,29 @@ func nodeHasMetaByPred(node *Node, pred func(metaKVPNode *Node) bool) bool {
 }
 
 func isEOFTrueMetaKVP(kvpNode *Node) bool {
-	key := kvpNode.FindFirstKind(NodeMetaKey)
+	key := kvpNode.FindFirstKind(dslspec.NodeMetaKey)
 	if key == nil || !lexemeRawContentEqualTo(key.Tokens()[0], "EOF") {
 		return false
 	}
 
-	valueNode := kvpNode.FindFirstKind(NodeMetaValue)
+	valueNode := kvpNode.FindFirstKind(dslspec.NodeMetaValue)
 	if valueNode == nil {
 		return false
 	}
 
-	return lexemeKindEqualTo(valueNode.Tokens()[0], TokKWTrue)
+	return lexemeKindEqualTo(valueNode.Tokens()[0], dslspec.TokKWTrue)
 }
 
 func checkRuleForEOFMeta(rule *Node) string {
 	if nodeHasMetaByPred(rule, isEOFTrueMetaKVP) {
-		identifier := rule.FindFirstKind(NodeLexRuleTokenName).Tokens()[0]
+		identifier := rule.FindFirstKind(dslspec.NodeLexRuleTokenName).Tokens()[0]
 		return lexemeRawContent(identifier)
 	}
 	return ""
 }
 
 func checkForEOFLexeme(lexerSection *Node) string {
-	for _, rule := range lexerSection.FindAllKind(NodeLexRule) {
+	for _, rule := range lexerSection.FindAllKind(dslspec.NodeLexRule) {
 		if token := checkRuleForEOFMeta(rule); token != "" {
 			return token
 		}

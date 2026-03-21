@@ -8,7 +8,7 @@ PRAGMA {
 	
 	tool.go_bindings {
 		enable = true;
-		output-path = "assets/testing/generated_go_bindings.go";
+		output-path = "libs/langspec/examples/generated_go_bindings.go";
 		package-name = "compiler";
 	}
 }

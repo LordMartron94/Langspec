@@ -1,4 +1,4 @@
-package dsl
+package spec
 
 import (
 	"langspec"
@@ -7,21 +7,11 @@ import (
 	"syntaxa/rule"
 )
 
-func getSession(compiler *LangSpecCompiler, sourceFile string) *langspec.LangParserSession[rune] {
-	if compiler.sessionCache != nil {
-		compiler.sessionCache.Reset(sourceFile, nil, false)
-		return compiler.sessionCache
-	}
-	session := langspec.LangParserSessionCreate[rune](sourceFile, nil, false)
-	compiler.sessionCache = session
-	return session
-}
-
 /*
-additionalRulesFromBuilder returns all defined context-boundary grammars from the builder
+AdditionalRulesFromBuilder returns all defined context-boundary grammars from the builder
 except the root, for use as ProducePackage additionalRules (disconnected sub-graphs).
 */
-func additionalRulesFromBuilder(
+func AdditionalRulesFromBuilder(
 	rb *rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	root *syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind],
 ) []*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind] {
@@ -35,16 +25,20 @@ func additionalRulesFromBuilder(
 	return out
 }
 
-func buildLangSpecDSLSpec() (
+/*
+BuildLangSpecDSLSpec builds the LanguageSpec, LangParser configuration, default lexing ruleset,
+and program rule for the LangSpec meta-language (.lspec).
+*/
+func BuildLangSpecDSLSpec() (
 	LanguageSpec,
 	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	Rule,
 ) {
 	factory, templates := dslSpecFactoryAndTemplates()
-	spec := buildLanguageSpec(factory, templates)
+	languageSpec := buildLanguageSpec(factory, templates)
 
-	lexerSpec, ruleset := buildLangSpecDSLLexerSpec(spec)
+	lexerSpec, ruleset := buildLangSpecDSLLexerSpec(languageSpec)
 	lexerSpec.WithDFADebugFormatter(
 		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
 	)
@@ -55,7 +49,7 @@ func buildLangSpecDSLSpec() (
 	g := grammarDefinerCreate(ruleBuilder)
 	programRule := buildProgramRule(g)
 	registry := ruleBuilder.GetRegistry()
-	additionalRules := additionalRulesFromBuilder(ruleBuilder, programRule.GetGrammar())
+	additionalRules := AdditionalRulesFromBuilder(ruleBuilder, programRule.GetGrammar())
 
 	parserSpec, _ := buildLangSpecDSLParserSpec(programRule, registry, additionalRules)
 
@@ -64,5 +58,5 @@ func buildLangSpecDSLSpec() (
 		parserSpec,
 	)
 
-	return spec, dslSpec, ruleset, programRule
+	return languageSpec, dslSpec, ruleset, programRule
 }

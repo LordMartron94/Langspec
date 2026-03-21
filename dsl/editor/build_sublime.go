@@ -7,6 +7,7 @@ import (
 	"foundation/domain"
 	"foundation/hash"
 	"langspec/dsl"
+	dslspec "langspec/dsl/spec"
 	langspeceditor "langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
@@ -62,16 +63,16 @@ func BuildEditorOverrideProducer(
 		}
 
 		// Route to the dynamic identifier ref override
-		if *editorCtx.Token == dsl.TokIdentifier && editorCtx.NodeKind != nil && *editorCtx.NodeKind == dsl.NodeParseSymbolReference {
+		if *editorCtx.Token == dslspec.TokIdentifier && editorCtx.NodeKind != nil && *editorCtx.NodeKind == dslspec.NodeParseSymbolReference {
 			return identifierRefOverrides(ruleset, ctxProducer)
 		}
 
 		switch *editorCtx.Token {
-		case dsl.TokLineComment:
+		case dslspec.TokLineComment:
 			return []*EditorOverride{lineCommentOverride()}
-		case dsl.TokBlockComment:
+		case dslspec.TokBlockComment:
 			return []*EditorOverride{blockCommentOverride()}
-		case dsl.TokRegexLiteral:
+		case dslspec.TokRegexLiteral:
 			return []*EditorOverride{regExOverride()}
 		default:
 			return nil
@@ -83,17 +84,17 @@ func identifierRefOverrides(
 	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
 	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
 ) []*EditorOverride {
-	identRegex := getTokenRegex(ruleset, dsl.TokIdentifier)
-	assignRegex := getTokenRegex(ruleset, dsl.TokAssignment)
+	identRegex := getTokenRegex(ruleset, dslspec.TokIdentifier)
+	assignRegex := getTokenRegex(ruleset, dslspec.TokAssignment)
 
 	mappingRegex := fmt.Sprintf(`%s(?=\s*%s)`, identRegex, assignRegex)
 	refRegex := fmt.Sprintf(`%s(?!\s*%s)`, identRegex, assignRegex)
 
 	// 2. Resolve exact scopes dynamically from the Context Producer
-	mappingNode := dsl.NodeParseNodeName
+	mappingNode := dslspec.NodeParseNodeName
 	mappingCtx := ctxProducer(&EditorCtx{NodeKind: &mappingNode})
 
-	refNode := dsl.NodeParseExpressionReference
+	refNode := dslspec.NodeParseExpressionReference
 	refCtx := ctxProducer(&EditorCtx{NodeKind: &refNode})
 
 	return []*EditorOverride{
@@ -180,42 +181,42 @@ func regExOverride() *EditorOverride {
 var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenType, dsl.LangSpecParserNodeKind]{
 	InvalidScope: "invalid.illegal.unexpected-token",
 	NodeBindings: map[dsl.LangSpecParserNodeKind]toolchain.NodeBinding[dsl.LangSpecLexerTokenType]{
-		dsl.NodeDSLName:            {Scopes: []string{"entity.name.language"}},
-		dsl.NodePatternAlternation: {Scopes: []string{"keyword.operator.alternation"}},
-		dsl.NodePatternDefName:     {Scopes: []string{"entity.name.pattern.constant"}},
-		dsl.NodePatternRef:         {Scopes: []string{"constant.language.pattern-reference"}},
-		dsl.NodeLexRuleTokenName:   {Scopes: []string{"entity.name.token"}},
-		dsl.NodeLexRuleRole:        {Scopes: []string{"entity.name.token-role"}},
-		dsl.NodeMetaKey:            {Scopes: []string{"entity.other.attribute-name.meta"}},
-		dsl.NodeMetaValue: {
+		dslspec.NodeDSLName:            {Scopes: []string{"entity.name.language"}},
+		dslspec.NodePatternAlternation: {Scopes: []string{"keyword.operator.alternation"}},
+		dslspec.NodePatternDefName:     {Scopes: []string{"entity.name.pattern.constant"}},
+		dslspec.NodePatternRef:         {Scopes: []string{"constant.language.pattern-reference"}},
+		dslspec.NodeLexRuleTokenName:   {Scopes: []string{"entity.name.token"}},
+		dslspec.NodeLexRuleRole:        {Scopes: []string{"entity.name.token-role"}},
+		dslspec.NodeMetaKey:            {Scopes: []string{"entity.other.attribute-name.meta"}},
+		dslspec.NodeMetaValue: {
 			Scopes: []string{"meta.annotation.value"},
 			TokenScopes: map[dsl.LangSpecLexerTokenType][]string{
-				dsl.TokStringLiteral: {"meta.annotation.value", "string.quoted.double"},
-				dsl.TokKWTrue:        {"meta.annotation.value", "constant.language.bool"},
-				dsl.TokKWFalse:       {"meta.annotation.value", "constant.language.bool"},
+				dslspec.TokStringLiteral: {"meta.annotation.value", "string.quoted.double"},
+				dslspec.TokKWTrue:        {"meta.annotation.value", "constant.language.bool"},
+				dslspec.TokKWFalse:       {"meta.annotation.value", "constant.language.bool"},
 			},
 		},
-		dsl.NodePragmaConfiguration:   {MetaScope: "meta.pragma.configuration"},
-		dsl.NodePragmaBlockKeySegment: {Scopes: []string{"entity.name.namespace"}},
-		dsl.NodePragmaKey:             {Scopes: []string{"entity.other.attribute-name"}},
-		dsl.NodePragmaValue: {
+		dslspec.NodePragmaConfiguration:   {MetaScope: "meta.pragma.configuration"},
+		dslspec.NodePragmaBlockKeySegment: {Scopes: []string{"entity.name.namespace"}},
+		dslspec.NodePragmaKey:             {Scopes: []string{"entity.other.attribute-name"}},
+		dslspec.NodePragmaValue: {
 			Scopes: []string{"entity.other.attribute-value"},
 			TokenScopes: map[dsl.LangSpecLexerTokenType][]string{
-				dsl.TokStringLiteral: {"entity.other.attribute-value", "string.quoted.double"},
-				dsl.TokKWTrue:        {"entity.other.attribute-value", "constant.language.bool"},
-				dsl.TokKWFalse:       {"entity.other.attribute-value", "constant.language.bool"},
+				dslspec.TokStringLiteral: {"entity.other.attribute-value", "string.quoted.double"},
+				dslspec.TokKWTrue:        {"entity.other.attribute-value", "constant.language.bool"},
+				dslspec.TokKWFalse:       {"entity.other.attribute-value", "constant.language.bool"},
 			},
 		},
-		dsl.NodeParseRuleName:            {Scopes: []string{"entity.name.function.parser-expression"}},
-		dsl.NodeParseNodeName:            {Scopes: []string{"entity.name.type.parser-node"}},
-		dsl.NodeParseSymbolReference:     {Scopes: []string{"constant.language.symbol-reference"}},
-		dsl.NodeParseExpressionReference: {Scopes: []string{"entity.name.function.expression-reference"}},
-		dsl.NodeParseTokenReference:      {Scopes: []string{"constant.language.token-reference"}},
-		dsl.NodeParseNestOpenToken:       {Scopes: []string{"constant.language.token-reference"}},
-		dsl.NodeParseNestCloseToken:      {Scopes: []string{"constant.language.token-reference"}},
-		dsl.NodePrattExprName:            {Scopes: []string{"entity.name.function.parser-rule"}},
-		dsl.NodeParseIgnoreRole:          {Scopes: []string{"constant.language.token-role-reference"}},
-		dsl.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
-		dsl.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeParseRuleName:            {Scopes: []string{"entity.name.function.parser-expression"}},
+		dslspec.NodeParseNodeName:            {Scopes: []string{"entity.name.type.parser-node"}},
+		dslspec.NodeParseSymbolReference:     {Scopes: []string{"constant.language.symbol-reference"}},
+		dslspec.NodeParseExpressionReference: {Scopes: []string{"entity.name.function.expression-reference"}},
+		dslspec.NodeParseTokenReference:      {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeParseNestOpenToken:       {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeParseNestCloseToken:      {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodePrattExprName:            {Scopes: []string{"entity.name.function.parser-rule"}},
+		dslspec.NodeParseIgnoreRole:          {Scopes: []string{"constant.language.token-role-reference"}},
+		dslspec.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
 	},
 }

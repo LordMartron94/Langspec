@@ -6,28 +6,23 @@ import (
 	"foundation/system"
 	"io"
 	"langspec"
+	dslspec "langspec/dsl/spec"
+	"langspec/dsl/semantics"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
 	"syntaxa"
 	"syntaxa/lowering"
-	"syntaxa/rule"
 )
 
 // --------------------------------------------------------------- TYPE ALIASES
 
 type LexingRuleset = lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 
-type RuleBuilder = rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
-type Rule = rule.Rule[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]
-type Result = rule.Result[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
 type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 
 type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-
-type Node = syntaxa.SyntaxaLSTNode[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
 	return syntaxa.AttributeAs[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, TAttribute](
@@ -119,7 +114,7 @@ type LangSpecCompiler struct {
 
 /* LangSpecCompilerCreate constructs a compiler instance. */
 func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *LangSpecCompiler {
-	spec, dslSpec, ruleset, programRule := buildLangSpecDSLSpec()
+	languageSpec, dslSpec, ruleset, programRule := dslspec.BuildLangSpecDSLSpec()
 
 	langParserConfig := langspec.LangParserConfigurationCreate(
 		dslSpec,
@@ -130,7 +125,7 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	// Register ALL stages (0 through 4) in the unified config
 	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]()
 	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
-		getValidationStages()...,
+		semantics.ValidationStages()...,
 	)
 
 	var w io.Writer
@@ -140,7 +135,7 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 
 	return &LangSpecCompiler{
 		config:           compilerConfig,
-		languageSpec:     spec,
+		languageSpec:     languageSpec,
 		parser:           parser,
 		validatorConfig:  validationConfig,
 		lexingRuleSet:    ruleset,
@@ -173,7 +168,7 @@ func LangSpecCompilerCompile(
 	}
 
 	contentRune, _ := system.FileReadAllRunes(sourceFile)
-	session := getSession(compiler, sourceFile)
+	session := langSpecCompilerSessionGet(compiler, sourceFile)
 
 	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
 		compiler.parser,
@@ -284,7 +279,7 @@ type CompilerDebugConfig struct {
 }
 
 func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string) error {
-	session := getSession(compiler, sourceFile)
+	session := langSpecCompilerSessionGet(compiler, sourceFile)
 
 	lexemes, err := langspec.LangParserLexFile(compiler.parser, session)
 	if err != nil {
@@ -395,7 +390,7 @@ LangSpecCompilerScopeMap returns the token-to-scope map from the compiler's lang
 Used by editor integrations for syntax highlighting.
 */
 func LangSpecCompilerScopeMap(compiler *LangSpecCompiler) map[LangSpecLexerTokenType]string {
-	return LanguageSpecScopeMap(compiler.languageSpec)
+	return dslspec.LanguageSpecScopeMap(compiler.languageSpec)
 }
 
 /*

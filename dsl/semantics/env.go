@@ -1,4 +1,6 @@
-package dsl
+package semantics
+
+import . "langspec/dsl/spec"
 
 // ------------------------------------------------------------- SEMANTIC ENVIRONMENT
 
@@ -55,7 +57,7 @@ func buildEnvTokens(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 		return
 	}
 	for _, tokenNode := range lex.FindAllKind(NodeLexRuleTokenName) {
-		name := getIdentifierValue(tokenNode)
+		name := IdentifierValue(tokenNode)
 		if _, exists := env.Tokens[name]; exists {
 			if onDuplicate != nil {
 				onDuplicate(SymbolKindToken, name, tokenNode)
@@ -68,7 +70,7 @@ func buildEnvTokens(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 
 func buildEnvPatterns(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 	for _, def := range root.FindAllKind(NodePatternDefinition) {
-		name, nameNode := extractPatternDefName(def)
+		name, nameNode := ExtractPatternDefName(def)
 		if name == "" {
 			continue
 		}
@@ -92,7 +94,7 @@ func buildEnvRules(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 	}
 	for _, rule := range parse.FindAllKind(NodeParseRule) {
 		nameNode := rule.FindFirstKind(NodeParseRuleName)
-		name := getParseRuleName(nameNode)
+		name := ParseRuleName(nameNode)
 		if name == "" {
 			continue
 		}
@@ -113,7 +115,7 @@ func buildEnvPratt(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 	}
 	for _, expr := range pratt.FindAllKind(NodePrattExprDef) {
 		nameNode := expr.FindFirstKind(NodePrattExprName)
-		name := getIdentifierValue(nameNode)
+		name := IdentifierValue(nameNode)
 		if name == "" {
 			continue
 		}
