@@ -35,9 +35,12 @@ const (
 	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX005"
 	VALIDATION_UNRESOLVED_TOKEN_REF        ValidationCode = "V_LEX006"
 
-	VALIDATION_NEGATION_INVALID_CONTENT  ValidationCode = "V_PAT007"
-	VALIDATION_REPETITION_MIN_GT_MAX     ValidationCode = "V_PAT008"
-	VALIDATION_REPETITION_NEGATIVE_BOUND ValidationCode = "V_PAT009"
+	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
+
+	// Repetition bounds ({n,m}) apply to both pattern expressions and parse NodeRepetition; codes use V_REP (not V_PAT).
+	VALIDATION_REPETITION_BOUNDS_EMPTY   ValidationCode = "V_REP001"
+	VALIDATION_REPETITION_MIN_GT_MAX     ValidationCode = "V_REP002"
+	VALIDATION_REPETITION_NEGATIVE_BOUND ValidationCode = "V_REP003"
 
 	VALIDATION_DUPLICATE_PARSE_RULE_NAME ValidationCode = "V_PAR001"
 	VALIDATION_UNRESOLVED_PARSE_RULE_REF ValidationCode = "V_PAR002"
@@ -96,7 +99,7 @@ func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerToke
 		},
 		{
 			Name:        "Pattern Semantics",
-			Description: "Validates pattern section logic, repetition bounds, and negations.",
+			Description: "Validates pattern negation and brace repetition bounds in pattern and parse sections.",
 			Order:       3,
 			Processor:   processPatternSemantics,
 		},
@@ -544,14 +547,25 @@ func validateRepetitionBounds(ctx *ValidationCtx) {
 		maxVal, maxOK := parseIntFromNode(maxNode)
 
 		if minNode == nil && maxNode == nil {
+			ctx.ReportError(VALIDATION_REPETITION_BOUNDS_EMPTY.String(),
+				"repetition bounds must contain at least one integer (examples: `{3}`, `{1,4}`)", boundsNode)
+			continue
+		}
+
+		if minOK && minVal < 0 {
 			ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(),
-				"Repetition bounds cannot be empty (e.g., use '{n}' or '{min, max}')", boundsNode)
+				fmt.Sprintf("repetition minimum must be non-negative (got %d)", minVal), boundsNode)
+			continue
+		}
+		if maxOK && maxVal < 0 {
+			ctx.ReportError(VALIDATION_REPETITION_NEGATIVE_BOUND.String(),
+				fmt.Sprintf("repetition maximum must be non-negative (got %d)", maxVal), boundsNode)
 			continue
 		}
 
 		if minOK && maxOK && minVal > maxVal && maxVal != -1 {
 			ctx.ReportError(VALIDATION_REPETITION_MIN_GT_MAX.String(),
-				fmt.Sprintf("Range error: min (%d) is greater than max (%d)", minVal, maxVal), boundsNode)
+				fmt.Sprintf("repetition range is invalid: minimum (%d) is greater than maximum (%d)", minVal, maxVal), boundsNode)
 		}
 	}
 }

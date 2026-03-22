@@ -98,7 +98,14 @@ func renderValidationEntry(
 		return
 	}
 
-	startLine, startCol, endLine, endCol := entry.Node.LineSpan()
+	startLine, startCol, endLine, endCol, locOK := syntaxa.LSTNodeLineSpanForDiagnostics(entry.Node)
+	if !locOK {
+		fmt.Fprintf(w, "      Location: (no source span; Node Kind: %v, ID: %d)\n",
+			entry.Node.Kind(), entry.Node.ID())
+		renderFallbackValidationSpan(w, entry)
+		fmt.Fprintln(w, " ──────────────────────────────────────────────────────────")
+		return
+	}
 	fmt.Fprintf(w, "      Location: line %d:%d to %d:%d (Node Kind: %v, ID: %d)\n",
 		startLine, startCol, endLine, endCol, entry.Node.Kind(), entry.Node.ID())
 

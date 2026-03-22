@@ -155,7 +155,7 @@ Validation for `.lspec` files is semantic, imperative, and runs automatically in
 | **0** | Symbol binding, environment collisions, unresolved references. |
 | **1** | Structure and reachability (cyclic references, dead rules). |
 | **2** | Lexer semantics (ambiguous matches, shadowed tokens). |
-| **3** | Pattern semantics (invalid negation, broken repetition bounds). |
+| **3** | Pattern semantics (invalid negation) and repetition bounds in pattern and parse (`V_REP*`). |
 | **4** | Grammar safety (left recursion, unbounded optionals, FIRST-set conflicts). |
 
 ### 2. Target Language Validation (Client Implemented)
