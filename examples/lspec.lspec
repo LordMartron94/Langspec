@@ -743,6 +743,11 @@ PARSE {
 		REPETITION_BOUNDS_STARTS_WITH_MIN | REPETITION_BOUNDS_STARTS_WITH_COMMA
 	};
 	
+	REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ -> transparent gr_REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ {
+		virtual TokComma
+		NodeRepetitionMax : TokInteger?
+	};
+	
 	REPETITION_BOUNDS_NEST -> transparent gr_REPETITION_BOUNDS_NEST sync (TokBraceClose) {
 		nest TokBraceOpen TokBraceClose {
 			REPETITION_BOUNDS
@@ -757,13 +762,8 @@ PARSE {
 	REPETITION_BOUNDS_STARTS_WITH_MIN -> NodeRepetitionBounds {
 		NodeRepetitionMin : TokInteger
 		(
-			REPETITION_BOUNDS_TAIL
+			REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ
 		)?
-	};
-	
-	REPETITION_BOUNDS_TAIL -> NodeRepetitionBounds {
-		virtual TokComma
-		NodeRepetitionMax : TokInteger?
 	};
 	
 	RULE_MODIFIER_SYNC -> NodeRuleModifierSync {

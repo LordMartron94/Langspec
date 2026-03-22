@@ -600,14 +600,22 @@ func (b *dslGrammarBuilder) patternRepetition() Rule {
 }
 
 func (b *dslGrammarBuilder) repetitionBounds() Rule {
-	tail := b.g.sequence(NodeRepetitionBounds, "TAIL").
-		expectVirtualInRule(TokComma).
-		optionalToken(NodeRepetitionMax, TokInteger).
-		build()
+	// Single NodeRepetitionBounds for `{min}`, `{min,max}`, `{min,}` — trailing comma + optional max
+	// is a transparent fragment so `{min,}` does not allocate a child bounds node with no digits.
+	minCommaMaxOpt := b.g.memoize(
+		LangSpecGrammarIDFromNodeWithSuffix(NodeRepetitionBounds, "MIN_COMMA_MAX_OPT"),
+		func() Rule {
+			return b.g.rb.Rule.TransparentSequence(
+				LangSpecGrammarIDFromNodeWithSuffix(NodeRepetitionBounds, "MIN_COMMA_MAX_OPT_SEQ"),
+				b.g.expectVirtualInRule(NodeRepetitionBounds, TokComma),
+				b.g.rb.Rule.Optional(b.g.expectToken(NodeRepetitionMax, TokInteger)),
+			)
+		},
+	)
 
 	startsWithMin := b.g.sequence(NodeRepetitionBounds, "STARTS_WITH_MIN").
 		expectToken(NodeRepetitionMin, TokInteger).
-		optionalRule(tail).
+		optionalRule(minCommaMaxOpt).
 		build()
 
 	startsWithComma := b.g.sequence(NodeRepetitionBounds, "STARTS_WITH_COMMA").
