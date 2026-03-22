@@ -11,8 +11,13 @@ import (
 	. "langspec/dsl/spec"
 )
 
+type GrammarValidationState struct {
+	Package   *GrammarPackage
+	SourceMap map[*syntaxa.Grammar[string, string]]*Node
+}
+
 /* ValidationCtx is the validation stage context type for LangSpec LST validation. */
-type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
+type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState]
 
 /*
 ValidationCode is a stable machine-readable diagnostic code for LangSpec validation (e.g. V_PAT001).
@@ -77,8 +82,8 @@ func attributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 /*
 ValidationStages returns the ordered LST validation stages for the LangSpec DSL compiler.
 */
-func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage] {
-	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]{
+func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState] {
+	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState]{
 		{
 			Name:        "Symbol Binding & Environment",
 			Description: "Builds semantic environment, checks duplicates, scoping, and reference resolution.",
@@ -573,11 +578,12 @@ func validateRepetitionBounds(ctx *ValidationCtx) {
 // ------------------------------------------------------------- GRAMMAR SEMANTICS (POST-COMPILATION) (STAGE 4)
 
 func processGrammarSafety(ctx *ValidationCtx) {
-	if ctx.RunState == nil {
+	if ctx.RunState == nil || ctx.RunState.Package == nil {
 		ctx.ReportFatal("V_INTERNAL", "engine error: grammar package missing in validation run state", ctx.RootNode)
 		return
 	}
-	pkg := ctx.RunState
+	pkg := ctx.RunState.Package
+	sourceMap := ctx.RunState.SourceMap
 
 	analysis := lowering.GetAnalysis(pkg)
 	if analysis == nil {
@@ -587,7 +593,7 @@ func processGrammarSafety(ctx *ValidationCtx) {
 
 	checkGrammarLeftRecursion(ctx, pkg, analysis)
 	checkGrammarUnboundedOptional(ctx, pkg, analysis)
-	checkGrammarChoiceConflicts(ctx, pkg, analysis)
+	checkGrammarChoiceConflicts(ctx, pkg, analysis, sourceMap)
 }
 
 func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
@@ -694,7 +700,12 @@ func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, anal
 	}
 }
 
-func checkGrammarChoiceConflicts(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
+func checkGrammarChoiceConflicts(
+	ctx *ValidationCtx,
+	pkg *GrammarPackage,
+	analysis *syntaxa.GrammarAnalysis[string],
+	sourceMap map[*syntaxa.Grammar[string, string]]*Node,
+) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
@@ -706,39 +717,9 @@ func checkGrammarChoiceConflicts(ctx *ValidationCtx, pkg *GrammarPackage, analys
 		visited[g.GrammarKey] = true
 
 		if g.Kind == syntaxa.GChoice {
-			seenTokens := make(map[string]int) // Maps FIRST token -> branch index
-			for i, child := range g.Children {
-				if child == nil || child.NodePath == nil {
-					continue
-				}
-				childKey := syntaxa.NodeKeyFromPath(*child.NodePath)
-
-				for token := range analysis.First[childKey] {
-					if prevBranch, exists := seenTokens[token]; exists {
-						// We found an LL(1) conflict. Do the explicit lookaheads mutually exclude each other?
-						prevChild := g.Children[prevBranch]
-						if lookaheadsMutuallyExclusive(prevChild.Lookaheads, child.Lookaheads) {
-							continue
-						}
-
-						ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
-						ruleNode := findParseRuleByName(parseSection, string(ruleName))
-						nodeToReport := ctx.RootNode
-						if ruleNode != nil {
-							nodeToReport = ruleNode
-						}
-
-						msg := fmt.Sprintf(
-							"FIRST-set conflict in rule '%s'. Token '%s' is expected by both branch %d and branch %d. Explicit lookaheads do not uniquely resolve this.",
-							ruleName, token, prevBranch, i,
-						)
-						ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, nodeToReport)
-					} else {
-						seenTokens[token] = i
-					}
-				}
-			}
+			analyzeChoiceNode(ctx, pkg, analysis, sourceMap, parseSection, g)
 		}
+
 		for _, child := range g.Children {
 			walk(child)
 		}
@@ -747,6 +728,79 @@ func checkGrammarChoiceConflicts(ctx *ValidationCtx, pkg *GrammarPackage, analys
 	for _, root := range pkg.Grammars {
 		walk(root)
 	}
+}
+
+func analyzeChoiceNode(
+	ctx *ValidationCtx,
+	pkg *GrammarPackage,
+	analysis *syntaxa.GrammarAnalysis[string],
+	sourceMap map[*syntaxa.Grammar[string, string]]*Node,
+	parseSection *Node,
+	choiceNode *syntaxa.Grammar[string, string],
+) {
+	seenTokens := make(map[string]int)
+	reportedPrev := make(map[string]bool)
+
+	ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*choiceNode.NodePath)]
+	fallbackRuleNode := findParseRuleByName(parseSection, string(ruleName))
+
+	for i, child := range choiceNode.Children {
+		if child == nil || child.NodePath == nil {
+			continue
+		}
+
+		childKey := syntaxa.NodeKeyFromPath(*child.NodePath)
+
+		for token := range analysis.First[childKey] {
+			prevBranch, exists := seenTokens[token]
+			if !exists {
+				seenTokens[token] = i
+				continue
+			}
+
+			prevChild := choiceNode.Children[prevBranch]
+			if lookaheadsMutuallyExclusive(prevChild.Lookaheads, child.Lookaheads) {
+				continue
+			}
+
+			// 1. Report the earlier branch (only once per token to avoid spam)
+			if !reportedPrev[token] {
+				prevNode := resolveConflictNode(ctx, sourceMap, prevChild, fallbackRuleNode)
+				msg := fmt.Sprintf(
+					"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is also expected by a later branch (%d).",
+					ruleName, token, i,
+				)
+				ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, prevNode)
+				reportedPrev[token] = true
+			}
+
+			// 2. Report the current branch (always)
+			currNode := resolveConflictNode(ctx, sourceMap, child, fallbackRuleNode)
+			msg := fmt.Sprintf(
+				"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is already expected by an earlier branch (%d).",
+				ruleName, token, prevBranch,
+			)
+			ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, currNode)
+		}
+	}
+}
+
+func resolveConflictNode(
+	ctx *ValidationCtx,
+	sourceMap map[*syntaxa.Grammar[string, string]]*Node,
+	grammarNode *syntaxa.Grammar[string, string],
+	fallbackRuleNode *Node,
+) *Node {
+	exactNode := sourceMap[grammarNode]
+	if exactNode != nil {
+		return exactNode
+	}
+
+	if fallbackRuleNode != nil {
+		return fallbackRuleNode
+	}
+
+	return ctx.RootNode
 }
 
 // ------------------------------------------------------------- HELPERS

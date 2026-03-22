@@ -4,8 +4,8 @@ import (
 	"autarch/pattern"
 	"fmt"
 	"langspec"
-	dslspec "langspec/dsl/spec"
 	"langspec/dsl/semantics"
+	dslspec "langspec/dsl/spec"
 	"lexarch"
 	"strconv"
 	"strings"
@@ -14,11 +14,6 @@ import (
 	"syntaxa/rule"
 )
 
-/*
-LexerSpec, ParserSpec, RuleRegistry, LexerRuleset, CompiledRule, and CompilerRuleBuilder are the
-compiler-facing aliases for langspec, lexarch, syntaxa, and rule types using string lexer tokens
-and string parse node kinds (the DSL compiler's token/kind representation).
-*/
 type LexerSpec = langspec.LexerSpec[rune, string, string, string]
 type ParserSpec = langspec.ParserSpec[rune, string, string, string, string]
 type RuleRegistry = syntaxa.RuleRegistry[rune, string, string, string, string]
@@ -48,7 +43,8 @@ type CompiledLangSpec struct {
 
 	toolPragmas []ToolPragma
 
-	eofToken string
+	eofToken  string
+	sourceMap map[*syntaxa.Grammar[string, string]]*Node
 }
 
 type compiler struct {
@@ -81,6 +77,8 @@ type parseCompileCtx struct {
 	counts      map[string]int
 	rootLevel   bool
 	transparent bool
+
+	sourceMap map[*syntaxa.Grammar[string, string]]*Node
 }
 
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
@@ -117,7 +115,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	ruleset := lspecCompiler.compileRuleset(patternCtx)
 	lexerSpec.WithRuleset("default", *ruleset)
 
-	grammarPackage, ruleRegistry, rootNodeKind, skipRoles := getParserSpecInfo(rootNode, env, dslName, dslVersion)
+	grammarPackage, ruleRegistry, rootNodeKind, skipRoles, sourceMap := getParserSpecInfo(rootNode, env, dslName, dslVersion)
 
 	grammarPkg := new(syntaxa.GrammarPackage[rune, string, string, string, string])
 	*grammarPkg = grammarPackage
@@ -144,6 +142,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		grammarPackage:        *grammarPkg,
 		toolPragmas:           toolPragmas,
 		targetLangspecVersion: langspecTargetVersion,
+		sourceMap:             sourceMap,
 	}
 }
 
@@ -660,6 +659,7 @@ func getParserSpecInfo(
 	RuleRegistry,
 	string,
 	[]string,
+	map[*syntaxa.Grammar[string, string]]*Node,
 ) {
 	ruleBuilder := rule.RuleBuilderCreate[rune, string, string, string, string](
 		func(token string) string {
@@ -684,6 +684,8 @@ func getParserSpecInfo(
 	var entryRule CompiledRule
 	var entryOverride syntaxa.GrammarLabel
 
+	sourceMap := make(map[*syntaxa.Grammar[string, string]]*Node)
+
 	for ruleName, ruleNode := range env.Rules {
 		ctx := &parseCompileCtx{
 			builder:     ruleBuilder,
@@ -694,6 +696,7 @@ func getParserSpecInfo(
 			counts:      make(map[string]int),
 			rootLevel:   true,
 			transparent: ruleNode.FindFirstKind(dslspec.NodeRuleModifierTransparent) != nil,
+			sourceMap:   sourceMap,
 		}
 		compiled, override := compileParseRuleDefinition(ctx, ruleNode)
 		if ruleName == semantics.ProgramRuleName {
@@ -723,7 +726,7 @@ func getParserSpecInfo(
 		entryRulePtr,
 	)
 
-	return grammarPackage, registry, rootNodeKind, skipRoles
+	return grammarPackage, registry, rootNodeKind, skipRoles, sourceMap
 }
 
 func buildParseRuleBodyMapForCompile(rules map[string]*Node) map[string]*Node {
@@ -784,35 +787,42 @@ func getParseRuleBodyRoot(body *Node) *Node {
 
 func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 	kind := node.Kind()
+	var compiledRule CompiledRule
 
 	switch kind {
 	case dslspec.NodeParseConcat:
-		return compileConcat(ctx, node)
+		compiledRule = compileConcat(ctx, node)
 	case dslspec.NodeParseAlternation:
-		return compileAlternation(ctx, node)
+		compiledRule = compileAlternation(ctx, node)
 	case dslspec.NodeParseModifierPredict:
-		return compilePredict(ctx, node)
+		compiledRule = compilePredict(ctx, node)
 	case dslspec.NodeParseOptional:
-		return compileOptional(ctx, node)
+		compiledRule = compileOptional(ctx, node)
 	case dslspec.NodeParseExpressionReference, dslspec.NodeParseTokenReference:
-		return compileReference(ctx, node)
+		compiledRule = compileReference(ctx, node)
 	case dslspec.NodeParsePlus:
-		return compilePlus(ctx, node)
+		compiledRule = compilePlus(ctx, node)
 	case dslspec.NodeParseStar:
-		return compileStar(ctx, node)
+		compiledRule = compileStar(ctx, node)
 	case dslspec.NodeParseOpSuppress:
-		return compileVirtual(ctx, node)
+		compiledRule = compileVirtual(ctx, node)
 	case dslspec.NodeParseOpNest:
-		return compileNest(ctx, node)
+		compiledRule = compileNest(ctx, node)
 	case dslspec.NodeParseGroup:
-		return compileGroup(ctx, node)
+		compiledRule = compileGroup(ctx, node)
 	case dslspec.NodeParseSegment:
-		return compileParseSegment(ctx, node)
+		compiledRule = compileParseSegment(ctx, node)
 	case dslspec.NodeRepetition:
-		return compileParseRepetition(ctx, node)
+		compiledRule = compileParseRepetition(ctx, node)
 	default:
 		panic(fmt.Errorf("compiler error: unsupported parse expression kind: '%s'", kind))
 	}
+
+	if g := compiledRule.GetGrammar(); g != nil {
+		ctx.sourceMap[g] = node
+	}
+
+	return compiledRule
 }
 
 func compileConcat(ctx *parseCompileCtx, node *Node) CompiledRule {

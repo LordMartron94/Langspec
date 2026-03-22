@@ -6,8 +6,8 @@ import (
 	"foundation/system"
 	"io"
 	"langspec"
-	dslspec "langspec/dsl/spec"
 	"langspec/dsl/semantics"
+	dslspec "langspec/dsl/spec"
 	"langspec/validation"
 	"lexarch"
 	"memarch"
@@ -21,10 +21,10 @@ import (
 type LexingRuleset = lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 
 /* ValidationStage is a validation stage for the DSL LST when grammar package state is not yet available. */
-type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
+type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 
 /* ValidationStageCtx is the per-stage context for early DSL validation passes. */
-type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
+type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 
 /* NodeFinalizationCtx is the syntaxa finalization context for DSL parse nodes. */
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
@@ -41,7 +41,7 @@ func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 /* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
-	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
+	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 	diagnosticSink            *LangSpecDiagnosticSink
 }
 
@@ -53,7 +53,7 @@ Stage reporter is optional. DiagnosticSink is optional; when set, compilation di
 */
 func LangSpecCompilerConfigurationCreate(
 	scratchAllocationFunction memarch.AllocationFn,
-	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage],
+	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState],
 ) *LangSpecCompilerConfiguration {
 	return &LangSpecCompilerConfiguration{
 		scratchAllocationFunction: scratchAllocationFunction,
@@ -95,6 +95,7 @@ type LangSpecCompileResult struct {
 	CompiledGrammarPackage GrammarPackage
 
 	CompiledToolPragmas []ToolPragma
+	SourceMap           map[*syntaxa.Grammar[string, string]]*Node
 
 	EOFToken string
 }
@@ -108,7 +109,7 @@ type LangSpecCompiler struct {
 	languageSpec LanguageSpec
 
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]
+	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 
 	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
 	programRule   Rule
@@ -129,7 +130,7 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	parser := langspec.LangParserCreate(langParserConfig)
 
 	// Register ALL stages (0 through 4) in the unified config
-	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]()
+	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]()
 	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
 		semantics.ValidationStages()...,
 	)
@@ -200,10 +201,10 @@ func LangSpecCompilerCompile(
 		validationEntries, validationErr := validation.LSTValidatorRun(
 			compiler.validatorConfig,
 			rootNode,
-			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]) bool {
+			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
 				return stage.Order < 4
 			},
-			(*GrammarPackage)(nil),
+			(*semantics.GrammarValidationState)(nil),
 		)
 		if validationErr != nil {
 			err = validationErr
@@ -232,13 +233,18 @@ func LangSpecCompilerCompile(
 	if err == nil {
 		compiled := compileTree(compiler, result.RootNode)
 
+		valState := &semantics.GrammarValidationState{
+			Package:   &compiled.grammarPackage,
+			SourceMap: compiled.sourceMap,
+		}
+
 		postValidationEntries, postValidationErr := validation.LSTValidatorRun(
 			compiler.validatorConfig,
 			rootNode,
-			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarPackage]) bool {
+			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
 				return stage.Order >= 4
 			},
-			&compiled.grammarPackage,
+			valState,
 		)
 
 		if postValidationErr != nil {
@@ -277,6 +283,7 @@ func LangSpecCompilerCompile(
 			result.CompiledToolPragmas = compiled.toolPragmas
 			result.TargetLangspecVersion = compiled.targetLangspecVersion
 			result.EOFToken = compiled.eofToken
+			result.SourceMap = compiled.sourceMap
 		}
 	}
 
