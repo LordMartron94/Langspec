@@ -830,6 +830,10 @@ func generateEntriesSignature(entries []contextEntry) string {
 		if e.Escape != nil {
 			sb.WriteString(*e.Escape)
 		}
+		if e.MetaScope != nil {
+			sb.WriteString("||meta:")
+			sb.WriteString(*e.MetaScope)
+		}
 		sb.WriteString("###")
 	}
 	return sb.String()

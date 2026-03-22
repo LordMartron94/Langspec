@@ -83,7 +83,8 @@ Prerequisites:
 
 Edge cases:
 - Invalid context yields SublimeContext with manifest.InvalidScope.
-- Nest context yields a meta-scope derived from the nest label.
+- Nest wrapper context yields meta-scope from the manifest NodeBinding for the opening
+production when that binding has MetaScope; otherwise meta derived from the nest label (.body).
 - Unmatched token/node yields zero SublimeContext.
 */
 func BuildContextProducerFromManifest[
@@ -101,6 +102,11 @@ func BuildContextProducerFromManifest[
 		}
 
 		if ctx.IsNest {
+			if ctx.NodeKind != nil {
+				if ms, ok := manifestNestMetaOverride(manifest, *ctx.NodeKind); ok {
+					return SublimeContext{MetaScope: ms}
+				}
+			}
 			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
 		}
 
@@ -158,6 +164,21 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 	}
 
 	return ctx, ctx.MetaScope != ""
+}
+
+func manifestNestMetaOverride[TToken, TNodeKind comparable](
+	manifest SemanticManifest[TToken, TNodeKind],
+	openingNodeKind TNodeKind,
+) (string, bool) {
+	binding, exists := manifest.NodeBindings[openingNodeKind]
+	if !exists {
+		return "", false
+	}
+	ms := strings.TrimSpace(binding.MetaScope)
+	if ms == "" {
+		return "", false
+	}
+	return ms, true
 }
 
 // --- UNIVERSAL STRING UTILITIES ---

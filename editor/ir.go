@@ -16,7 +16,10 @@ const ROOT_LABEL = "root"
 EditorCtx is the context passed to configuration callbacks when building EditorIR.
 
 Token, TokenRole, and NodeKind describe the current transition; they may be nil when
-not applicable. IsNest and NestLabel are set when the state corresponds to a nest body.
+not applicable. IsNest and NestLabel are set for a nest wrapper state; NodeKind may
+also be set to the opening production kind (from lowering.StateGraph.NestContentParentNodeKind
+on the sibling *_content id) so a manifest NodeBinding MetaScope replaces the default
+nest ".body" meta for that wrapper.
 IsInvalidContext is true when the context is being produced for the synthesised
 catch-all/fallback transition of a state. Clients should return the
 "invalid.illegal.unexpected-token" scope (or equivalent) when this flag is set.

@@ -106,6 +106,14 @@ func EditorIRFromStateGraph[
 			edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 				IsNest: true, NestLabel: label,
 			}
+			// Opening-production kind from lowering: manifest MetaScope on that node
+			// replaces auto nestLabelToMetaScope ".body" for this wrapper (see toolchain).
+			if sg.NestContentParentNodeKind != nil {
+				if nk, ok := sg.NestContentParentNodeKind[id+"_content"]; ok {
+					k := nk
+					edCtx.NodeKind = &k
+				}
+			}
 			s.Context = config.contextProducer(edCtx)
 		} else if id == sg.RootContextID {
 			s.Context = config.contextProducer(&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{})
