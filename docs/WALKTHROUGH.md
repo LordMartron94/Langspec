@@ -1,108 +1,109 @@
-# LangSpec walkthrough: build, compile a spec, hello world, tests
+# LangSpec Integration Walkthrough: build, compile a spec, hello world
 
-This guide assumes you are in the **ruleforge** repository root (the directory that contains `go.work`). LangSpec is a normal Go module (`libs/langspec`) wired into that workspace together with `lexarch`, `syntaxa`, `memforge`, and the rest.
-
----
-
-## 1. What you are building (two different “compiles”)
-
-People often mean one of two things:
-
-1. **Compile the Go code** — build the `langspec` package (and tools) like any other Go library.
-2. **Compile a `.lspec` file** — run the LangSpec DSL compiler so a text spec becomes lexer/parser data your program can use. In code this is usually `bootstrap.CompileParserFromSpec` (runtime parser) or `dsl.LangSpecCompilerCompile` (full compile result). Nothing writes generated Go or Sublime files unless you run the **toolchains** (see below).
+This guide explains how to integrate LangSpec into your own Go project. LangSpec relies on a Go workspace (`go.work`) environment to resolve its sibling dependencies (`lexarch`, `syntaxa`, `memforge`). 
 
 ---
 
-## 2. Prerequisites
+## 1. Project Setup (The Workspace)
 
-- **Go 1.25** (see `go.work` at the repo root).
-- A checkout where **`go.work`** lists `./libs/langspec` and its dependencies (as in this repo). If you open only `libs/langspec` in isolation without the workspace, you would need your own `go.work` or `replace` directives pointing at sibling modules — the upstream layout expects the workspace.
+Because LangSpec and its related packages are designed as interdependent modules, you cannot simply run a standard `go get` to pull a single library. You must pull the required modules into your project tree (often as git submodules or into a `vendor/` or `third_party/` directory) and link them using a `go.work` file at your repository root.
+
+**Example Setup:**
+Assuming you place the LangSpec ecosystem into a directory named `submodules/`, your project structure should look like this:
+
+```text
+your-project/
+├── go.mod             <-- Your project's module file
+├── go.work            <-- The workspace file you must create
+└── submodules/
+    ├── langspec/      <-- The cloned LangSpec repository
+    ├── lexarch/       
+    ├── syntaxa/       
+    └── memforge/      
+```
+
+**Your `go.work` file must look like this:**
+
+```go
+go 1.25
+
+use (
+    . // Your own project's code
+    ./submodules/langspec
+    ./submodules/lexarch
+    ./submodules/syntaxa
+    ./submodules/memforge
+)
+```
+
+Without this workspace configuration, the Go compiler will fail to resolve local paths between LangSpec and its required dependencies.
+
+---
+
+## 2. What you are building (two different “compiles”)
+
+When working with LangSpec, "compiling" usually means one of two things:
+
+1. **Compile the Go code** — Build the `langspec` packages and tools into your project like any other Go library.
+2. **Compile a `.lspec` file** — Run the LangSpec DSL compiler to convert a text specification into lexer/parser data that your program can execute. In code, this is handled by `bootstrap.CompileParserFromSpec` (for a runtime parser). Note that this process does not generate Go code or Sublime files automatically unless you explicitly run the **toolchains**.
 
 ---
 
 ## 3. Compile the Go code (sanity check)
 
-From the **repository root**:
+To ensure your workspace is resolving the local dependencies correctly, run a build targeting the LangSpec module from your **repository root**:
 
 ```bash
-go build ./libs/langspec/...
+go build ./submodules/langspec/...
 ```
 
-You should get no output and exit code 0. That compiles the core runtime, the DSL (`langspec/dsl`), `bootstrap`, `toolchain`, etc.
+You should get no output and an exit code of 0. This confirms that the core runtime, the DSL, and the toolchains compile successfully within your workspace.
 
 ---
 
 ## 4. Hello world: tiny language + parse some text
 
-There is a deliberately small spec at [`examples/hello_world.lspec`](../examples/hello_world.lspec) and a helper command that:
+LangSpec includes a deliberately small specification and a helper command to test that your setup can parse text. The helper command compiles a sample `.lspec` file into a `LangParser`, writes input to a temporary file, and parses it.
 
-1. Compiles that `.lspec` into a `LangParser` (DSL “compile”).
-2. Writes your input to a temp file (the public API parses **files**).
-3. Parses and prints whether it succeeded.
-
-From the **repository root**:
+Run this from your **repository root**:
 
 ```bash
-go run ./libs/langspec/cmd/hello-lspec
+go run ./submodules/langspec/cmd/hello-lspec
 ```
 
-Default input is the word `hello`. Try:
+The default input is the word `hello`. Try passing different text:
 
 ```bash
-go run ./libs/langspec/cmd/hello-lspec -text hello
-go run ./libs/langspec/cmd/hello-lspec -text hi
+go run ./submodules/langspec/cmd/hello-lspec -text hi
 ```
 
-That stock spec only allows **lowercase letters** as words; other input should fail with a syntax error.
+This specific sample spec (`hello_world.lspec`) only allows lowercase letters as valid words. If you input numbers or uppercase letters, it will fail with a syntax error.
 
-To see **validation and compiler messages** (useful when your own spec breaks):
+To see **validation and compiler messages** (which is critical when debugging your own `.lspec` files later):
 
 ```bash
-go run ./libs/langspec/cmd/hello-lspec -v
+go run ./submodules/langspec/cmd/hello-lspec -v
 ```
-
-To point at another spec:
-
-```bash
-go run ./libs/langspec/cmd/hello-lspec -spec path/to/your.lspec -text "..."
-```
-
-### What to copy into your own project
-
-Typical integration (conceptually):
-
-1. Add a `.lspec` file (header, `PATTERN` / `LEX` / `PARSE`, and a root parse rule named **`PROGRAM`** — see the hello example and [`syntax.md`](syntax.md)).
-2. Create a **scratch allocator** (see `memforge` usage in `libs/langspec/dsl/tests/helpers.go` in this repo).
-3. Call **`bootstrap.CompileParserFromSpec("your.lspec", alloc, opts...)`** to get a parser.
-4. **`defer langspec.LangParserDestroy(parser)`** when done.
-5. Create a **`langspec.LangParserSessionCreate[rune](path, nil, false)`** for a real file path, then **`langspec.LangParserParseFile(parser, session)`**.
-
-Codegen (Go bindings, Sublime YAML) is separate: configure `PRAGMA` in the `.lspec`, then run toolchains — for example the **`langspec-toolchain`** command in [`cmd/langspec-toolchain`](../cmd/langspec-toolchain/main.go), or the `bootstrap.RunToolchainsFromSpecFile` API described in the main README.
 
 ---
 
-## 5. Running tests (this repo)
+## 5. Integrating LangSpec into your Go code
 
-LangSpec’s DSL integration checks live under `libs/langspec/dsl/tests/` in files named `*_tests.go`. The **standard Go test runner only picks up `*_test.go`**, so those files are not discovered as separate packages. Instead, the **`tests`** module at the repo root calls **`langspec/dsl/tests.RunAllLangSpecTests`** from its entry test (see `tests/entry_test.go`).
+When you are ready to use LangSpec in your own application, the typical flow looks like this:
 
-From the **repository root**, the same path the Makefile uses:
+1. Add a `.lspec` file to your project. It requires a header, `PATTERN` / `LEX` / `PARSE` sections, and a root parse rule strictly named **`PROGRAM`** (refer to `syntax.md` in the LangSpec docs).
+2. Create a **scratch allocator** (using the `memforge` module in your workspace).
+3. Call **`bootstrap.CompileParserFromSpec("your.lspec", alloc, opts...)`** to generate the parser.
+4. Ensure you clean up memory by calling **`defer langspec.LangParserDestroy(parser)`**.
+5. Create a session for a real file path using **`langspec.LangParserSessionCreate[rune](path, nil, false)`**, and execute the parse with **`langspec.LangParserParseFile(parser, session)`**.
 
-```bash
-go test -tags=memforge_debug ./tests
-```
-
-Or use the full pipeline (runs `go generate` in each module first, then builds and runs the test binary):
-
-```bash
-make test
-```
-
-If you only want a quick signal that **LangSpec still builds** after your edits, `go build ./libs/langspec/...` from the root is enough; use `./tests` when you need the integrated checks.
+*(Note: If you require codegen—like generating Go bindings—you configure the `PRAGMA` in your `.lspec` file and run the toolchain via `bootstrap.RunToolchainsFromSpecFile` or the CLI tool provided in the LangSpec repo).*
 
 ---
 
 ## 6. Where to read next
 
-- **[`README.md`](../README.md)** — architecture, validation stages, toolchains, packages.
-- **[`syntax.md`](syntax.md)** — `.lspec` syntax details.
-- **[`examples/lspec.lspec`](../examples/lspec.lspec)** — full LangSpec-in-LangSpec definition (large, but authoritative).
+Refer to the documentation inside the `langspec` submodule you cloned for deeper architectural details:
+- **`README.md`** — Core architecture, validation stages, toolchains, and package structure.
+- **`syntax.md`** — Detailed breakdown of `.lspec` syntax.
+- **`examples/lspec.lspec`** — The full LangSpec-in-LangSpec definition (a large, authoritative reference).
