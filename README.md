@@ -4,8 +4,11 @@ LangSpec is a language specification and parsing ecosystem. It has two layers: a
 
 Validation logic is intentionally excluded from the `.lspec` grammar. Validation is semantic and requires imperative programming, so it is implemented on the Go side.
 
+**New here?** See **[Getting started: build, hello world, and tests](docs/WALKTHROUGH.md)** for a step-by-step path through compiling the Go code, running the tiny `hello-lspec` example, and how tests are wired in this repository.
+
 ## Table of Contents
 
+- [Getting started (walkthrough)](docs/WALKTHROUGH.md)
 - [LangSpec core vs. the LangSpec DSL](#langspec-core-vs-the-langspec-dsl)
 - [Architecture & Pipeline](#architecture--pipeline)
 - [Design Philosophy](#design-philosophy)
@@ -178,11 +181,13 @@ You must implement semantic validation for your target grammar yourself. You hav
 - **`bootstrap.RunToolchainsFromSpecFile(specPath, alloc, opts...)`** — compile the spec and run go_bindings + Sublime per PRAGMA and options (e.g. `WithSublimeToolchain` for in-memory manifest).
 - **`bootstrap.RunToolchainsFromCompileResult(result, opts...)`** — same, when you already have a `LangSpecCompileResult`.
 
-From the `libs/langspec` module root, the generic CLI is:
+From the **ruleforge repository root** (with `go.work`), the generic CLI is:
 
 ```bash
-go run ./cmd/langspec-toolchain -spec path/to/lang.lspec
+go run ./libs/langspec/cmd/langspec-toolchain -spec path/to/lang.lspec
 ```
+
+From inside `libs/langspec`, use `go run ./cmd/langspec-toolchain -spec path/to/lang.lspec` instead.
 
 It uses **`cliutil`**: same scratch allocator and `RunToolchains` wiring you would write in a custom `main`.
 

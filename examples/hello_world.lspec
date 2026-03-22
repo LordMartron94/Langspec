@@ -1,0 +1,22 @@
+--- "HelloLang" v1.0.0 | lspec v1.0.0 ---
+
+PATTERN {
+	pat_ws : (['\t', '\n', '\r', ' '])+;
+	pat_word : ['a'..'z']+;
+	pat_eof : [];
+}
+
+LEX {
+	1 TokWord -> word_role : pat_word;
+	0 TokWS   -> ws_role : pat_ws;
+	0 TokEOF  -> structural : pat_eof %% EOF=true %%;
+}
+
+PARSE {
+	IGNORE { ws_role };
+
+	PROGRAM -> NodeHello {
+		NodeWord : TokWord
+		virtual TokEOF
+	};
+}
