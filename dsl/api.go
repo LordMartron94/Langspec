@@ -186,108 +186,106 @@ func LangSpecCompilerCompile(
 		session,
 	)
 
+	// 1. Guard against fatal parser initialization failures (where syntaxErrors is nil)
+	if syntaxErrors == nil {
+		if err != nil {
+			return nil, fmt.Errorf("parser initialization failed: %w", err)
+		}
+		return nil, fmt.Errorf("fatal internal error: parser returned nil syntax errors without an error")
+	}
+
 	result := &LangSpecCompileResult{
 		RootNode:     rootNode,
 		Trace:        trace,
 		SyntaxErrors: syntaxErrors,
 	}
 
-	if syntaxErrors != nil && syntaxErrors.HasErrors() {
+	// 2. Handle syntax errors
+	if syntaxErrors.HasErrors() {
 		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))
-		err = fmt.Errorf("langspec parse failed with %d syntax errors", len(syntaxErrors.Errors))
+		return result, fmt.Errorf("langspec parse failed with %d syntax errors", len(syntaxErrors.Errors))
 	}
 
-	if !syntaxErrors.HasErrors() {
-		validationEntries, validationErr := validation.LSTValidatorRun(
-			compiler.validatorConfig,
-			rootNode,
-			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
-				return stage.Order < 4
-			},
-			(*semantics.GrammarValidationState)(nil),
-		)
-		if validationErr != nil {
-			err = validationErr
-		}
+	// 3. First Validation Pass
+	validationEntries, validationErr := validation.LSTValidatorRun(
+		compiler.validatorConfig,
+		rootNode,
+		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
+			return stage.Order < 4
+		},
+		(*semantics.GrammarValidationState)(nil),
+	)
 
-		result.ValidationEntries = validationEntries
+	result.ValidationEntries = validationEntries
 
-		if validationEntries != nil && len(validationEntries.Results) > 0 {
-			renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries, lexarch.ColumnAdvanceRune(4))
+	if validationErr != nil {
+		return result, validationErr
+	}
 
-			errorAmount := 0
-			for _, stage := range validationEntries.Results {
-				for _, entry := range stage.Entries {
-					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
-						errorAmount++
-					}
-				}
-			}
+	if hasCriticalValidationErrors(validationEntries) {
+		renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries, lexarch.ColumnAdvanceRune(4))
+		return result, fmt.Errorf("parsing failed with validation errors")
+	}
 
-			if errorAmount > 0 {
-				err = fmt.Errorf("parsing failed with %d validation errors", errorAmount)
+	// 4. Compilation & Post-Validation
+	compiled := compileTree(compiler, result.RootNode)
+
+	valState := &semantics.GrammarValidationState{
+		Package:   &compiled.grammarPackage,
+		SourceMap: compiled.sourceMap,
+	}
+
+	postValidationEntries, postValidationErr := validation.LSTValidatorRun(
+		compiler.validatorConfig,
+		rootNode,
+		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
+			return stage.Order >= 4
+		},
+		valState,
+	)
+
+	if result.ValidationEntries == nil {
+		result.ValidationEntries = postValidationEntries
+	} else if postValidationEntries != nil {
+		result.ValidationEntries.Results = append(result.ValidationEntries.Results, postValidationEntries.Results...)
+	}
+
+	if postValidationErr != nil {
+		return result, postValidationErr
+	}
+
+	if hasCriticalValidationErrors(postValidationEntries) {
+		renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, lexarch.ColumnAdvanceRune(4))
+		return result, fmt.Errorf("compilation failed with grammar safety errors")
+	}
+
+	// 5. Finalize Result
+	result.LanguageName = compiled.dslName
+	result.LanguageVersion = compiled.dslVersion
+	result.CompiledLexerSpec = compiled.lexerSpec
+	result.CompiledParserSpec = compiled.parserSpec
+	result.CompiledGrammarPackage = compiled.grammarPackage
+	result.CompiledToolPragmas = compiled.toolPragmas
+	result.TargetLangspecVersion = compiled.targetLangspecVersion
+	result.EOFToken = compiled.eofToken
+	result.SourceMap = compiled.sourceMap
+
+	return result, nil
+}
+
+// Helper method to keep the main function clean
+func hasCriticalValidationErrors(entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) bool {
+	if entries == nil {
+		return false
+	}
+	for _, stage := range entries.Results {
+		for _, entry := range stage.Entries {
+			if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
+				return true
 			}
 		}
 	}
-
-	if err == nil {
-		compiled := compileTree(compiler, result.RootNode)
-
-		valState := &semantics.GrammarValidationState{
-			Package:   &compiled.grammarPackage,
-			SourceMap: compiled.sourceMap,
-		}
-
-		postValidationEntries, postValidationErr := validation.LSTValidatorRun(
-			compiler.validatorConfig,
-			rootNode,
-			func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
-				return stage.Order >= 4
-			},
-			valState,
-		)
-
-		if postValidationErr != nil {
-			err = postValidationErr
-		}
-
-		if result.ValidationEntries == nil {
-			result.ValidationEntries = postValidationEntries
-		} else if postValidationEntries != nil {
-			result.ValidationEntries.Results = append(result.ValidationEntries.Results, postValidationEntries.Results...)
-		}
-
-		if postValidationEntries != nil && len(postValidationEntries.Results) > 0 {
-			renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, lexarch.ColumnAdvanceRune(4))
-
-			errorAmount := 0
-			for _, stage := range postValidationEntries.Results {
-				for _, entry := range stage.Entries {
-					if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
-						errorAmount++
-					}
-				}
-			}
-
-			if errorAmount > 0 {
-				err = fmt.Errorf("compilation failed with %d grammar safety errors", errorAmount)
-			}
-		}
-
-		if err == nil {
-			result.LanguageName = compiled.dslName
-			result.LanguageVersion = compiled.dslVersion
-			result.CompiledLexerSpec = compiled.lexerSpec
-			result.CompiledParserSpec = compiled.parserSpec
-			result.CompiledGrammarPackage = compiled.grammarPackage
-			result.CompiledToolPragmas = compiled.toolPragmas
-			result.TargetLangspecVersion = compiled.targetLangspecVersion
-			result.EOFToken = compiled.eofToken
-			result.SourceMap = compiled.sourceMap
-		}
-	}
-
-	return result, err
+	return false
 }
 
 /* CompilerDebugConfig selects optional debug output for LangSpecCompilerDebugResult. */
