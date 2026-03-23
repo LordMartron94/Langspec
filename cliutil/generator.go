@@ -8,12 +8,9 @@ import (
 	"memforge"
 )
 
-/* Generator owns the scratch memforge allocator and allocation function used by LangSpec bootstrap
-codegen entry points. Typical pattern:
-
-	g := cliutil.NewGenerator("lang.lspec")
-	defer g.Close()
-	_ = g.RunGoBindingsOnly()
+/*
+Generator owns the scratch memforge allocator and allocation function used by LangSpec bootstrap
+codegen entry points.
 */
 type Generator struct {
 	specPath string
@@ -22,7 +19,9 @@ type Generator struct {
 	closed   bool
 }
 
-/* NewGenerator builds a dynamic linear allocator and binds it to specPath for subsequent Run* calls. */
+/*
+NewGenerator builds a dynamic linear allocator and binds it to specPath for subsequent Run* calls.
+*/
 func NewGenerator(specPath string) *Generator {
 	scratch := memforge.DynamicLinearAllocatorCreateFunction(uint64(memcore.KiloByte), func(currentCap, neededCap uint64) uint64 {
 		newSize := max(currentCap*2, neededCap)
@@ -62,15 +61,9 @@ func (g *Generator) Close() {
 	g.closed = true
 }
 
-/* RunGoBindingsOnly runs bootstrap.RunGoBindingsFromSpecFile with the default LangSpec diagnostic sink. */
-func (g *Generator) RunGoBindingsOnly() error {
-	sink := dsl.DefaultLangSpecDiagnosticSink()
-	return bootstrap.RunGoBindingsFromSpecFile(g.specPath, g.allocFn, bootstrap.WithDiagnosticSink(sink))
-}
-
-/* RunToolchains runs bootstrap.RunToolchainsFromSpecFile. If opts is empty, only WithDiagnosticSink(default)
-is applied (JSON Sublime or PRAGMA-only toolchains). Pass bootstrap.WithSublimeToolchain and other options
-from your language package for in-memory Sublime + overrides.
+/*
+RunToolchains executes the generation pipeline. Pass bootstrap.WithToolchainFilter
+to restrict execution to specific outputs (e.g., just "go_bindings").
 */
 func (g *Generator) RunToolchains(opts ...bootstrap.Option) error {
 	if len(opts) == 0 {
