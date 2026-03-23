@@ -3,7 +3,7 @@
 PRAGMA {
 	tool.sublime {
 		enable = true;
-		output-path = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax";
+		output-path = ["/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax", "libs/langspec/examples/lspec.sublime-syntax"];
 	}
 	
 	tool.go_bindings {
@@ -137,6 +137,16 @@ PARSE {
 	
 	DUMMY_CHOICE_FOR_PATTERNS -> transparent gr_DUMMY_CHOICE_FOR_PATTERNS {
 		DUMMY_LOCAL_VAR_FOR_PATTERNS | NodePatternDefName : TokIdentifier
+	};
+	
+	DUMMY_CHOICE_FOR_PRAGMA_VALUES -> transparent gr_DUMMY_CHOICE_FOR_PRAGMA_VALUES {
+		PRAGMA_VALUE
+		| NodePragmaValue : (
+			virtual TokIdentifier
+			| virtual TokStringLiteral
+			| virtual TokKWTrue
+			| virtual TokKWFalse
+		)
 	};
 	
 	DUMMY_CHOICE_NEST -> transparent gr_DUMMY_CHOICE_NEST {
@@ -518,12 +528,7 @@ PARSE {
 		NodePragmaKey : TokIdentifier
 		virtual TokEqualsOperator
 		(
-			NodePragmaValue : (
-				virtual TokIdentifier
-				| virtual TokStringLiteral
-				| virtual TokKWTrue
-				| virtual TokKWFalse
-			)
+			DUMMY_CHOICE_FOR_PRAGMA_VALUES
 		)
 		virtual TokSemicolon
 	};
@@ -544,6 +549,10 @@ PARSE {
 		nest TokBraceOpen TokBraceClose {
 			PRAGMA_BLOCK_LIST
 		}
+	};
+	
+	PRAGMA_VALUE -> NodePragmaValue {
+		STRING_ARRAY
 	};
 	
 	PRATT_CATEGORY -> transparent gr_PRATT_CATEGORY {
@@ -769,6 +778,28 @@ PARSE {
 	RULE_MODIFIER_SYNC -> NodeRuleModifierSync {
 		virtual TokKWSync
 		SYNC_BLOCK
+	};
+	
+	STRING_ARRAY -> NodeStringArray sync (TokBracketClose) {
+		nest TokBracketOpen TokBracketClose {
+			STRING_ARRAY_ELEMENT_LIST
+		}
+	};
+	
+	STRING_ARRAY_ELEMENT_LIST -> transparent gr_STRING_ARRAY_ELEMENT_LIST {
+		NodeStringLiteral : TokStringLiteral
+		STRING_ARRAY_ELEMENT_LIST_TAIL
+	};
+	
+	STRING_ARRAY_ELEMENT_LIST_TAIL -> transparent gr_STRING_ARRAY_ELEMENT_LIST_TAIL {
+		(
+			STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT
+		)*
+	};
+	
+	STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT -> transparent gr_STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT {
+		virtual TokComma
+		NodeStringLiteral : TokStringLiteral
 	};
 	
 	SYNC_BLOCK -> NodeSyncBlock sync (TokParenClose) {

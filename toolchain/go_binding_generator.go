@@ -54,8 +54,8 @@ func RunGoBindingsToolchain(compileResult *dsl.LangSpecCompileResult) error {
 			return fmt.Errorf("unexpected enabled setting value: '%s'", enabled)
 		}
 
-		outputPath := pragma.Settings[GoBindingsOutputPathKey]
-		packageName := pragma.Settings[GoBindingsPackageNameKey]
+		outputPath := pragma.Settings[GoBindingsOutputPathKey].(string)
+		packageName := pragma.Settings[GoBindingsPackageNameKey].(string)
 
 		if outputPath == "" {
 			return fmt.Errorf("go_bindings toolchain enabled but missing 'output-path'")

@@ -26,7 +26,7 @@ type CompilerRuleBuilder = rule.RuleBuilder[rune, string, string, string, string
 /* ToolPragma is one parsed PRAGMA toolchain line: tool name and key/value settings. */
 type ToolPragma struct {
 	ToolName string
-	Settings map[string]string
+	Settings map[string]any // Values will be string, bool, or []string
 }
 
 /* CompiledLangSpec is compileTree output: lexer/parser specs, lowered grammar, EOF token, and pragmas. */
@@ -175,58 +175,89 @@ func extractPragmas(rootNode *Node) []ToolPragma {
 
 	var out []ToolPragma
 	for _, block := range section.FindAllKind(dslspec.NodePragmaBlock) {
-		// 1. Step into the key wrapper first
-		keyNode := block.FindFirstKind(dslspec.NodePragmaBlockKey)
-		if keyNode == nil {
-			continue
+		if pragma, valid := extractSinglePragmaBlock(block); valid {
+			out = append(out, pragma)
 		}
-
-		// 2. Now extract the prefix from the key node
-		blockKeyPrefix := keyNode.FindFirstKind(dslspec.NodePragmaBlockKeyPrefix)
-		if blockKeyPrefix == nil {
-			continue
-		}
-
-		keyPrefix := dslspec.TrimmedIdentifierNodeContent(blockKeyPrefix)
-		if keyPrefix != "tool" {
-			continue
-		}
-
-		// 3. Extract the segments from the key node, not the whole block
-		segments := keyNode.FindAllKind(dslspec.NodePragmaBlockKeySegment)
-		if len(segments) != 1 {
-			panic(fmt.Errorf("tool pragma key must have exactly 1 segment, got=%d", len(segments)))
-		}
-		toolName := dslspec.TrimmedIdentifierNodeContent(segments[0])
-
-		settings := make(map[string]string)
-		settingNodes := block.FindAllKind(dslspec.NodePragmaConfiguration)
-		for _, config := range settingNodes {
-			settingKey := dslspec.TrimmedIdentifierNodeContent(config.FindFirstKind(dslspec.NodePragmaKey))
-			settingValueNode := config.FindFirstKind(dslspec.NodePragmaValue)
-
-			var settingValue string
-			settingValueToken := settingValueNode.Tokens()[0].Token
-			if settingValueToken == dslspec.TokStringLiteral {
-				settingValueRetrieved, exist := AttributeAs[string](settingValueNode, dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
-				if !exist {
-					panic("engine-error: setting value node does not have string")
-				}
-
-				settingValue = settingValueRetrieved
-			} else {
-				settingValue = dslspec.TrimmedIdentifierNodeContent(settingValueNode)
-			}
-
-			settings[settingKey] = settingValue
-		}
-
-		out = append(out, ToolPragma{
-			ToolName: toolName,
-			Settings: settings,
-		})
 	}
 	return out
+}
+
+func extractSinglePragmaBlock(block *Node) (ToolPragma, bool) {
+	keyNode := block.FindFirstKind(dslspec.NodePragmaBlockKey)
+	if keyNode == nil {
+		return ToolPragma{}, false
+	}
+
+	toolName, valid := extractToolName(keyNode)
+	if !valid {
+		return ToolPragma{}, false
+	}
+
+	settings := extractPragmaSettings(block)
+	return ToolPragma{
+		ToolName: toolName,
+		Settings: settings,
+	}, true
+}
+
+func extractToolName(keyNode *Node) (string, bool) {
+	prefixNode := keyNode.FindFirstKind(dslspec.NodePragmaBlockKeyPrefix)
+	if prefixNode == nil || dslspec.TrimmedIdentifierNodeContent(prefixNode) != "tool" {
+		return "", false
+	}
+
+	segments := keyNode.FindAllKind(dslspec.NodePragmaBlockKeySegment)
+	if len(segments) != 1 {
+		panic(fmt.Errorf("tool pragma key must have exactly 1 segment, got=%d", len(segments)))
+	}
+
+	return dslspec.TrimmedIdentifierNodeContent(segments[0]), true
+}
+
+func extractPragmaSettings(block *Node) map[string]any {
+	settings := make(map[string]any)
+	for _, config := range block.FindAllKind(dslspec.NodePragmaConfiguration) {
+		key := dslspec.TrimmedIdentifierNodeContent(config.FindFirstKind(dslspec.NodePragmaKey))
+		valueNode := config.FindFirstKind(dslspec.NodePragmaValue)
+
+		settings[key] = extractPragmaValue(valueNode)
+	}
+	return settings
+}
+
+func extractPragmaValue(valueNode *Node) any {
+	// 1. Check if the value wraps a string array
+	arrayNode := valueNode.FindFirstKind(dslspec.NodeStringArray)
+	if arrayNode != nil {
+		return extractStringArray(arrayNode)
+	}
+
+	// 2. Handle scalar string literals
+	token := valueNode.Tokens()[0].Token
+	if token == dslspec.TokStringLiteral {
+		val, exist := AttributeAs[string](valueNode, dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
+		if !exist {
+			panic("engine-error: setting value node does not have string attribute")
+		}
+		return val
+	}
+
+	// 3. Fallback for Identifiers (e.g., true, false, or raw unquoted values)
+	return dslspec.TrimmedIdentifierNodeContent(valueNode)
+}
+
+func extractStringArray(arrayNode *Node) []string {
+	var elements []string
+
+	for _, strNode := range arrayNode.FindAllKind(dslspec.NodeStringLiteral) {
+		val, exist := AttributeAs[string](strNode, dslspec.ATTRIBUTE_LITERAL_STRING_VALUE)
+		if !exist {
+			panic("engine-error: array element missing string attribute")
+		}
+		elements = append(elements, val)
+	}
+
+	return elements
 }
 
 func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {

@@ -222,13 +222,13 @@ func runToolchains(
 		}
 	}
 
-	if sublimePragma == nil || sublimePragma.Settings[toolchain.SublimeEnableKey] != "true" {
+	if sublimePragma == nil || sublimePragma.Settings[toolchain.SublimeEnableKey].(string) != "true" {
 		return nil
 	}
 
-	outputPath := sublimePragma.Settings[toolchain.SublimeOutputPathKey]
-	if outputPath == "" {
-		return fmt.Errorf("sublime toolchain enabled but missing 'output-path'")
+	outputPaths, err := toolchain.ExtractOutputPathsFromSublimePragma(*sublimePragma)
+	if err != nil {
+		return fmt.Errorf("could not extract output path: %w", err)
 	}
 
 	// Fulfill dependencies
@@ -242,11 +242,11 @@ func runToolchains(
 	}
 
 	// Run pure-memory generation
-	err := toolchain.RunSublimeToolchainFromMemory(
+	err = toolchain.RunSublimeToolchainFromMemory(
 		compileResult,
 		*cfg.sublimeManifest,
 		overrideProducer,
-		outputPath,
+		outputPaths,
 		cfg.fileExtensions,
 		cfg.scopeExtension,
 	)

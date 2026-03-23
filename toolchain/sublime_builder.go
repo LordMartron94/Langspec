@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"foundation/bytes"
 	"foundation/hash"
@@ -41,7 +42,7 @@ type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerSta
 	IRConfig       *editor.EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, SublimeContext]
 	FileExtensions []string
 	BaseScope      string
-	OutputPath     string
+	OutputPaths    []string
 	ScopeSuffix    string
 }
 
@@ -76,9 +77,8 @@ func RunSublimeToolchain(
 			continue
 		}
 
-		configPath := pragma.Settings[SublimeConfigurationPathKey]
-		outputPath := pragma.Settings[SublimeOutputPathKey]
-		enabled := pragma.Settings[SublimeEnableKey]
+		configPath := pragma.Settings[SublimeConfigurationPathKey].(string)
+		enabled := pragma.Settings[SublimeEnableKey].(string)
 
 		if enabled == "false" {
 			return nil
@@ -92,16 +92,36 @@ func RunSublimeToolchain(
 			return err
 		}
 
+		outputPaths, err := ExtractOutputPathsFromSublimePragma(pragma)
+		if err != nil {
+			return err
+		}
+
 		return executeSublimeToolchain(
 			compileResult,
 			sublimeCfg.Manifest,
 			overrideProducer,
-			outputPath,
+			outputPaths,
 			sublimeCfg.FileExtensions,
 			sublimeCfg.ScopeExtension,
 		)
 	}
 	return nil
+}
+
+func ExtractOutputPathsFromSublimePragma(pragma dsl.ToolPragma) ([]string, error) {
+	outputPathValue := pragma.Settings[SublimeOutputPathKey]
+	outputPaths := []string{}
+
+	if path, cnvOk := outputPathValue.(string); cnvOk {
+		outputPaths = append(outputPaths, path)
+	} else if pathArray, cnvOk := outputPathValue.([]string); cnvOk {
+		outputPaths = pathArray
+	} else {
+		return nil, fmt.Errorf("engine-error: output paths neither single value nor array")
+	}
+
+	return outputPaths, nil
 }
 
 /*
@@ -127,7 +147,7 @@ func RunSublimeToolchainFromMemory(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
 	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
-	outputPath string,
+	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
 ) error {
@@ -135,7 +155,7 @@ func RunSublimeToolchainFromMemory(
 		compileResult,
 		manifest,
 		overrideProducer,
-		outputPath,
+		outputPaths,
 		fileExtensions,
 		scopeExtension,
 	)
@@ -150,7 +170,7 @@ func executeSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
 	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
-	outputPath string,
+	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
 ) error {
@@ -182,7 +202,7 @@ func executeSublimeToolchain(
 		IRConfig:       irConfig,
 		FileExtensions: fileExtensions,
 		BaseScope:      fmt.Sprintf("source%s", scopeExtension),
-		OutputPath:     outputPath,
+		OutputPaths:    outputPaths,
 		ScopeSuffix:    scopeExtension,
 	}
 
@@ -212,21 +232,30 @@ func RunSublimeGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerSta
 		cfg.IRConfig,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create editor IR: %w", err)
 	}
 
-	return sublime.GenerateSyntaxFile(
-		editorIR,
-		cfg.FileExtensions,
-		cfg.BaseScope,
-		cfg.OutputPath,
-		sublime.ExtractionConfig[SublimeContext]{
-			ExtractScope: func(ctx SublimeContext) string {
-				return applyScopeSuffix(ctx.Scope, cfg.ScopeSuffix)
+	var errs []error
+
+	for _, outputPath := range cfg.OutputPaths {
+		genErr := sublime.GenerateSyntaxFile(
+			editorIR,
+			cfg.FileExtensions,
+			cfg.BaseScope,
+			outputPath,
+			sublime.ExtractionConfig[SublimeContext]{
+				ExtractScope: func(ctx SublimeContext) string {
+					return applyScopeSuffix(ctx.Scope, cfg.ScopeSuffix)
+				},
+				ExtractMetaScope: func(ctx SublimeContext) string {
+					return applyScopeSuffix(ctx.MetaScope, cfg.ScopeSuffix)
+				},
 			},
-			ExtractMetaScope: func(ctx SublimeContext) string {
-				return applyScopeSuffix(ctx.MetaScope, cfg.ScopeSuffix)
-			},
-		},
-	)
+		)
+		if genErr != nil {
+			errs = append(errs, fmt.Errorf("output path %s: %w", outputPath, genErr))
+		}
+	}
+
+	return errors.Join(errs...)
 }

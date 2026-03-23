@@ -53,7 +53,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		IRConfig:       irConfig,
 		FileExtensions: []string{".lspec"},
 		BaseScope:      "source.lspec",
-		OutputPath:     syntaxFile,
+		OutputPaths:    []string{syntaxFile},
 		ScopeSuffix:    ".lspec",
 	}
 

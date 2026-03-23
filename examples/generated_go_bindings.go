@@ -150,6 +150,7 @@ const (
 	NodeRepetitionMin Node = "NodeRepetitionMin"
 	NodeRuleModifierSync Node = "NodeRuleModifierSync"
 	NodeRuleModifierTransparent Node = "NodeRuleModifierTransparent"
+	NodeStringArray Node = "NodeStringArray"
 	NodeStringLiteral Node = "NodeStringLiteral"
 	NodeSyncBlock Node = "NodeSyncBlock"
 	NodeSyncToken Node = "NodeSyncToken"

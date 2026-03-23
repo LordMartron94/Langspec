@@ -120,6 +120,8 @@ const (
 	NodePragmaKey
 	NodePragmaValue
 
+	NodeStringArray
+
 	// Meta
 	NodeMetaSection
 	NodeMetaKeyValuePair
@@ -478,9 +480,34 @@ func (b *dslGrammarBuilder) pragmaConfiguration() Rule {
 	return b.g.rb.Rule.RecoverSync(b.g.sequence(NodePragmaConfiguration, "").
 		expectToken(NodePragmaKey, TokIdentifier).
 		expectVirtualInRule(TokEqualsOperator).
-		rule(b.g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral, TokKWTrue, TokKWFalse)).
+		rule(b.g.rb.Rule.Choice(
+			"DUMMY CHOICE FOR PRAGMA VALUES",
+			b.g.rb.Rule.Wrap(LangSpecGrammarIDFromNode(NodePragmaValue), NodePragmaValue, b.stringArray()),
+			b.g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral, TokKWTrue, TokKWFalse)),
+		).
 		expectVirtualInRule(TokSemicolon).
 		build(), TokSemicolon)
+}
+
+func (b *dslGrammarBuilder) stringArray() Rule {
+	elementListRule := b.g.rb.Rule.TransparentSequence(
+		"STRING_ARRAY_ELEMENT_LIST",
+		b.g.rb.Token.Expect(LangSpecGrammarIDFromNode(NodeStringLiteral), NodeStringLiteral, TokStringLiteral),
+		b.g.rb.Rule.TransparentZeroOrMore(
+			"STRING_ARRAY_ELEMENT_LIST_TAIL",
+			b.g.rb.Rule.TransparentSequence(
+				"STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT",
+				b.g.rb.Token.ExpectVirtual("COMMA", TokComma),
+				b.g.rb.Token.Expect(LangSpecGrammarIDFromNode(NodeStringLiteral), NodeStringLiteral, TokStringLiteral),
+			),
+		),
+	)
+
+	return b.g.rb.Rule.Nest(
+		LangSpecGrammarIDFromNode(NodeStringArray), NodeStringArray,
+		TokBracketOpen, TokBracketClose,
+		elementListRule,
+	)
 }
 
 // ----------------------------------------------------------- PATTERN SECTION
