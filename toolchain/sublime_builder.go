@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"foundation/bytes"
 	"foundation/hash"
+	"foundation/system"
 	"langspec/dsl"
 	"langspec/editor"
 	"langspec/editor/sublime"
@@ -111,17 +112,26 @@ func RunSublimeToolchain(
 
 func ExtractOutputPathsFromSublimePragma(pragma dsl.ToolPragma) ([]string, error) {
 	outputPathValue := pragma.Settings[SublimeOutputPathKey]
-	outputPaths := []string{}
+	var rawPaths []string
 
 	if path, cnvOk := outputPathValue.(string); cnvOk {
-		outputPaths = append(outputPaths, path)
+		rawPaths = append(rawPaths, path)
 	} else if pathArray, cnvOk := outputPathValue.([]string); cnvOk {
-		outputPaths = pathArray
+		rawPaths = pathArray
 	} else {
 		return nil, fmt.Errorf("engine-error: output paths neither single value nor array")
 	}
 
-	return outputPaths, nil
+	var resolvedPaths []string
+	for _, rp := range rawPaths {
+		resolved, err := system.PathResolveWorkspace(rp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve path %s: %w", rp, err)
+		}
+		resolvedPaths = append(resolvedPaths, resolved)
+	}
+
+	return resolvedPaths, nil
 }
 
 /*

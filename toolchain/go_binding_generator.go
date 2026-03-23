@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"foundation/system"
 	"langspec/dsl"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syntaxa"
@@ -64,35 +62,14 @@ func RunGoBindingsToolchain(compileResult *dsl.LangSpecCompileResult) error {
 			return fmt.Errorf("go_bindings toolchain enabled but missing 'package-name'")
 		}
 
-		resolved, err := resolveGoBindingsOutputPath(outputPath)
+		resolved, err := system.PathResolveWorkspace(outputPath)
 		if err != nil {
 			return fmt.Errorf("go_bindings output-path: %w", err)
 		}
+
 		return executeGoBindingsToolchain(compileResult, resolved, packageName)
 	}
 	return nil
-}
-
-func resolveGoBindingsOutputPath(outputPath string) (string, error) {
-	outputPath = filepath.Clean(outputPath)
-	if filepath.IsAbs(outputPath) {
-		return outputPath, nil
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for d := cwd; ; d = filepath.Dir(d) {
-		candidate := filepath.Join(d, outputPath)
-		parent := filepath.Dir(candidate)
-		if fi, statErr := os.Stat(parent); statErr == nil && fi.IsDir() {
-			return filepath.Clean(candidate), nil
-		}
-		if d == filepath.Dir(d) {
-			break
-		}
-	}
-	return filepath.Join(cwd, outputPath), nil
 }
 
 func executeGoBindingsToolchain(
