@@ -363,21 +363,6 @@ func buildOverrideTransition[
 	}, true
 }
 
-func resolvePattern[TObservation cmp.Ordered, TToken comparable, TTokenRole comparable](
-	overridePattern *pattern.RegulaAST[TObservation],
-	token TToken,
-	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
-) (pattern.RegulaAST[TObservation], bool) {
-	if overridePattern != nil {
-		return *overridePattern, true
-	}
-	if rule, ok := tokenToRule[token]; ok {
-		return rule.Pattern, true
-	}
-	var empty pattern.RegulaAST[TObservation]
-	return empty, false
-}
-
 func resolveTargets[TObservation cmp.Ordered, TContext any](
 	ids []string,
 	stateByID map[string]*EditorState[TObservation, TContext],

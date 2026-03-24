@@ -190,12 +190,15 @@ func executeSublimeToolchain(
 		}
 	}
 
-	ctxProducer := BuildContextProducerFromManifest[rune, string, string, string, string](manifest)
+	ctxProducer := BuildContextProducerFromManifest[rune, string, string, string](manifest)
 
 	irConfig := editor.EditorIRConfigurationCreate(
 		hasher,
 		func(token string) uint64 {
 			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token}, 0x00))
+		},
+		func(node string) uint64 {
+			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{node}, 0x00))
 		},
 		ctxProducer,
 		overrideProducer,

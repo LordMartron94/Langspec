@@ -40,6 +40,9 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		func(token dsl.LangSpecLexerTokenType) uint64 {
 			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token.String()}, 0x00))
 		},
+		func(node dsl.LangSpecParserNodeKind) uint64 {
+			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{node.String()}, 0x00))
+		},
 		ctxProducer,
 		BuildEditorOverrideProducer(ruleset, ctxProducer),
 		func(left, right toolchain.SublimeContext) bool {

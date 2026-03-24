@@ -64,6 +64,7 @@ type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerS
 	hasher *hash.XXH3Hasher
 
 	tokenHasher      func(token TToken) uint64
+	nodeKindHasher   func(nodeKind TNodeKind) uint64
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
 	contextsEqual    func(left, right TContext) bool
@@ -77,6 +78,7 @@ All parameters must be non-nil when the configuration is used to build EditorIR.
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	hasher *hash.XXH3Hasher,
 	tokenHasher func(token TToken) uint64,
+	nodeKindHasher func(nodeKind TNodeKind) uint64,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	contextsEqual func(left, right TContext) bool,
@@ -84,6 +86,7 @@ func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, T
 	return &EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
 		hasher:           hasher,
 		tokenHasher:      tokenHasher,
+		nodeKindHasher:   nodeKindHasher,
 		contextProducer:  contextProducer,
 		overrideProducer: overrideProducer,
 		contextsEqual:    contextsEqual,
@@ -234,7 +237,7 @@ func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, T
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 ) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {
-	sg, err := lowering.BuildStateGraph(grammarPackage, config.tokenHasher, config.hasher)
+	sg, err := lowering.BuildStateGraph(grammarPackage, config.tokenHasher, config.nodeKindHasher, config.hasher)
 	if err != nil {
 		return nil, err
 	}
