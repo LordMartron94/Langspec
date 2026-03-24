@@ -1147,7 +1147,16 @@ func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName string) CompiledRule {
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
-	return ctx.builder.Rule.Reference(parseCtxLabel(ctx, "REF"), targetGrammarID)
+	refRule := ctx.builder.Rule.Reference(parseCtxLabel(ctx, "REF"), targetGrammarID)
+
+	if ctx.rootLevel {
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentSequence(ctx.grammarID, refRule)
+		}
+		return ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, refRule)
+	}
+
+	return refRule
 }
 
 // compileGroup compiles a parse group. Uses Unwrap so nested groups (e.g. ( ( expr ) )) yield the innermost expression.

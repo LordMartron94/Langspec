@@ -39,4 +39,4 @@
   - [ ] **Risk Mitigation:** Ensure that LST debug dumps and syntax errors map back to the *macro invocation line*, not the expanded internal AST, otherwise developers will have no idea why their grammar failed.
 
 ## [P3] Backlog
-* [ ] (Add future items here...)
+* [ ] Add toolchain for automatic .tmPreference comments for grammars
