@@ -34,6 +34,7 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 	dfaFormatter   *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]]
 
 	compilerMode lexarch.CompilerMode
+	scanConfig   lexarch.LexerScanConfig
 
 	eofToken TToken
 }
@@ -60,6 +61,7 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 		observationDomain:    observationDomain,
 		tokenFormatter:       tokenFormatter,
 		compilerMode:         lexarch.Glushkov,
+		scanConfig:           lexarch.LexerScanConfigDefault(),
 	}
 }
 
@@ -90,6 +92,22 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithCompilati
 	mode lexarch.CompilerMode,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	l.compilerMode = mode
+	return l
+}
+
+/* WithScanMode sets lexer token-scan mode for Peek/Consume behavior. */
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithScanMode(
+	mode lexarch.LexerScanMode,
+) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
+	l.scanConfig.Mode = mode
+	return l
+}
+
+/* WithScanConfig replaces lexer scan configuration including mode-specific tuning. */
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithScanConfig(
+	cfg lexarch.LexerScanConfig,
+) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
+	l.scanConfig = cfg
 	return l
 }
 
@@ -634,6 +652,7 @@ func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken
 			spec.toBytes,
 		),
 		spec.compilerMode,
+		spec.scanConfig,
 	)
 }
 

@@ -43,6 +43,7 @@ type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
 	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 	diagnosticSink            *LangSpecDiagnosticSink
+	lexerScanConfig           lexarch.LexerScanConfig
 }
 
 /*
@@ -59,6 +60,7 @@ func LangSpecCompilerConfigurationCreate(
 		scratchAllocationFunction: scratchAllocationFunction,
 		stageReporter:             stageReporter,
 		diagnosticSink:            nil,
+		lexerScanConfig:           lexarch.LexerScanConfigDefault(),
 	}
 }
 
@@ -68,6 +70,18 @@ When nil, no diagnostic output is produced. Use DefaultLangSpecDiagnosticSink() 
 */
 func (c *LangSpecCompilerConfiguration) WithDiagnosticSink(sink *LangSpecDiagnosticSink) *LangSpecCompilerConfiguration {
 	c.diagnosticSink = sink
+	return c
+}
+
+/* WithLexerScanMode sets lexarch scan mode for compiled language lexers. */
+func (c *LangSpecCompilerConfiguration) WithLexerScanMode(mode lexarch.LexerScanMode) *LangSpecCompilerConfiguration {
+	c.lexerScanConfig.Mode = mode
+	return c
+}
+
+/* WithLexerScanConfig sets full lexarch scan configuration for compiled language lexers. */
+func (c *LangSpecCompilerConfiguration) WithLexerScanConfig(cfg lexarch.LexerScanConfig) *LangSpecCompilerConfiguration {
+	c.lexerScanConfig = cfg
 	return c
 }
 

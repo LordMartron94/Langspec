@@ -101,6 +101,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		},
 	)
 	lexerSpec.WithCompilationMode(lexarch.Glushkov)
+	lexerSpec.WithScanConfig(comp.config.lexerScanConfig)
 
 	lspecCompiler := compiler{
 		factory: pattern.RegulaASTFactoryCreate(domain),

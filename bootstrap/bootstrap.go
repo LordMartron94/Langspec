@@ -21,6 +21,8 @@ type ParserCompiler struct {
 	specFile       string
 	allocFn        memarch.AllocationFn
 	diagnosticSink *dsl.LangSpecDiagnosticSink
+	lexerScanSet   bool
+	lexerScanCfg   lexarch.LexerScanConfig
 
 	// Pipeline filters
 	toolchainFilter []string
@@ -38,6 +40,14 @@ type Option func(*ParserCompiler)
 func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
 	return func(c *ParserCompiler) {
 		c.diagnosticSink = sink
+	}
+}
+
+/* WithLexerScanConfig sets lexer scan configuration for parser compilation. */
+func WithLexerScanConfig(cfg lexarch.LexerScanConfig) Option {
+	return func(c *ParserCompiler) {
+		c.lexerScanSet = true
+		c.lexerScanCfg = cfg
 	}
 }
 
@@ -143,6 +153,9 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	compilerConfig := dsl.LangSpecCompilerConfigurationCreate(cfg.allocFn, nil)
 	if cfg.diagnosticSink != nil {
 		compilerConfig.WithDiagnosticSink(cfg.diagnosticSink)
+	}
+	if cfg.lexerScanSet {
+		compilerConfig.WithLexerScanConfig(cfg.lexerScanCfg)
 	}
 
 	langSpecCompiler := dsl.LangSpecCompilerCreate(compilerConfig)
