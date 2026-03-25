@@ -11,6 +11,7 @@ import (
 	"memarch"
 	"memcore"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syntaxa"
 )
@@ -988,21 +989,48 @@ func newFileObservationProducer[TObservation cmp.Ordered](
 ) (lexarch.ObservationProducerFn[TObservation], error) {
 	const channelCapacity = 8
 
-	chunks := make(chan []TObservation, channelCapacity)
+	type observationChunk struct {
+		data   []TObservation
+		pooled bool
+	}
+
+	chunkPool := sync.Pool{
+		New: func() any {
+			return make([]TObservation, 0, bufSize)
+		},
+	}
+	chunks := make(chan observationChunk, channelCapacity)
 	errCh := make(chan error, 1)
 
 	var startStream func() error
+	acquireChunk := func(size int) []TObservation {
+		candidate := chunkPool.Get()
+		if candidate == nil {
+			return make([]TObservation, size)
+		}
+		buf := candidate.([]TObservation)
+		if cap(buf) < size {
+			return make([]TObservation, size)
+		}
+		return buf[:size]
+	}
+	releaseChunk := func(chunk []TObservation) {
+		if chunk == nil {
+			return
+		}
+		chunkPool.Put(chunk[:0])
+	}
 
 	switch any(*new(TObservation)).(type) {
 
 	case rune:
 		startStream = func() error {
 			return system.FileStreamRunes(sourceFile, bufSize, func(rs []rune) error {
-				out := make([]TObservation, len(rs))
+				out := acquireChunk(len(rs))
 				for i, r := range rs {
 					out[i] = TObservation(r)
 				}
-				chunks <- out
+				chunks <- observationChunk{data: out, pooled: true}
 				return nil
 			})
 		}
@@ -1010,11 +1038,11 @@ func newFileObservationProducer[TObservation cmp.Ordered](
 	case byte:
 		startStream = func() error {
 			return system.FileStreamBytes(sourceFile, bufSize, func(bs []byte) error {
-				out := make([]TObservation, len(bs))
+				out := acquireChunk(len(bs))
 				for i := range bs {
 					out[i] = TObservation(bs[i])
 				}
-				chunks <- out
+				chunks <- observationChunk{data: out, pooled: true}
 				return nil
 			})
 		}
@@ -1032,9 +1060,9 @@ func newFileObservationProducer[TObservation cmp.Ordered](
 				bufSize,
 				mapFn,
 				func(chunk []TObservation) error {
-					out := make([]TObservation, len(chunk))
+					out := acquireChunk(len(chunk))
 					copy(out, chunk)
-					chunks <- out
+					chunks <- observationChunk{data: out, pooled: true}
 					return nil
 				},
 			)
@@ -1044,6 +1072,8 @@ func newFileObservationProducer[TObservation cmp.Ordered](
 	started := false
 
 	var pending []TObservation
+	var pendingOwned []TObservation
+	pendingPooled := false
 
 	return func(dst []TObservation) (n int, done bool, err error) {
 
@@ -1060,16 +1090,28 @@ func newFileObservationProducer[TObservation cmp.Ordered](
 			n = min(len(dst), len(pending))
 			copy(dst, pending[:n])
 			pending = pending[n:]
+			if len(pending) == 0 && pendingPooled {
+				releaseChunk(pendingOwned)
+				pendingOwned = nil
+				pendingPooled = false
+			}
 			return n, false, nil
 		}
 
 		next, ok := <-chunks
 		if ok {
-			pending = next
+			pending = next.data
+			pendingOwned = next.data
+			pendingPooled = next.pooled
 
 			n = min(len(dst), len(pending))
 			copy(dst, pending[:n])
 			pending = pending[n:]
+			if len(pending) == 0 && pendingPooled {
+				releaseChunk(pendingOwned)
+				pendingOwned = nil
+				pendingPooled = false
+			}
 			return n, false, nil
 		}
 
