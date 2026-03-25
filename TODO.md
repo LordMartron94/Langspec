@@ -1,42 +1,49 @@
 # Developer TODO & Architectural Scratchpad
 
-> **WARNING FOR USERS:**
-> Close this file. This is an internal developer scratchpad, not public documentation. It represents raw thoughts, planned refactors, and incomplete architectural shifts. It is guaranteed to be out of sync with the main branch. Relying on anything written here will break your implementation.
+> **WARNING:** Internal developer scratchpad. Not public documentation. Guaranteed to be out of sync. Relying on this will break your implementation.
 
 ## Priority System
-* **[P0] Critical Path:** The engine is actively lying or failing. Blocks fundamental usage. Fix immediately.
-* **[P1] Strategic Architecture:** Core features required for LangSpec to mature into a production-grade ecosystem.
-* **[P2] Ergonomics & QoL:** Boilerplate reduction and tooling. Do not touch until P0 and P1 are stable.
-* **[P3] Backlog/Research:** Ideas that sound good but need strict scope-checking to avoid bloat.
+* **[P0] Critical Path:** The engine is failing or lying. Blocks basic usage.
+* **[P1] Strategic Architecture:** Core features needed for production-grade viability.
+* **[P2] DSL Ergonomics & QoL:** Eliminating boilerplate and friction.
+* **[P3] Backlog/Research:** Unscoped ideas. 
 
 ---
 
-## [P0] Disambiguation & Complex Lookahead Logic
-* **The Problem:** The current `predict` modifier is a shallow hack. It applies fixed-offset checks that immediately break when optional prefixes (like `(export | private)?`) shift the token stream. 
-* **The Goal:** Define a robust resolution for LL(1) FIRST-set collisions that doesn't rely on fragile, hardcoded integers.
-* **Action Items:**
-  - [ ] **Decision:** Do we formally build LL(k) / boolean lookahead logic into `autarch/pattern` (State-space explosion risk), OR do we strictly enforce LL(1) left-factoring in the DSL?
-  - [ ] If keeping `predict`, upgrade the syntax to support condition blocks instead of raw offsets, e.g., `predict { Peek(1) == TokTheme }`.
-## [P0] Clarify or Extend behavior for nesting logic.
-- **The Problem:** currently it is unclear whether the nest automatically syncs/recovers on its closing token or not. Make this clear.
+## [P0] Critical Path
+* **Disambiguation & Complex Lookahead (`predict`)**
+  * *Status:* Current fixed-offset `predict` is a fragile hack that breaks on optional prefixes.
+  * *Action:* Decide between LL(k)/boolean lookahead in `autarch/pattern` OR strictly enforced LL(1) left-factoring.
+  * *Action:* If keeping `predict`, upgrade to condition blocks (e.g., `predict { Peek(1) == TokTheme }`).
+* **Nesting Recovery Semantics**
+  * *Status:* Unclear if `nest` automatically syncs/recovers on its closing token. 
+  * *Action:* Define and document hard recovery rules for nested boundaries.
 
+## [P1] Strategic Architecture
+* **Slotted Architecture Transition (Eliminate "Role-as-Kind" Bloat)**
+  * *Status:* The current grammar relies on single-child wrapper nodes (e.g., `NodeRGBRed`, `NodeAssignTarget`) to define structural meaning. This causes severe `NodeKind` enum bloat, deep tree allocations, and forces a constant "unwrapping" tax on the client.
+  * *Action:* Upgrade `syntaxa` rule combinators and `RuleResult` to natively populate and propagate slot assignments.
+  * *Action:* Introduce slot-binding syntax in LSpec (e.g., `condition: CONDITION_EXPR` or `@condition=CONDITION_EXPR`).
+  * *Action:* Rewrite the ruleforge grammar to emit flat, generic shapes (`NodeIntLiteral`, `NodeIdentifier`) that are mapped directly to parent slots, drastically reducing the AST depth.
+* **Grammar Composition (Imports/Exports)**
+  * *Status:* Monolithic `.lspec` files do not scale.
+  * *Action:* Design `import "path/to/grammar.lspec"` syntax.
+  * *Action:* Define namespace isolation (e.g., `Regex::Tok` vs global pollution).
+  * *Action:* Upgrade Stage 0 Validation to resolve cross-file references and block circular imports.
+  * *Action:* Ensure LST generation tracks file origin for cross-file error reporting.
 
-## [P1] Grammar Import and Export Mechanism
-* **The Problem:** Monolithic `.lspec` files do not scale. Real-world languages require modularity (e.g., importing a standard regex library or a base JSON grammar into a larger config language).
-* **The Goal:** Allow `.lspec` files to safely compose and inherit from one another.
-* **Action Items:**
-  - [ ] Design the `import "path/to/grammar.lspec"` syntax.
-  - [ ] Define namespace resolution. (If I import `Regex.lspec`, do its tokens prefix with `Regex::` or pollute the global scope?)
-  - [ ] Update Stage 0 Validation (Symbol Binding) to handle cross-file reference resolution and detect circular imports.
-  - [ ] Ensure the LST generation tracks which file a node originated from for accurate error reporting.
-
-## [P2] Templating / Macro System
-* **The Problem:** Writing repetitive structural rules (like delimited lists, binary expressions, or identical nest wrappers) inflates the `.lspec` file and invites copy-paste errors.
-* **The Goal:** Introduce a hygienic macro system to abstract boilerplate without destroying the readability of the grammar.
-* **Action Items:**
-  - [ ] Design macro definition syntax. E.g., `macro CommaSeparated(Rule) -> (Rule (TokComma Rule)*)?`
-  - [ ] Implement a macro expansion pass *before* AST validation (Stage 0).
-  - [ ] **Risk Mitigation:** Ensure that LST debug dumps and syntax errors map back to the *macro invocation line*, not the expanded internal AST, otherwise developers will have no idea why their grammar failed.
+## [P2] DSL Ergonomics & QoL (LSpec Redesign)
+* **Eliminate `transparent` Wrapper Boilerplate**
+  * *Status:* Users are forced to invent dummy grammar IDs (`gr_VSTMT`) just to apply `sync` modifiers to sequences.
+  * *Action:* Allow modifiers directly on anonymous inline blocks.
+  * *Constraint:* Strictly enforce modifier ownership to prevent ambiguity (e.g., block conflicting `sync` definitions from existing on both a reference and its referee).
+* **Shorthand for `nest` Boundaries**
+  * *Status:* `nest TokBraceOpen TokBraceClose` is too verbose.
+  * *Action:* Introduce global token pairs or shorthand syntax.
+* **Macro System**
+  * *Status:* Repetitive structural rules (delimited lists, binary expressions) inflate files.
+  * *Action:* Design hygienic macro syntax (e.g., `macro CommaSep(Rule) -> (Rule (TokComma Rule)*)?`).
+  * *Action:* Map expansion errors back to the invocation line, not the internal AST.
 
 ## [P3] Backlog
-* [ ] Add toolchain for automatic .tmPreference comments for grammars
+* [ ] Toolchain for automatic `.tmPreference` comments generation.
