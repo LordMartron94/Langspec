@@ -121,7 +121,8 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	grammarPkg := new(syntaxa.GrammarPackage[rune, string, string, string, string])
 	*grammarPkg = grammarPackage
 
-	getAnalysis := func() *syntaxa.GrammarAnalysis[string] { return lowering.GetAnalysis(grammarPkg) }
+	analysis := lowering.GetAnalysis(grammarPkg)
+	getAnalysis := func() *syntaxa.GrammarAnalysis[string] { return analysis }
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,
 		ruleRegistry,
