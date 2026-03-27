@@ -361,7 +361,7 @@ func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
 		defName := lexemeRawContent(definition.FindFirstKind(dslspec.NodePatternDefName).Tokens()[0])
 
 		var exprNode *Node
-		for _, child := range definition.Children() {
+		for _, child := range definition.ChildrenUnsafe() {
 			kind := child.Kind()
 			if kind != dslspec.NodePatternDefName && kind != dslspec.NodeLocalVariable {
 				exprNode = child
@@ -425,7 +425,7 @@ func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.Regula
 }
 
 func concatToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
+	children := node.ChildrenUnsafe()
 
 	concatPattern := compilePatternExpression(ctx, children[0])
 
@@ -442,7 +442,7 @@ func concatToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune]
 }
 
 func alternationToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	children := node.Children()
+	children := node.ChildrenUnsafe()
 
 	alternationPattern := compilePatternExpression(ctx, children[0])
 
@@ -481,8 +481,9 @@ func optionalToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[run
 }
 
 func repetitionToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
-	childPattern := compilePatternExpression(ctx, node.Children()[0])
-	boundsNode := node.Children()[1]
+	children := node.ChildrenUnsafe()
+	childPattern := compilePatternExpression(ctx, children[0])
+	boundsNode := children[1]
 
 	minVal := 0
 	maxVal := -1 // Unbounded
@@ -533,7 +534,7 @@ func (c *compiler) extractNegationRanges(node *Node, out *[]pattern.CharRange[ru
 }
 
 func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]) {
-	for _, child := range node.Children() {
+	for _, child := range node.ChildrenUnsafe() {
 		item := child.Unwrap(dslspec.NodePatternClassItem)
 
 		switch item.Kind() {
@@ -542,7 +543,7 @@ func (c *compiler) extractClassRanges(node *Node, out *[]pattern.CharRange[rune]
 			*out = append(*out, c.factory.Range(lo, lo))
 
 		case dslspec.NodePatternClassItem:
-			children := item.Children()
+			children := item.ChildrenUnsafe()
 			if len(children) == 2 && children[1].Kind() == dslspec.NodePatternRange {
 
 				lo := c.extractCharLiteralValue(children[0])
@@ -587,7 +588,7 @@ func (c *compiler) extractGroupRanges(node *Node, out *[]pattern.CharRange[rune]
 }
 
 func (c *compiler) extractAlternationRanges(node *Node, out *[]pattern.CharRange[rune]) {
-	for _, child := range node.Children() {
+	for _, child := range node.ChildrenUnsafe() {
 		c.extractNegationRanges(child, out)
 	}
 }
@@ -604,7 +605,7 @@ func (c *compiler) extractCharRange(node *Node) pattern.CharRange[rune] {
 }
 
 func (c *compiler) extractPatternRange(node *Node) pattern.CharRange[rune] {
-	children := node.Children()
+	children := node.ChildrenUnsafe()
 	if len(children) != 2 {
 		panic(fmt.Sprintf("engine error: infix range node must have exactly 2 children (LHS, RHS), got %d", len(children)))
 	}
@@ -769,8 +770,9 @@ func buildParseRuleBodyMapForCompile(rules map[string]*Node) map[string]*Node {
 			continue
 		}
 		rootExpr := getParseRuleBodyRoot(bodyNode)
-		if rootExpr == nil && len(bodyNode.Children()) > 0 {
-			rootExpr = bodyNode.Children()[0]
+		bodyChildren := bodyNode.ChildrenUnsafe()
+		if rootExpr == nil && len(bodyChildren) > 0 {
+			rootExpr = bodyChildren[0]
 		}
 		if rootExpr != nil {
 			out[ruleName] = rootExpr
@@ -787,10 +789,11 @@ func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledR
 
 	rootExpr := getParseRuleBodyRoot(bodyNode)
 	if rootExpr == nil {
-		if len(bodyNode.Children()) == 0 {
+		bodyChildren := bodyNode.ChildrenUnsafe()
+		if len(bodyChildren) == 0 {
 			panic("compiler error: parse rule body has no children")
 		}
-		rootExpr = bodyNode.Children()[0]
+		rootExpr = bodyChildren[0]
 	}
 
 	compiledExpr := compileParseExpression(ctx, rootExpr)
@@ -804,7 +807,7 @@ func getParseRuleBodyRoot(body *Node) *Node {
 	if body == nil {
 		return nil
 	}
-	for _, ch := range body.Children() {
+	for _, ch := range body.ChildrenUnsafe() {
 		if ch == nil {
 			continue
 		}
@@ -903,7 +906,7 @@ func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
-	children := node.Children()
+	children := node.ChildrenUnsafe()
 	if len(children) != 2 {
 		panic("compiler error: predict modifier must have a lookahead list and a target expression")
 	}
@@ -1049,7 +1052,7 @@ func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileParseRepetition(ctx *parseCompileCtx, node *Node) CompiledRule {
-	children := node.Children()
+	children := node.ChildrenUnsafe()
 	if len(children) < 2 {
 		panic("compiler error: repetition node missing target or bounds")
 	}
@@ -1205,7 +1208,7 @@ func buildPrattConfig(
 ) rule.PrattConfig[rune, string, string, string, string] {
 	config := rule.PrattConfig[rune, string, string, string, string]{}
 
-	for _, actualCat := range bodyNode.Children() {
+	for _, actualCat := range bodyNode.ChildrenUnsafe() {
 		switch actualCat.Kind() {
 		case dslspec.NodePrattPrimary:
 			config.Primary = compilePrattPrimary(builder, grammarID, actualCat)
@@ -1254,7 +1257,7 @@ func compilePrattPrefixOps(
 	tokOps := make([]rule.PrattPrefixOp[string, string], 0)
 	ruleOps := make([]rule.PrattPrefixRuleOp[rune, string, string, string, string], 0)
 
-	for _, def := range bodyNode.Children() {
+	for _, def := range bodyNode.ChildrenUnsafe() {
 		target, rightBP := extractPrefixData(def, env)
 
 		if target.IsRule {
@@ -1287,7 +1290,7 @@ func compilePrattInfixOps(
 	tokOps := make([]rule.PrattInfixOp[string, string], 0)
 	ruleOps := make([]rule.PrattInfixRuleOp[rune, string, string, string, string], 0)
 
-	for _, def := range bodyNode.Children() {
+	for _, def := range bodyNode.ChildrenUnsafe() {
 		target, leftBP, rightBP := extractInfixData(def, env)
 
 		if target.IsRule {
@@ -1322,7 +1325,7 @@ func compilePrattPostfixOps(
 	tokOps := make([]rule.PrattPostfixOp[string, string], 0)
 	ruleOps := make([]rule.PrattPostfixRuleOp[rune, string, string, string, string], 0)
 
-	for _, def := range bodyNode.Children() {
+	for _, def := range bodyNode.ChildrenUnsafe() {
 		target, leftBP := extractPostfixData(def, env)
 
 		if target.IsRule {
