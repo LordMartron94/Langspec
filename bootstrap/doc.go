@@ -5,8 +5,9 @@
 //
 // Use CompileParserFromSpec(specFile, alloc, opts...) to compile the DSL and return
 // a LangParser. This does not run toolchains (no generated files). Options:
-// WithDiagnosticSink for human-readable compile diagnostics. WithSublimeToolchain is
-// not used by CompileParserFromSpec (ignored); use RunToolchainsFromSpecFile for that.
+// WithDiagnosticSink for human-readable compile diagnostics; WithNodePoolPrefill and
+// WithNodePoolGrowFn for Syntaxa LST node pool tuning (see langspec.LangParserConfiguration).
+// WithSublimeToolchain is not used by CompileParserFromSpec (ignored); use RunToolchainsFromSpecFile for that.
 //
 // # Codegen: toolchains
 //

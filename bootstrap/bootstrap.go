@@ -28,6 +28,10 @@ type ParserCompiler struct {
 	lexerPositionTracking dsl.LangSpecLexerPositionTracking
 	lexerRuneTabWidth     int
 
+	nodePoolPrefillSet bool
+	nodePoolPrefill    int
+	nodePoolGrowFn     func(currentCap, needed int) int
+
 	// Pipeline filters
 	toolchainFilter []string
 
@@ -84,6 +88,33 @@ func WithLexerPositionTrackingCompilerDefault() Option {
 		c.lexerPositionSet = true
 		c.lexerPositionTracking = dsl.LangSpecLexerPositionTrackingCompilerDefault
 		c.lexerRuneTabWidth = 0
+	}
+}
+
+/*
+WithNodePoolPrefill sets a fixed Syntaxa LST node pool prefill on the LangParser (see langspec.LangParserConfiguration.WithNodePoolPrefill).
+
+When unset, LangParser still derives a hint from source or file size when building the parse context.
+*/
+func WithNodePoolPrefill(hint int) Option {
+	return func(c *ParserCompiler) {
+		if hint < 0 {
+			panic("langspec/bootstrap: WithNodePoolPrefill requires hint >= 0")
+		}
+		c.nodePoolPrefillSet = true
+		c.nodePoolPrefill = hint
+	}
+}
+
+/*
+WithNodePoolGrowFn sets syntaxa.SyntaxaParser.SetNodePoolGrowFn on the produced LangParser (nil = default).
+
+growFn(currentCap, needed) matches memforge.GrowthStrategy: cap(nodeFree) and minimum
+length after growth; return target capacity >= needed.
+*/
+func WithNodePoolGrowFn(growFn func(currentCap, needed int) int) Option {
+	return func(c *ParserCompiler) {
+		c.nodePoolGrowFn = growFn
 	}
 }
 
@@ -226,6 +257,12 @@ func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult)
 	)
 
 	parserConfig := langspec.LangParserConfigurationCreate(langSpec, cfg.allocFn)
+	if cfg.nodePoolPrefillSet {
+		parserConfig = parserConfig.WithNodePoolPrefill(cfg.nodePoolPrefill)
+	}
+	if cfg.nodePoolGrowFn != nil {
+		parserConfig = parserConfig.WithNodePoolGrowFn(cfg.nodePoolGrowFn)
+	}
 	return langspec.LangParserCreate(parserConfig)
 }
 

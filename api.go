@@ -10,6 +10,7 @@ import (
 	"lexarch"
 	"memarch"
 	"memcore"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -360,6 +361,13 @@ type LangParserConfiguration[
 
 	streaming StreamingConfig
 
+	// nodePoolPrefill is an optional override for syntaxa.SyntaxaParser.SetNodePoolPrefill.
+	// When zero, LangParser derives a hint from source length (sequential) or file size (streaming).
+	nodePoolPrefill int
+
+	// nodePoolGrowFn is an optional override for syntaxa.SyntaxaParser.SetNodePoolGrowFn (nil = syntaxa default batching).
+	nodePoolGrowFn func(currentCap, needed int) int
+
 	forceValidation bool
 }
 
@@ -393,6 +401,7 @@ func LangParserConfigurationCreate[
 		nfaToDFAPipelineMinTemp: 1 * memcore.KiloByte,
 		nfaToDFAPipelineMaxTemp: 1 * memcore.GigaByte,
 		streaming:               DefaultStreamingConfig(),
+		nodePoolPrefill:         0,
 		forceValidation:         false,
 	}
 }
@@ -562,6 +571,58 @@ func (c *LangParserConfiguration[
 	return c
 }
 
+/*
+WithNodePoolPrefill sets a fixed Syntaxa LST node pool prefill count on the parser before each parse.
+
+When hint is 0 (the default), LangParser computes a hint from the loaded source or file size.
+When hint is greater than zero, that value is used instead of the heuristic.
+*/
+func (c *LangParserConfiguration[
+	TObservation,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind,
+]) WithNodePoolPrefill(
+	hint int,
+) *LangParserConfiguration[
+	TObservation,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind,
+] {
+	if hint < 0 {
+		panic("WithNodePoolPrefill: hint must be >= 0")
+	}
+	c.nodePoolPrefill = hint
+	return c
+}
+
+/*
+WithNodePoolGrowFn sets a custom Syntaxa LST node pool growth policy (see syntaxa.SyntaxaParser.SetNodePoolGrowFn).
+
+Pass nil to use the default growth policy inside syntaxa.
+*/
+func (c *LangParserConfiguration[
+	TObservation,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind,
+]) WithNodePoolGrowFn(
+	growFn func(currentCap, needed int) int,
+) *LangParserConfiguration[
+	TObservation,
+	TToken,
+	TTokenRole,
+	TLexerState,
+	TNodeKind,
+] {
+	c.nodePoolGrowFn = growFn
+	return c
+}
+
 // ---------------------------------------------------------------- SESSION
 
 /*
@@ -705,6 +766,9 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 	)
 	parser.SetDefaultSkips(config.spec.Parser.defaultSkipRoles...)
 	parser.EnableTrace(true)
+	if config.nodePoolGrowFn != nil {
+		parser.SetNodePoolGrowFn(config.nodePoolGrowFn)
+	}
 
 	return &LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind]{
 		config: config,
@@ -926,6 +990,10 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 
 	lexingSession := getLexerSession(langParser, sourceInput)
 
+	langParser.parser.SetNodePoolPrefill(
+		nodePoolPrefillFromObservationCount(len(sourceInput), langParser.config.nodePoolPrefill),
+	)
+
 	parsingContext := syntaxa.BuildExecRuleContextFromLexerSession(
 		langParser.parser,
 		langParser.lexer,
@@ -1012,6 +1080,10 @@ func buildStreamingParsingContext[
 	}
 
 	lexingSession := getLexerStreamingSession(langParser, producer)
+
+	langParser.parser.SetNodePoolPrefill(
+		nodePoolPrefillFromObservationCount(sourceFileSizeBytesForPoolHint(sourceFile), langParser.config.nodePoolPrefill),
+	)
 
 	parsingContext := syntaxa.BuildExecRuleContextFromStreamingSession(
 		langParser.parser,
@@ -1222,6 +1294,36 @@ func newFileObservationProducer[TObservation cmp.Ordered](
 
 		return 0, true, nil
 	}, nil
+}
+
+func nodePoolPrefillFromObservationCount(observationCount int, override int) int {
+	if override > 0 {
+		return override
+	}
+
+	const minHint = 128
+	const maxHint = 262144
+
+	if observationCount <= 0 {
+		return minHint
+	}
+
+	h := observationCount / 16
+	if h < minHint {
+		return minHint
+	}
+	if h > maxHint {
+		return maxHint
+	}
+	return h
+}
+
+func sourceFileSizeBytesForPoolHint(path string) int {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return int(fi.Size())
 }
 
 func getSourceInput[TObservation cmp.Ordered](
