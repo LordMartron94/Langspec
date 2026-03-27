@@ -38,12 +38,34 @@ func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 
 // --------------------------------------------------------------- CONFIGURATION
 
+/*
+LangSpecLexerPositionTracking selects how LangSpecCompiler configures lexarch position tracking
+on compiled lexer specs.
+
+LangSpecLexerPositionTrackingCompilerDefault is the built-in choice (rune fast kernel, tab width 4).
+
+LangSpecLexerPositionTrackingGeneric uses generic newline/column callbacks (no fast kernel).
+
+LangSpecLexerPositionTrackingRuneFast uses the rune fast kernel; tab width is set via
+WithLexerPositionTrackingRuneFast.
+*/
+type LangSpecLexerPositionTracking int
+
+const (
+	LangSpecLexerPositionTrackingCompilerDefault LangSpecLexerPositionTracking = iota
+	LangSpecLexerPositionTrackingGeneric
+	LangSpecLexerPositionTrackingRuneFast
+)
+
 /* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
 	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 	diagnosticSink            *LangSpecDiagnosticSink
 	lexerScanConfig           lexarch.LexerScanConfig
+
+	lexerPositionTracking LangSpecLexerPositionTracking
+	lexerRuneTabWidth     int
 }
 
 /*
@@ -82,6 +104,38 @@ func (c *LangSpecCompilerConfiguration) WithLexerScanMode(mode lexarch.LexerScan
 /* WithLexerScanConfig sets full lexarch scan configuration for compiled language lexers. */
 func (c *LangSpecCompilerConfiguration) WithLexerScanConfig(cfg lexarch.LexerScanConfig) *LangSpecCompilerConfiguration {
 	c.lexerScanConfig = cfg
+	return c
+}
+
+/*
+WithLexerPositionTrackingGeneric selects generic lexarch position tracking for compiled lexer specs
+(no rune/byte fast kernel).
+*/
+func (c *LangSpecCompilerConfiguration) WithLexerPositionTrackingGeneric() *LangSpecCompilerConfiguration {
+	c.lexerPositionTracking = LangSpecLexerPositionTrackingGeneric
+	return c
+}
+
+/*
+WithLexerPositionTrackingRuneFast selects the rune fast position kernel with the given tab width.
+tabWidth must be greater than zero.
+*/
+func (c *LangSpecCompilerConfiguration) WithLexerPositionTrackingRuneFast(tabWidth int) *LangSpecCompilerConfiguration {
+	if tabWidth <= 0 {
+		panic("langspec/dsl: WithLexerPositionTrackingRuneFast requires tabWidth > 0")
+	}
+	c.lexerPositionTracking = LangSpecLexerPositionTrackingRuneFast
+	c.lexerRuneTabWidth = tabWidth
+	return c
+}
+
+/*
+WithLexerPositionTrackingCompilerDefault restores the compiler built-in position tracking
+(rune fast kernel, tab width 4).
+*/
+func (c *LangSpecCompilerConfiguration) WithLexerPositionTrackingCompilerDefault() *LangSpecCompilerConfiguration {
+	c.lexerPositionTracking = LangSpecLexerPositionTrackingCompilerDefault
+	c.lexerRuneTabWidth = 0
 	return c
 }
 

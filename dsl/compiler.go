@@ -102,6 +102,14 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	)
 	lexerSpec.WithCompilationMode(lexarch.Glushkov)
 	lexerSpec.WithScanConfig(comp.config.lexerScanConfig)
+	switch comp.config.lexerPositionTracking {
+	case LangSpecLexerPositionTrackingGeneric:
+		// LexerSpecCreate leaves generic position mode.
+	case LangSpecLexerPositionTrackingRuneFast:
+		lexerSpec.WithRunePositionTrackingFast(comp.config.lexerRuneTabWidth)
+	default:
+		lexerSpec.WithRunePositionTrackingFast(4)
+	}
 
 	lspecCompiler := compiler{
 		factory: pattern.RegulaASTFactoryCreate(domain),

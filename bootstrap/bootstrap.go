@@ -24,6 +24,10 @@ type ParserCompiler struct {
 	lexerScanSet   bool
 	lexerScanCfg   lexarch.LexerScanConfig
 
+	lexerPositionSet      bool
+	lexerPositionTracking dsl.LangSpecLexerPositionTracking
+	lexerRuneTabWidth     int
+
 	// Pipeline filters
 	toolchainFilter []string
 
@@ -48,6 +52,38 @@ func WithLexerScanConfig(cfg lexarch.LexerScanConfig) Option {
 	return func(c *ParserCompiler) {
 		c.lexerScanSet = true
 		c.lexerScanCfg = cfg
+	}
+}
+
+/* WithLexerPositionTrackingGeneric sets generic lexarch position tracking for compiled lexer specs. */
+func WithLexerPositionTrackingGeneric() Option {
+	return func(c *ParserCompiler) {
+		c.lexerPositionSet = true
+		c.lexerPositionTracking = dsl.LangSpecLexerPositionTrackingGeneric
+	}
+}
+
+/*
+WithLexerPositionTrackingRuneFast sets the rune fast position kernel with the given tab width.
+tabWidth must be greater than zero.
+*/
+func WithLexerPositionTrackingRuneFast(tabWidth int) Option {
+	return func(c *ParserCompiler) {
+		if tabWidth <= 0 {
+			panic("langspec/bootstrap: WithLexerPositionTrackingRuneFast requires tabWidth > 0")
+		}
+		c.lexerPositionSet = true
+		c.lexerPositionTracking = dsl.LangSpecLexerPositionTrackingRuneFast
+		c.lexerRuneTabWidth = tabWidth
+	}
+}
+
+/* WithLexerPositionTrackingCompilerDefault restores the LangSpec compiler default (rune fast, tab 4). */
+func WithLexerPositionTrackingCompilerDefault() Option {
+	return func(c *ParserCompiler) {
+		c.lexerPositionSet = true
+		c.lexerPositionTracking = dsl.LangSpecLexerPositionTrackingCompilerDefault
+		c.lexerRuneTabWidth = 0
 	}
 }
 
@@ -156,6 +192,16 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	}
 	if cfg.lexerScanSet {
 		compilerConfig.WithLexerScanConfig(cfg.lexerScanCfg)
+	}
+	if cfg.lexerPositionSet {
+		switch cfg.lexerPositionTracking {
+		case dsl.LangSpecLexerPositionTrackingGeneric:
+			compilerConfig.WithLexerPositionTrackingGeneric()
+		case dsl.LangSpecLexerPositionTrackingRuneFast:
+			compilerConfig.WithLexerPositionTrackingRuneFast(cfg.lexerRuneTabWidth)
+		case dsl.LangSpecLexerPositionTrackingCompilerDefault:
+			compilerConfig.WithLexerPositionTrackingCompilerDefault()
+		}
 	}
 
 	langSpecCompiler := dsl.LangSpecCompilerCreate(compilerConfig)

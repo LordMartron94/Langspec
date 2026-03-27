@@ -36,9 +36,19 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 
 	compilerMode lexarch.CompilerMode
 	scanConfig   lexarch.LexerScanConfig
+	positionMode lexerSpecPositionMode
+	runeTabWidth int
 
 	eofToken TToken
 }
+
+type lexerSpecPositionMode int
+
+const (
+	lexerSpecPositionModeGeneric lexerSpecPositionMode = iota + 1
+	lexerSpecPositionModeRuneFast
+	lexerSpecPositionModeByteFast
+)
 
 /* LexerSpecCreate constructs a lexer specification. */
 func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable](
@@ -63,6 +73,7 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 		tokenFormatter:       tokenFormatter,
 		compilerMode:         lexarch.Glushkov,
 		scanConfig:           lexarch.LexerScanConfigDefault(),
+		positionMode:         lexerSpecPositionModeGeneric,
 	}
 }
 
@@ -109,6 +120,23 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithScanConfi
 	cfg lexarch.LexerScanConfig,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	l.scanConfig = cfg
+	return l
+}
+
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRunePositionTrackingFast(
+	tabWidth int,
+) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
+	if tabWidth <= 0 {
+		panic("tabWidth must be > 0")
+	}
+	l.positionMode = lexerSpecPositionModeRuneFast
+	l.runeTabWidth = tabWidth
+	return l
+}
+
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithBytePositionTrackingFast() *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
+	l.positionMode = lexerSpecPositionModeByteFast
+	l.runeTabWidth = 0
 	return l
 }
 
@@ -913,14 +941,48 @@ func getLexerSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, 
 	sourceInput []TObservation,
 ) *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole] {
 	if langParser.lexingSessionCache == nil {
-		session := lexarch.LexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
-			langParser.config.spec.Lexer.initialState,
-			sourceInput,
-			langParser.config.spec.Lexer.newlineDetect,
-			langParser.config.spec.Lexer.columnAdvanceFn,
-		)
-		langParser.lexingSessionCache = session
-		return session
+		switch langParser.config.spec.Lexer.positionMode {
+		case lexerSpecPositionModeRuneFast:
+			inputRunes, ok := any(sourceInput).([]rune)
+			if !ok {
+				panic("WithRunePositionTrackingFast requires rune observations")
+			}
+			sessionRunes := lexarch.LexerSessionCreateRuneFast[TLexerState, TToken, TTokenRole](
+				langParser.config.spec.Lexer.initialState,
+				inputRunes,
+				langParser.config.spec.Lexer.runeTabWidth,
+			)
+			session, ok := any(sessionRunes).(*lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole])
+			if !ok {
+				panic("rune fast session type mismatch")
+			}
+			langParser.lexingSessionCache = session
+			return session
+		case lexerSpecPositionModeByteFast:
+			inputBytes, ok := any(sourceInput).([]byte)
+			if !ok {
+				panic("WithBytePositionTrackingFast requires byte observations")
+			}
+			sessionBytes := lexarch.LexerSessionCreateByteFast[TLexerState, TToken, TTokenRole](
+				langParser.config.spec.Lexer.initialState,
+				inputBytes,
+			)
+			session, ok := any(sessionBytes).(*lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole])
+			if !ok {
+				panic("byte fast session type mismatch")
+			}
+			langParser.lexingSessionCache = session
+			return session
+		default:
+			session := lexarch.LexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
+				langParser.config.spec.Lexer.initialState,
+				sourceInput,
+				langParser.config.spec.Lexer.newlineDetect,
+				langParser.config.spec.Lexer.columnAdvanceFn,
+			)
+			langParser.lexingSessionCache = session
+			return session
+		}
 	}
 
 	langParser.lexingSessionCache.Reset(sourceInput, langParser.config.spec.Lexer.initialState)
@@ -966,16 +1028,54 @@ func getLexerStreamingSession[TObservation cmp.Ordered, TLexerState, TToken, TTo
 	producer lexarch.ObservationProducerFn[TObservation],
 ) *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole] {
 	if langParser.lexingStreamingSessionCache == nil {
-		session := lexarch.StreamingLexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
-			langParser.config.spec.Lexer.initialState,
-			producer,
-			langParser.config.spec.Lexer.newlineDetect,
-			langParser.config.spec.Lexer.columnAdvanceFn,
-			langParser.config.streaming.ReadChunkSize,
-			langParser.config.streaming.MaxBuffered,
-		)
-		langParser.lexingStreamingSessionCache = session
-		return session
+		switch langParser.config.spec.Lexer.positionMode {
+		case lexerSpecPositionModeRuneFast:
+			producerRunes, ok := any(producer).(lexarch.ObservationProducerFn[rune])
+			if !ok {
+				panic("WithRunePositionTrackingFast requires rune observations")
+			}
+			sessionRunes := lexarch.StreamingLexerSessionCreateRuneFast[TLexerState, TToken, TTokenRole](
+				langParser.config.spec.Lexer.initialState,
+				producerRunes,
+				langParser.config.streaming.ReadChunkSize,
+				langParser.config.streaming.MaxBuffered,
+				langParser.config.spec.Lexer.runeTabWidth,
+			)
+			session, ok := any(sessionRunes).(*lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole])
+			if !ok {
+				panic("rune fast streaming session type mismatch")
+			}
+			langParser.lexingStreamingSessionCache = session
+			return session
+		case lexerSpecPositionModeByteFast:
+			producerBytes, ok := any(producer).(lexarch.ObservationProducerFn[byte])
+			if !ok {
+				panic("WithBytePositionTrackingFast requires byte observations")
+			}
+			sessionBytes := lexarch.StreamingLexerSessionCreateByteFast[TLexerState, TToken, TTokenRole](
+				langParser.config.spec.Lexer.initialState,
+				producerBytes,
+				langParser.config.streaming.ReadChunkSize,
+				langParser.config.streaming.MaxBuffered,
+			)
+			session, ok := any(sessionBytes).(*lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole])
+			if !ok {
+				panic("byte fast streaming session type mismatch")
+			}
+			langParser.lexingStreamingSessionCache = session
+			return session
+		default:
+			session := lexarch.StreamingLexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
+				langParser.config.spec.Lexer.initialState,
+				producer,
+				langParser.config.spec.Lexer.newlineDetect,
+				langParser.config.spec.Lexer.columnAdvanceFn,
+				langParser.config.streaming.ReadChunkSize,
+				langParser.config.streaming.MaxBuffered,
+			)
+			langParser.lexingStreamingSessionCache = session
+			return session
+		}
 	}
 
 	langParser.lexingStreamingSessionCache.Reset(producer, langParser.config.spec.Lexer.initialState)
