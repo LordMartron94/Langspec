@@ -622,8 +622,8 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 	lexer  *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole]
 	parser *syntaxa.SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 
-	lexingSessionCache          *lexarch.LexerSession[TObservation, TLexerState, TToken]
-	lexingStreamingSessionCache *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken]
+	lexingSessionCache          *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole]
+	lexingStreamingSessionCache *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole]
 
 	destroyed atomic.Bool
 }
@@ -911,9 +911,9 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 func getLexerSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	sourceInput []TObservation,
-) *lexarch.LexerSession[TObservation, TLexerState, TToken] {
+) *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole] {
 	if langParser.lexingSessionCache == nil {
-		session := lexarch.LexerSessionCreate[TObservation, TLexerState, TToken](
+		session := lexarch.LexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
 			langParser.config.spec.Lexer.initialState,
 			sourceInput,
 			langParser.config.spec.Lexer.newlineDetect,
@@ -964,9 +964,9 @@ func buildStreamingParsingContext[
 func getLexerStreamingSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	producer lexarch.ObservationProducerFn[TObservation],
-) *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken] {
+) *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole] {
 	if langParser.lexingStreamingSessionCache == nil {
-		session := lexarch.StreamingLexerSessionCreate[TObservation, TLexerState, TToken](
+		session := lexarch.StreamingLexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
 			langParser.config.spec.Lexer.initialState,
 			producer,
 			langParser.config.spec.Lexer.newlineDetect,
