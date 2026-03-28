@@ -12,8 +12,9 @@ LexPretokenize covers ScanModePreTokenizeAll materialization (LexerSessionEnsure
 for other scan modes it is zero. ParseOnly is SyntaxaParserParseWithContext wall time after that.
 
 Stream holds raw peek/consume counts at the lexer boundary. RawLexemeStreamLen is len(preTokens)
-when pretokenized (including EOF lexeme). LexObservationSteps is copied from the lexer’s bound
-LexScanStats after parse, if any.
+for the full input, read immediately after LexerSessionEnsurePreTokenizedAll (before parse), so it
+is not affected by parser restore clearing or rebuilding the pretokenized cache. LexObservationSteps
+is copied from the lexer’s bound LexScanStats after parse, if any.
 */
 type LangParseStats struct {
 	LexPretokenize time.Duration

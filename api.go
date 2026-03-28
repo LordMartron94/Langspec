@@ -938,12 +938,18 @@ func LangParserParseFile[
 				return nil, nil, syntaxErrors, err2
 			}
 			parseStats.LexPretokenize = time.Since(lexStart)
+			n, ok := lexarch.LexerSessionPreTokenizedLexemeCount(sliceLexSession)
+			parseStats.RawLexemeStreamLen = n
+			parseStats.RawLexemeStreamOk = ok
 		} else if streamLexSession != nil {
 			lexStart := time.Now()
 			if err2 := lexarch.StreamingLexerSessionEnsurePreTokenizedAll(langParser.lexer, streamLexSession); err2 != nil {
 				return nil, nil, syntaxErrors, err2
 			}
 			parseStats.LexPretokenize = time.Since(lexStart)
+			n, ok := lexarch.StreamingLexerSessionPreTokenizedLexemeCount(streamLexSession)
+			parseStats.RawLexemeStreamLen = n
+			parseStats.RawLexemeStreamOk = ok
 		}
 	}
 
@@ -956,14 +962,8 @@ func LangParserParseFile[
 		parseStats.ParseOnly = time.Since(parseStart)
 		parseStats.LexObservationSteps = lexarch.LexerScanStatsObservationSteps(langParser.lexer)
 		if sliceLexSession != nil {
-			n, ok := lexarch.LexerSessionPreTokenizedLexemeCount(sliceLexSession)
-			parseStats.RawLexemeStreamLen = n
-			parseStats.RawLexemeStreamOk = ok
 			parseStats.FinalLexerNextTokenNumber = lexarch.LexerSessionNextTokenNumber(sliceLexSession)
 		} else if streamLexSession != nil {
-			n, ok := lexarch.StreamingLexerSessionPreTokenizedLexemeCount(streamLexSession)
-			parseStats.RawLexemeStreamLen = n
-			parseStats.RawLexemeStreamOk = ok
 			parseStats.FinalLexerNextTokenNumber = lexarch.StreamingLexerSessionNextTokenNumber(streamLexSession)
 		}
 	}
