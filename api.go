@@ -369,6 +369,10 @@ type LangParserConfiguration[
 	nodePoolGrowFn func(currentCap, needed int) int
 
 	forceValidation bool
+
+	// collectParseTrace enables syntaxa parse trace event collection (high allocation cost).
+	// When false, LangParserParseFile returns a nil trace on success.
+	collectParseTrace bool
 }
 
 /*
@@ -403,6 +407,7 @@ func LangParserConfigurationCreate[
 		streaming:               DefaultStreamingConfig(),
 		nodePoolPrefill:         0,
 		forceValidation:         false,
+		collectParseTrace:       false,
 	}
 }
 
@@ -413,6 +418,16 @@ func LangParserConfigurationCreate[
 /* WithForceValidation configures whether to force LST validation. */
 func (c *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithForceValidation(v bool) *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	c.forceValidation = v
+	return c
+}
+
+/*
+WithCollectParseTrace enables recording a full syntaxa parse trace for each parse.
+
+When false (default), parse traces are not collected and LangParserParseFile returns a nil trace on success, reducing allocations. Use LangParser.SetCollectParseTrace for per-parse toggling on a long-lived parser.
+*/
+func (c *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithCollectParseTrace(v bool) *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
+	c.collectParseTrace = v
 	return c
 }
 
@@ -765,7 +780,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		config.spec.Parser.getAnalysis,
 	)
 	parser.SetDefaultSkips(config.spec.Parser.defaultSkipRoles...)
-	parser.EnableTrace(true)
+	parser.EnableTrace(config.collectParseTrace)
 	if config.nodePoolGrowFn != nil {
 		parser.SetNodePoolGrowFn(config.nodePoolGrowFn)
 	}
@@ -780,6 +795,11 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 /* GetGrammarPackage returns the grammar package used by the parser (for debug dumps, editor IR, etc.). */
 func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) GetGrammarPackage() *syntaxa.GrammarPackage[TObs, TToken, TTokenRole, TNodeKind, TLexerState] {
 	return p.config.spec.Parser.grammarPackage
+}
+
+/* SetCollectParseTrace toggles parse trace collection for subsequent parses (see WithCollectParseTrace). */
+func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) SetCollectParseTrace(enable bool) {
+	p.parser.EnableTrace(enable)
 }
 
 func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) DebugDumpLexerDFA(

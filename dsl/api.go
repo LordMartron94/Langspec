@@ -66,6 +66,9 @@ type LangSpecCompilerConfiguration struct {
 
 	lexerPositionTracking LangSpecLexerPositionTracking
 	lexerRuneTabWidth     int
+
+	// collectParseTraceForLspec enables syntaxa parse trace when parsing .lspec sources (high allocation cost).
+	collectParseTraceForLspec bool
 }
 
 /*
@@ -139,6 +142,16 @@ func (c *LangSpecCompilerConfiguration) WithLexerPositionTrackingCompilerDefault
 	return c
 }
 
+/*
+WithCollectParseTraceForLspec enables full parse trace collection while compiling .lspec files.
+
+When false (default), LangSpecCompileResult.Trace may be nil and LangSpecCompilerDebugResult with DebugParseTrace shows no event data unless traces are collected. Enable when debugging the LangSpec parser.
+*/
+func (c *LangSpecCompilerConfiguration) WithCollectParseTraceForLspec(v bool) *LangSpecCompilerConfiguration {
+	c.collectParseTraceForLspec = v
+	return c
+}
+
 // --------------------------------------------------------------- COMPILER
 
 /*
@@ -196,6 +209,9 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 		dslSpec,
 		compilerConfig.scratchAllocationFunction,
 	)
+	if compilerConfig.collectParseTraceForLspec {
+		langParserConfig = langParserConfig.WithCollectParseTrace(true)
+	}
 	parser := langspec.LangParserCreate(langParserConfig)
 
 	// Register ALL stages (0 through 4) in the unified config
@@ -420,7 +436,11 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	RenderGrammarDumps(compiler.diagnosticWriter, grammarDump, grammarPackageDump, cfgDump)
 }
 
-/* LangSpecCompilerDebugResult writes parse trace and/or LST dump for result per config. */
+/*
+LangSpecCompilerDebugResult writes parse trace and/or LST dump for result per config.
+
+When config.DebugParseTrace is true, event-level trace output requires parse trace collection during LangSpecCompilerCompile (see LangSpecCompilerConfiguration.WithCollectParseTraceForLspec). Otherwise RenderParseTrace reports no trace data.
+*/
 func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
 	if config.DebugParseTrace {
 		RenderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })
