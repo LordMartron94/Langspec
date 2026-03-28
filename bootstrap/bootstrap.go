@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"langspec"
 	"langspec/dsl"
+	"langspec/dsl/semantics"
 	"langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
@@ -155,14 +156,28 @@ func CompileParserFromSpec(
 	alloc memarch.AllocationFn,
 	opts ...Option,
 ) (*langspec.LangParser[rune, string, uint32, uint32, uint32], error) {
+	p, _, err := CompileParserFromSpecWithCompiledSymbols(specFile, alloc, opts...)
+	return p, err
+}
+
+/*
+CompileParserFromSpecWithCompiledSymbols is like CompileParserFromSpec but also returns
+the CompiledSymbolTable that maps uint32 token, role, and node-kind IDs to names for the
+compiled target language. Use it for LST debug output and other ID-to-string resolution.
+*/
+func CompileParserFromSpecWithCompiledSymbols(
+	specFile string,
+	alloc memarch.AllocationFn,
+	opts ...Option,
+) (*langspec.LangParser[rune, string, uint32, uint32, uint32], *semantics.CompiledSymbolTable, error) {
 	cfg := buildConfig(specFile, alloc, opts...)
 
 	compileResult, err := compileDSL(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return createParser(cfg, compileResult), nil
+	return createParser(cfg, compileResult), compileResult.CompiledSymbols, nil
 }
 
 /*

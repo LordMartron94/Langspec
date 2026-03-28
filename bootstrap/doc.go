@@ -4,7 +4,9 @@
 // # Runtime: parser from a spec
 //
 // Use CompileParserFromSpec(specFile, alloc, opts...) to compile the DSL and return
-// a LangParser. This does not run toolchains (no generated files). Options:
+// a LangParser. Use CompileParserFromSpecWithCompiledSymbols when you also need the
+// target language CompiledSymbolTable (e.g. resolving node-kind IDs in LST dumps).
+// This does not run toolchains (no generated files). Options:
 // WithDiagnosticSink for human-readable compile diagnostics; WithNodePoolPrefill and
 // WithNodePoolGrowFn for Syntaxa LST node pool tuning (see langspec.LangParserConfiguration).
 // WithSublimeToolchain is not used by CompileParserFromSpec (ignored); use RunToolchainsFromSpecFile for that.

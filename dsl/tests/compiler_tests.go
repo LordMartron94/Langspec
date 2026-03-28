@@ -73,11 +73,11 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 		t.Fatalf("LSpec file generation failed with error: %s", err.Error())
 	}
 
-	parser, err := bootstrap.CompileParserFromSpec(testOutput, scratchAllocFn,
+	parser, compiledSym, err := bootstrap.CompileParserFromSpecWithCompiledSymbols(testOutput, scratchAllocFn,
 		bootstrap.WithDiagnosticSink(sink),
 	)
 	if err != nil {
-		t.Fatalf("bootstrap.CompileParserFromSpec failed: %s", err.Error())
+		t.Fatalf("bootstrap.CompileParserFromSpecWithCompiledSymbols failed: %s", err.Error())
 	}
 	defer langspec.LangParserDestroy(parser)
 
@@ -86,7 +86,7 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 
 	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(parser, session)
 
-	debugParseResult(false, sink, trace, rootNode)
+	debugParseResult(false, sink, trace, rootNode, compiledSym)
 
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
 		dsl.RenderSyntaxErrorsWithContext(sink.Writer, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))

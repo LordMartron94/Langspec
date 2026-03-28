@@ -3,6 +3,7 @@ package tests
 import (
 	"fmt"
 	"langspec/dsl"
+	"langspec/dsl/semantics"
 	"lexarch"
 	"memcore"
 	"memforge"
@@ -46,12 +47,15 @@ func setupTestCompiler() (
 	return compiler, scratchAllocFn, sink, teardown
 }
 
-// debugParseResult formats parse output from bootstrap.CompileParserFromSpec (compiled target: uint32 token/role/kind).
+// debugParseResult formats parse output from bootstrap (compiled target: uint32 token/role/kind).
+// sym should be compileResult.CompiledSymbols from the same compile when non-nil so LST node kinds
+// show target-language names, not LangSpecParserNodeKind stringer output.
 func debugParseResult(
 	enable bool,
 	sink *dsl.LangSpecDiagnosticSink,
 	trace *syntaxa.ParseTrace[uint32],
 	rootNode *syntaxa.SyntaxaLSTNode[rune, uint32, uint32, uint32],
+	sym *semantics.CompiledSymbolTable,
 ) {
 	if !enable {
 		return
@@ -62,7 +66,12 @@ func debugParseResult(
 	if rootNode != nil {
 		lstDump := rootNode.DebugDump(
 			syntaxa.LSTDebugFormatter[rune, uint32, uint32, uint32]{
-				FormatKind:      func(k uint32) string { return strconv.FormatUint(uint64(k), 10) },
+				FormatKind: func(k uint32) string {
+					if sym != nil {
+						return sym.NodeKindName(k)
+					}
+					return strconv.FormatUint(uint64(k), 10)
+				},
 				FormatToken:     func(l lexarch.Lexeme[rune, uint32, uint32]) string { return string(l.Raw) },
 				FormatAttribute: func(k string, v any) string { return fmt.Sprintf("%s=%v", k, v) },
 				ShowTokens:      true,
