@@ -84,7 +84,7 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 	session := langspec.LangParserSessionCreate[rune](testOutput, nil, false)
 	contentRune, _ := system.FileReadAllRunes(testOutput)
 
-	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(parser, session)
+	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(parser, session, nil)
 
 	debugParseResult(false, sink, trace, rootNode, compiledSym)
 

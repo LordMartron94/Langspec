@@ -269,6 +269,7 @@ func LangSpecCompilerCompile(
 	trace, rootNode, syntaxErrors, err := langspec.LangParserParseFile(
 		compiler.parser,
 		session,
+		nil,
 	)
 
 	// 1. Guard against fatal parser initialization failures (where syntaxErrors is nil)
