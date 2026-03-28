@@ -13,7 +13,8 @@ import (
 
 type GrammarValidationState struct {
 	Package   *GrammarPackage
-	SourceMap map[*syntaxa.Grammar[string, string]]*Node
+	SourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node
+	Symbols   *CompiledSymbolTable
 }
 
 /* ValidationCtx is the validation stage context type for LangSpec LST validation. */
@@ -596,7 +597,7 @@ func processGrammarSafety(ctx *ValidationCtx) {
 	checkGrammarChoiceConflicts(ctx, pkg, analysis, sourceMap)
 }
 
-func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
+func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[uint32]) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 
 	for ruleName, rootGrammar := range pkg.Grammars {
@@ -614,7 +615,7 @@ func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis
 	}
 }
 
-func hasLeftRecursion(g *syntaxa.Grammar[string, string], pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string], visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
+func hasLeftRecursion(g *syntaxa.Grammar[uint32, uint32], pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[uint32], visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
 	if g == nil {
 		return false
 	}
@@ -664,12 +665,12 @@ func hasLeftRecursion(g *syntaxa.Grammar[string, string], pkg *GrammarPackage, a
 	return false
 }
 
-func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[string]) {
+func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[uint32]) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[string, string])
-	walk = func(g *syntaxa.Grammar[string, string]) {
+	var walk func(g *syntaxa.Grammar[uint32, uint32])
+	walk = func(g *syntaxa.Grammar[uint32, uint32]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
@@ -703,14 +704,14 @@ func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, anal
 func checkGrammarChoiceConflicts(
 	ctx *ValidationCtx,
 	pkg *GrammarPackage,
-	analysis *syntaxa.GrammarAnalysis[string],
-	sourceMap map[*syntaxa.Grammar[string, string]]*Node,
+	analysis *syntaxa.GrammarAnalysis[uint32],
+	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node,
 ) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[string, string])
-	walk = func(g *syntaxa.Grammar[string, string]) {
+	var walk func(g *syntaxa.Grammar[uint32, uint32])
+	walk = func(g *syntaxa.Grammar[uint32, uint32]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
@@ -733,13 +734,14 @@ func checkGrammarChoiceConflicts(
 func analyzeChoiceNode(
 	ctx *ValidationCtx,
 	pkg *GrammarPackage,
-	analysis *syntaxa.GrammarAnalysis[string],
-	sourceMap map[*syntaxa.Grammar[string, string]]*Node,
+	analysis *syntaxa.GrammarAnalysis[uint32],
+	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node,
 	parseSection *Node,
-	choiceNode *syntaxa.Grammar[string, string],
+	choiceNode *syntaxa.Grammar[uint32, uint32],
 ) {
-	seenTokens := make(map[string]int)
-	reportedPrev := make(map[string]bool)
+	seenTokens := make(map[uint32]int)
+	reportedPrev := make(map[uint32]bool)
+	sym := ctx.RunState.Symbols
 
 	ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*choiceNode.NodePath)]
 	fallbackRuleNode := findParseRuleByName(parseSection, string(ruleName))
@@ -763,12 +765,14 @@ func analyzeChoiceNode(
 				continue
 			}
 
+			tokenLabel := formatCompiledToken(sym, token)
+
 			// 1. Report the earlier branch (only once per token to avoid spam)
 			if !reportedPrev[token] {
 				prevNode := resolveConflictNode(ctx, sourceMap, prevChild, fallbackRuleNode)
 				msg := fmt.Sprintf(
 					"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is also expected by a later branch (%d).",
-					ruleName, token, i,
+					ruleName, tokenLabel, i,
 				)
 				ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, prevNode)
 				reportedPrev[token] = true
@@ -778,17 +782,24 @@ func analyzeChoiceNode(
 			currNode := resolveConflictNode(ctx, sourceMap, child, fallbackRuleNode)
 			msg := fmt.Sprintf(
 				"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is already expected by an earlier branch (%d).",
-				ruleName, token, prevBranch,
+				ruleName, tokenLabel, prevBranch,
 			)
 			ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, currNode)
 		}
 	}
 }
 
+func formatCompiledToken(sym *CompiledSymbolTable, id uint32) string {
+	if sym != nil {
+		return sym.TokenName(id)
+	}
+	return strconv.FormatUint(uint64(id), 10)
+}
+
 func resolveConflictNode(
 	ctx *ValidationCtx,
-	sourceMap map[*syntaxa.Grammar[string, string]]*Node,
-	grammarNode *syntaxa.Grammar[string, string],
+	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node,
+	grammarNode *syntaxa.Grammar[uint32, uint32],
 	fallbackRuleNode *Node,
 ) *Node {
 	exactNode := sourceMap[grammarNode]
@@ -1155,7 +1166,7 @@ func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 	return nil
 }
 
-func lookaheadsMutuallyExclusive(la1, la2 []syntaxa.Lookahead[string]) bool {
+func lookaheadsMutuallyExclusive(la1, la2 []syntaxa.Lookahead[uint32]) bool {
 	for _, req1 := range la1 {
 		for _, req2 := range la2 {
 			if req1.Offset == req2.Offset && req1.Expected != req2.Expected {

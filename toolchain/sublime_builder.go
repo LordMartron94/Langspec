@@ -4,13 +4,13 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"foundation/bytes"
 	"foundation/hash"
 	"foundation/system"
 	"langspec/dsl"
 	"langspec/editor"
 	"langspec/editor/sublime"
 	"lexarch"
+	"strings"
 	"syntaxa"
 )
 
@@ -71,15 +71,17 @@ Edge cases:
 */
 func RunSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
-	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
+	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
 ) error {
 	for _, pragma := range compileResult.CompiledToolPragmas {
 		if pragma.ToolName != SublimeToolName {
 			continue
 		}
 
-		configPath := pragma.Settings[SublimeConfigurationPathKey].(string)
-		enabled := pragma.Settings[SublimeEnableKey].(string)
+		enabled, ok := pragma.Settings[SublimeEnableKey].(string)
+		if !ok {
+			return fmt.Errorf("sublime toolchain: missing or invalid '%s'", SublimeEnableKey)
+		}
 
 		if enabled == "false" {
 			return nil
@@ -87,6 +89,12 @@ func RunSublimeToolchain(
 		if enabled != "true" {
 			return fmt.Errorf("unexpected enabled setting value: '%s'", enabled)
 		}
+
+		configPathVal, ok := pragma.Settings[SublimeConfigurationPathKey].(string)
+		if !ok || strings.TrimSpace(configPathVal) == "" {
+			return fmt.Errorf("sublime toolchain: '%s' is required when %s is true", SublimeConfigurationPathKey, SublimeEnableKey)
+		}
+		configPath := configPathVal
 
 		sublimeCfg, err := LoadSublimeConfigFromJSON(configPath)
 		if err != nil {
@@ -156,7 +164,7 @@ Edge cases:
 func RunSublimeToolchainFromMemory(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
-	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
+	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
 	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
@@ -179,26 +187,31 @@ then runs the Sublime generator. Called by RunSublimeToolchain and RunSublimeToo
 func executeSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
-	overrideProducer func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext],
+	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
 	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
 ) error {
+	if compileResult.CompiledSymbols == nil {
+		return fmt.Errorf("sublime toolchain: compiled symbols missing on compile result")
+	}
+
 	if overrideProducer == nil {
-		overrideProducer = func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, SublimeContext] {
+		overrideProducer = func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
 			return nil
 		}
 	}
 
-	ctxProducer := BuildContextProducerFromManifest[rune, string, string, string](manifest)
+	manifestUint := SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, manifest)
+	ctxProducer := BuildContextProducerFromManifest[rune, uint32, uint32, string, uint32](manifestUint)
 
 	irConfig := editor.EditorIRConfigurationCreate(
 		hasher,
-		func(token string) uint64 {
-			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token}, 0x00))
+		func(token uint32) uint64 {
+			return uint64(token)
 		},
-		func(node string) uint64 {
-			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{node}, 0x00))
+		func(nodeKind uint32) uint64 {
+			return uint64(nodeKind)
 		},
 		ctxProducer,
 		overrideProducer,
@@ -209,7 +222,7 @@ func executeSublimeToolchain(
 
 	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
 
-	runnerCfg := &SublimeRunnerConfig[rune, string, string, string, string]{
+	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, uint32]{
 		LexerRuleset:   &ruleset,
 		GrammarPackage: &compileResult.CompiledGrammarPackage,
 		IRConfig:       irConfig,

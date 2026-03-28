@@ -13,9 +13,9 @@ import (
 // ----------------------------------------------------------------- CONFIGURATION
 
 type SublimeOverrideFactory func(
-	ruleset *lexarch.LexingRuleset[rune, string, string],
-	ctxProducer func(ctx *editor.EditorCtx[rune, string, string, string, string]) toolchain.SublimeContext,
-) func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]
+	ruleset *lexarch.LexingRuleset[rune, uint32, uint32],
+	ctxProducer func(ctx *editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext,
+) func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
 
 type ParserCompiler struct {
 	specFile       string
@@ -154,7 +154,7 @@ func CompileParserFromSpec(
 	specFile string,
 	alloc memarch.AllocationFn,
 	opts ...Option,
-) (*langspec.LangParser[rune, string, string, string, string], error) {
+) (*langspec.LangParser[rune, string, uint32, uint32, uint32], error) {
 	cfg := buildConfig(specFile, alloc, opts...)
 
 	compileResult, err := compileDSL(cfg)
@@ -250,7 +250,7 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	return result, nil
 }
 
-func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) *langspec.LangParser[rune, string, string, string, string] {
+func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) *langspec.LangParser[rune, string, uint32, uint32, uint32] {
 	langSpec := langspec.LangSpecCreate(
 		compileResult.CompiledLexerSpec,
 		compileResult.CompiledParserSpec,
@@ -332,9 +332,13 @@ func dispatchInMemorySublimeGeneration(
 	outputPaths []string,
 ) error {
 	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
-	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, string, string, string](*cfg.sublimeManifest)
+	if compileResult.CompiledSymbols == nil {
+		return fmt.Errorf("bootstrap sublime: compiled symbols missing")
+	}
+	manifestUint := toolchain.SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, *cfg.sublimeManifest)
+	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, uint32, uint32, string, uint32](manifestUint)
 
-	var overrideProducer func(ec *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]
+	var overrideProducer func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
 	if cfg.sublimeFactory != nil {
 		overrideProducer = cfg.sublimeFactory(&ruleset, ctxProducer)
 	}

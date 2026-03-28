@@ -14,14 +14,14 @@ import (
 	"syntaxa/rule"
 )
 
-type LexerSpec = langspec.LexerSpec[rune, string, string, string]
-type ParserSpec = langspec.ParserSpec[rune, string, string, string, string]
-type RuleRegistry = syntaxa.RuleRegistry[rune, string, string, string, string]
+type LexerSpec = langspec.LexerSpec[rune, uint32, uint32, string]
+type ParserSpec = langspec.ParserSpec[rune, uint32, uint32, string, uint32]
+type RuleRegistry = syntaxa.RuleRegistry[rune, uint32, uint32, string, uint32]
 
-type LexerRuleset = lexarch.LexingRuleset[rune, string, string]
+type LexerRuleset = lexarch.LexingRuleset[rune, uint32, uint32]
 
-type CompiledRule = syntaxa.ParserRule[rune, string, string, string, string]
-type CompilerRuleBuilder = rule.RuleBuilder[rune, string, string, string, string]
+type CompiledRule = syntaxa.ParserRule[rune, uint32, uint32, string, uint32]
+type CompilerRuleBuilder = rule.RuleBuilder[rune, uint32, uint32, string, uint32]
 
 /* ToolPragma is one parsed PRAGMA toolchain line: tool name and key/value settings. */
 type ToolPragma struct {
@@ -43,8 +43,10 @@ type CompiledLangSpec struct {
 
 	toolPragmas []ToolPragma
 
-	eofToken  string
-	sourceMap map[*syntaxa.Grammar[string, string]]*Node
+	symbols *semantics.CompiledSymbolTable
+
+	eofToken  uint32
+	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node
 }
 
 type compiler struct {
@@ -62,6 +64,7 @@ type patternCompileCtx struct {
 	patternTable map[string]pattern.RegulaAST[rune]
 	env          *SemanticEnv
 	variables    map[string]pattern.RegulaAST[rune]
+	sym          *semantics.CompiledSymbolTable
 }
 
 /*
@@ -71,14 +74,15 @@ Passed through instead of (builder, env, grammarID, nodeKind, ruleName, counts, 
 type parseCompileCtx struct {
 	builder     *CompilerRuleBuilder
 	env         *SemanticEnv
+	sym         *semantics.CompiledSymbolTable
 	grammarID   syntaxa.GrammarLabel
-	nodeKind    string
+	nodeKind    uint32
 	ruleName    string
 	counts      map[string]int
 	rootLevel   bool
 	transparent bool
 
-	sourceMap map[*syntaxa.Grammar[string, string]]*Node
+	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node
 }
 
 func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
@@ -86,9 +90,13 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 
 	env := semantics.BuildSemanticEnv(rootNode, nil)
 
-	eofToken := getEOFToken(rootNode)
+	eofName := getEOFToken(rootNode)
+	tokStrs, roleStrs, nodeStrs := semantics.CollectCompiledSymbolStrings(rootNode, env, eofName)
+	sym := semantics.CompiledSymbolTableBuild(tokStrs, roleStrs, nodeStrs)
+	eofToken := sym.TokenID(eofName)
+
 	domain := lexarch.LexarchRuneDomain()
-	lexerSpec := langspec.LexerSpecCreate[rune, string, string](
+	lexerSpec := langspec.LexerSpecCreate[rune, uint32, uint32, string](
 		eofToken,
 		"default",
 		lexarch.NewlineDetectorRune(),
@@ -96,8 +104,8 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		lexarch.RunesToBytesDefault(),
 		lexarch.RuneFormatterDefault(),
 		domain,
-		func(token string) string {
-			return token
+		func(t uint32) string {
+			return sym.TokenName(t)
 		},
 	)
 	lexerSpec.WithCompilationMode(lexarch.Glushkov)
@@ -118,24 +126,25 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		c:        &lspecCompiler,
 		rootNode: rootNode,
 		env:      env,
+		sym:      sym,
 	}
 	lspecCompiler.compilePatterns(patternCtx)
 
 	ruleset := lspecCompiler.compileRuleset(patternCtx)
 	lexerSpec.WithRuleset("default", *ruleset)
 
-	grammarPackage, ruleRegistry, rootNodeKind, skipRoles, sourceMap := getParserSpecInfo(rootNode, env, dslName, dslVersion)
+	grammarPackage, ruleRegistry, rootNodeKind, skipRoles, sourceMap := getParserSpecInfo(rootNode, env, dslName, dslVersion, sym)
 
-	grammarPkg := new(syntaxa.GrammarPackage[rune, string, string, string, string])
+	grammarPkg := new(syntaxa.GrammarPackage[rune, uint32, uint32, uint32, string])
 	*grammarPkg = grammarPackage
 
 	analysis := lowering.GetAnalysis(grammarPkg)
-	getAnalysis := func() *syntaxa.GrammarAnalysis[string] { return analysis }
+	getAnalysis := func() *syntaxa.GrammarAnalysis[uint32] { return analysis }
 	parserSpec := langspec.ParserSpecCreate(
 		grammarPkg,
 		ruleRegistry,
 		rootNodeKind,
-		"ERROR_NODE",
+		sym.NodeKindID("ERROR_NODE"),
 		false, // TODO allow configuration of this flag inside LSpec
 		getAnalysis,
 	)
@@ -148,6 +157,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 		dslVersion:            dslVersion,
 		lexerSpec:             lexerSpec,
 		parserSpec:            parserSpec,
+		symbols:               sym,
 		eofToken:              eofToken,
 		grammarPackage:        *grammarPkg,
 		toolPragmas:           toolPragmas,
@@ -271,15 +281,20 @@ func extractStringArray(arrayNode *Node) []string {
 }
 
 func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {
-	ruleset := lexarch.LexingRulesetCreate[rune, string, string](
-		lexarch.TokenResolutionStepLongestThenPriority[string],
+	ruleset := lexarch.LexingRulesetCreate[rune, uint32, uint32](
+		lexarch.TokenResolutionStepLongestThenPriority[uint32],
 	)
 
 	lexSection := ctx.rootNode.FindFirstKind(dslspec.NodeLexSection)
 	lexRules := c.gatherRules(lexSection, ctx)
 
 	for _, rule := range lexRules {
-		ruleset.WithRulePriority(rule.tokenPattern, rule.tokenName, rule.tokenRole, rule.priority)
+		ruleset.WithRulePriority(
+			rule.tokenPattern,
+			ctx.sym.TokenID(rule.tokenName),
+			ctx.sym.RoleID(rule.tokenRole),
+			rule.priority,
+		)
 	}
 
 	return ruleset
@@ -680,14 +695,14 @@ func parseCtxLabel(ctx *parseCompileCtx, role string) syntaxa.GrammarLabel {
 	return grammarSubLabel(ctx.ruleName, role, ctx.counts)
 }
 
-func collectSyncTokens(ruleNode *Node) []string {
+func collectSyncTokens(ruleNode *Node, sym *semantics.CompiledSymbolTable) []uint32 {
 	syncNode := ruleNode.FindFirstKind(dslspec.NodeRuleModifierSync)
 	if syncNode == nil {
 		return nil
 	}
-	var out []string
+	var out []uint32
 	for _, tNode := range syncNode.FindAllKind(dslspec.NodeSyncToken) {
-		out = append(out, dslspec.NodeSingleTokenContent(tNode))
+		out = append(out, sym.TokenID(dslspec.NodeSingleTokenContent(tNode)))
 	}
 	return out
 }
@@ -696,44 +711,46 @@ func getParserSpecInfo(
 	rootNode *Node,
 	env *SemanticEnv,
 	langName, langVersion string,
+	sym *semantics.CompiledSymbolTable,
 ) (
 	GrammarPackage,
 	RuleRegistry,
-	string,
-	[]string,
-	map[*syntaxa.Grammar[string, string]]*Node,
+	uint32,
+	[]uint32,
+	map[*syntaxa.Grammar[uint32, uint32]]*Node,
 ) {
-	ruleBuilder := rule.RuleBuilderCreate[rune, string, string, string, string](
-		func(token string) string {
-			return token
+	ruleBuilder := rule.RuleBuilderCreate[rune, uint32, uint32, string, uint32](
+		func(token uint32) string {
+			return sym.TokenName(token)
 		},
 	)
 
 	registry := ruleBuilder.GetRegistry()
 
-	skipRoles := make([]string, 0)
+	skipRoles := make([]uint32, 0)
 	if parseSection := rootNode.FindFirstKind(dslspec.NodeParseSection); parseSection != nil {
 		if ignoreSection := parseSection.FindFirstKind(dslspec.NodeParseIgnoreSection); ignoreSection != nil {
 			for _, roleNode := range ignoreSection.FindAllKind(dslspec.NodeParseIgnoreRole) {
-				skipRoles = append(skipRoles, dslspec.NodeSingleTokenContent(roleNode))
+				skipRoles = append(skipRoles, sym.RoleID(dslspec.NodeSingleTokenContent(roleNode)))
 			}
 		}
 	}
 
 	programRuleNode := env.Rules[semantics.ProgramRuleName]
-	rootNodeKind := dslspec.NodeSingleTokenContent(programRuleNode.FindFirstKind(dslspec.NodeParseNodeName))
+	rootNodeKind := sym.NodeKindID(dslspec.NodeSingleTokenContent(programRuleNode.FindFirstKind(dslspec.NodeParseNodeName)))
 
 	var entryRule CompiledRule
 	var entryOverride syntaxa.GrammarLabel
 
-	sourceMap := make(map[*syntaxa.Grammar[string, string]]*Node)
+	sourceMap := make(map[*syntaxa.Grammar[uint32, uint32]]*Node)
 
 	for ruleName, ruleNode := range env.Rules {
 		ctx := &parseCompileCtx{
 			builder:     ruleBuilder,
 			env:         env,
+			sym:         sym,
 			grammarID:   syntaxa.GrammarLabel(ruleName),
-			nodeKind:    dslspec.NodeSingleTokenContent(ruleNode.FindFirstKind(dslspec.NodeParseNodeName)),
+			nodeKind:    sym.NodeKindID(dslspec.NodeSingleTokenContent(ruleNode.FindFirstKind(dslspec.NodeParseNodeName))),
 			ruleName:    ruleName,
 			counts:      make(map[string]int),
 			rootLevel:   true,
@@ -753,7 +770,7 @@ func getParserSpecInfo(
 	}
 
 	for ruleName, ruleNode := range env.Pratt {
-		compilePrattExprDef(ruleBuilder, env, ruleName, ruleNode)
+		compilePrattExprDef(ruleBuilder, env, sym, ruleName, ruleNode)
 	}
 
 	rootGrammar := entryRule.GetGrammar()
@@ -806,7 +823,7 @@ func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledR
 	}
 
 	compiledExpr := compileParseExpression(ctx, rootExpr)
-	if syncTokens := collectSyncTokens(ruleNode); len(syncTokens) > 0 {
+	if syncTokens := collectSyncTokens(ruleNode, ctx.sym); len(syncTokens) > 0 {
 		compiledExpr = ctx.builder.Rule.RecoverSync(compiledExpr, syncTokens...)
 	}
 	return ctx.builder.Rule.Define(compiledExpr), ""
@@ -928,17 +945,17 @@ func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
 	lookaheads := listNode.FindAllKind(dslspec.NodePredictLookahead)
 	type prediction struct {
 		offset int
-		token  string
+		token  uint32
 	}
 	var preds []prediction
 	for _, la := range lookaheads {
 		offset := extractIntContent(la.FindFirstKind(dslspec.NodePredictOffset))
-		token := dslspec.NodeSingleTokenContent(la.FindFirstKind(dslspec.NodePredictToken))
+		token := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(la.FindFirstKind(dslspec.NodePredictToken)))
 		preds = append(preds, prediction{offset, token})
 	}
-	lookaheadSlice := make([]syntaxa.Lookahead[string], len(preds))
+	lookaheadSlice := make([]syntaxa.Lookahead[uint32], len(preds))
 	for i, p := range preds {
-		lookaheadSlice[i] = syntaxa.Lookahead[string]{Offset: p.offset, Expected: p.token}
+		lookaheadSlice[i] = syntaxa.Lookahead[uint32]{Offset: p.offset, Expected: p.token}
 	}
 	return ctx.builder.Rule.PredictLookahead(innerRule, lookaheadSlice)
 }
@@ -999,12 +1016,12 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if outputNodeKindNode == nil {
 		panic("compiler error: emit node missing output kind")
 	}
-	outputNodeKind := dslspec.NodeSingleTokenContent(outputNodeKindNode)
+	outputNodeKind := ctx.sym.NodeKindID(dslspec.NodeSingleTokenContent(outputNodeKindNode))
 	refNode := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: emit node missing reference")
 	}
-	targetToken := dslspec.NodeSingleTokenContent(refNode)
+	targetToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(refNode))
 	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), outputNodeKind, targetToken)
 }
 
@@ -1013,7 +1030,7 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 
 	flatAlts := innerExpr.FlattenByKind(dslspec.NodeParseAlternation)
 
-	tokens := make([]string, 0, len(flatAlts))
+	tokens := make([]uint32, 0, len(flatAlts))
 	for _, alt := range flatAlts {
 		refNode := alt.FindFirstKind(dslspec.NodeParseTokenReference)
 		if refNode == nil {
@@ -1026,14 +1043,14 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 			panic(fmt.Sprintf("compiler error: emit-one-of alternatives for '%s' must be token references", customNodeKind))
 		}
 
-		tokens = append(tokens, dslspec.IdentifierValue(refNode))
+		tokens = append(tokens, ctx.sym.TokenID(dslspec.IdentifierValue(refNode)))
 	}
 
 	if len(tokens) == 0 {
 		panic(fmt.Sprintf("compiler error: emit-one-of for '%s' has no valid tokens", customNodeKind))
 	}
 
-	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), customNodeKind, tokens...)
+	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), ctx.sym.NodeKindID(customNodeKind), tokens...)
 }
 
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -1054,7 +1071,7 @@ func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 	tokenRef := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if tokenRef != nil {
-		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), targetName, dslspec.IdentifierValue(tokenRef))
+		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), ctx.sym.NodeKindID(targetName), ctx.sym.TokenID(dslspec.IdentifierValue(tokenRef)))
 	}
 
 	return compileRuleReference(ctx, nameNode, targetName)
@@ -1107,16 +1124,16 @@ func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if refNode == nil {
 		panic("compiler error: virtual node missing reference")
 	}
-	targetToken := dslspec.NodeSingleTokenContent(refNode)
+	targetToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(refNode))
 	return ctx.builder.Token.ExpectVirtual(parseCtxLabel(ctx, "VIRTUAL"), targetToken)
 }
 
 func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
-	openToken := dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestOpenToken))
-	closeToken := dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestCloseToken))
+	openToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestOpenToken)))
+	closeToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestCloseToken)))
 
-	innerRule := extractNestInnerRule(ctx, node, closeToken)
-	if syncTokens := collectSyncTokens(node); len(syncTokens) > 0 {
+	innerRule := extractNestInnerRule(ctx, node)
+	if syncTokens := collectSyncTokens(node, ctx.sym); len(syncTokens) > 0 {
 		innerRule = ctx.builder.Rule.RecoverSync(innerRule, syncTokens...)
 	}
 	if ctx.rootLevel {
@@ -1128,7 +1145,7 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 	return ctx.builder.Rule.TransparentNest(parseCtxLabel(ctx, "NEST"), openToken, closeToken, innerRule)
 }
 
-func extractNestInnerRule(ctx *parseCompileCtx, node *Node, closeToken string) CompiledRule {
+func extractNestInnerRule(ctx *parseCompileCtx, node *Node) CompiledRule {
 	subCtx := *ctx
 	subCtx.rootLevel = false
 
@@ -1179,19 +1196,20 @@ func compileGroup(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileTokenMatch(ctx *parseCompileCtx, node *Node) CompiledRule {
-	targetToken := dslspec.NodeSingleTokenContent(node)
+	targetToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(node))
 	if ctx.rootLevel {
 		if ctx.transparent {
 			return ctx.builder.Token.ExpectVirtual(ctx.grammarID, targetToken)
 		}
 		return ctx.builder.Token.Expect(ctx.grammarID, ctx.nodeKind, targetToken)
 	}
-	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "TOKEN"), "", targetToken)
+	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "TOKEN"), 0, targetToken)
 }
 
 func compilePrattExprDef(
 	builder *CompilerRuleBuilder,
 	env *SemanticEnv,
+	sym *semantics.CompiledSymbolTable,
 	ruleName string,
 	ruleNode *Node,
 ) CompiledRule {
@@ -1202,7 +1220,7 @@ func compilePrattExprDef(
 		panic("compiler error: pratt rule missing body")
 	}
 
-	config := buildPrattConfig(builder, env, grammarID, ruleNode, bodyNode)
+	config := buildPrattConfig(builder, env, sym, grammarID, ruleNode, bodyNode)
 	compiledExpr := builder.Pratt.Expression(grammarID, config)
 
 	return builder.Rule.Define(compiledExpr)
@@ -1211,24 +1229,25 @@ func compilePrattExprDef(
 func buildPrattConfig(
 	builder *CompilerRuleBuilder,
 	env *SemanticEnv,
+	sym *semantics.CompiledSymbolTable,
 	grammarID syntaxa.GrammarLabel,
 	ruleNode *Node,
 	bodyNode *Node,
-) rule.PrattConfig[rune, string, string, string, string] {
-	config := rule.PrattConfig[rune, string, string, string, string]{}
+) rule.PrattConfig[rune, uint32, uint32, string, uint32] {
+	config := rule.PrattConfig[rune, uint32, uint32, string, uint32]{}
 
 	for _, actualCat := range bodyNode.ChildrenUnsafe() {
 		switch actualCat.Kind() {
 		case dslspec.NodePrattPrimary:
 			config.Primary = compilePrattPrimary(builder, grammarID, actualCat)
 		case dslspec.NodePrattPrefix:
-			config.PrefixOps, config.PrefixRuleOps = compilePrattPrefixOps(builder, env, grammarID, actualCat)
+			config.PrefixOps, config.PrefixRuleOps = compilePrattPrefixOps(builder, env, sym, grammarID, actualCat)
 		case dslspec.NodePrattInfix:
-			config.InfixOps, config.InfixRuleOps = compilePrattInfixOps(builder, env, grammarID, actualCat)
+			config.InfixOps, config.InfixRuleOps = compilePrattInfixOps(builder, env, sym, grammarID, actualCat)
 		case dslspec.NodePrattPostfix:
-			config.PostfixOps, config.PostfixRuleOps = compilePrattPostfixOps(builder, env, grammarID, actualCat)
+			config.PostfixOps, config.PostfixRuleOps = compilePrattPostfixOps(builder, env, sym, grammarID, actualCat)
 		case dslspec.NodePrattImplicit:
-			config.ImplicitInfix = compilePrattImplicitOp(actualCat)
+			config.ImplicitInfix = compilePrattImplicitOp(sym, actualCat)
 		default:
 			panic(fmt.Errorf("compiler error: unknown pratt category: %s", actualCat.Kind()))
 		}
@@ -1258,28 +1277,29 @@ func compilePrattPrimary(
 func compilePrattPrefixOps(
 	builder *CompilerRuleBuilder,
 	env *SemanticEnv,
+	sym *semantics.CompiledSymbolTable,
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
-) ([]rule.PrattPrefixOp[string, string], []rule.PrattPrefixRuleOp[rune, string, string, string, string]) {
+) ([]rule.PrattPrefixOp[uint32, uint32], []rule.PrattPrefixRuleOp[rune, uint32, uint32, string, uint32]) {
 	bodyNode := node.FindFirstKind(dslspec.NodePrattPrefixBody)
 
-	tokOps := make([]rule.PrattPrefixOp[string, string], 0)
-	ruleOps := make([]rule.PrattPrefixRuleOp[rune, string, string, string, string], 0)
+	tokOps := make([]rule.PrattPrefixOp[uint32, uint32], 0)
+	ruleOps := make([]rule.PrattPrefixRuleOp[rune, uint32, uint32, string, uint32], 0)
 
 	for _, def := range bodyNode.ChildrenUnsafe() {
 		target, rightBP := extractPrefixData(def, env)
 
 		if target.IsRule {
-			ruleOps = append(ruleOps, rule.PrattPrefixRuleOp[rune, string, string, string, string]{
+			ruleOps = append(ruleOps, rule.PrattPrefixRuleOp[rune, uint32, uint32, string, uint32]{
 				RightBP:  rightBP,
-				NodeKind: target.NodeKind,
+				NodeKind: sym.NodeKindID(target.NodeKind),
 				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(target.Ref)),
 			})
 		} else {
-			tokOps = append(tokOps, rule.PrattPrefixOp[string, string]{
-				Token:             target.Ref,
+			tokOps = append(tokOps, rule.PrattPrefixOp[uint32, uint32]{
+				Token:             sym.TokenID(target.Ref),
 				RightBP:           rightBP,
-				NodeKind:          target.NodeKind,
+				NodeKind:          sym.NodeKindID(target.NodeKind),
 				TokenGrammarLabel: syntaxa.GrammarLabel(target.Ref),
 			})
 		}
@@ -1291,30 +1311,31 @@ func compilePrattPrefixOps(
 func compilePrattInfixOps(
 	builder *CompilerRuleBuilder,
 	env *SemanticEnv,
+	sym *semantics.CompiledSymbolTable,
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
-) ([]rule.PrattInfixOp[string, string], []rule.PrattInfixRuleOp[rune, string, string, string, string]) {
+) ([]rule.PrattInfixOp[uint32, uint32], []rule.PrattInfixRuleOp[rune, uint32, uint32, string, uint32]) {
 	bodyNode := node.FindFirstKind(dslspec.NodePrattInfixBody)
 
-	tokOps := make([]rule.PrattInfixOp[string, string], 0)
-	ruleOps := make([]rule.PrattInfixRuleOp[rune, string, string, string, string], 0)
+	tokOps := make([]rule.PrattInfixOp[uint32, uint32], 0)
+	ruleOps := make([]rule.PrattInfixRuleOp[rune, uint32, uint32, string, uint32], 0)
 
 	for _, def := range bodyNode.ChildrenUnsafe() {
 		target, leftBP, rightBP := extractInfixData(def, env)
 
 		if target.IsRule {
-			ruleOps = append(ruleOps, rule.PrattInfixRuleOp[rune, string, string, string, string]{
+			ruleOps = append(ruleOps, rule.PrattInfixRuleOp[rune, uint32, uint32, string, uint32]{
 				LeftBP:   leftBP,
 				RightBP:  rightBP,
-				NodeKind: target.NodeKind,
+				NodeKind: sym.NodeKindID(target.NodeKind),
 				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(target.Ref)),
 			})
 		} else {
-			tokOps = append(tokOps, rule.PrattInfixOp[string, string]{
-				Token:             target.Ref,
+			tokOps = append(tokOps, rule.PrattInfixOp[uint32, uint32]{
+				Token:             sym.TokenID(target.Ref),
 				LeftBP:            leftBP,
 				RightBP:           rightBP,
-				NodeKind:          target.NodeKind,
+				NodeKind:          sym.NodeKindID(target.NodeKind),
 				TokenGrammarLabel: syntaxa.GrammarLabel(target.Ref),
 			})
 		}
@@ -1326,28 +1347,29 @@ func compilePrattInfixOps(
 func compilePrattPostfixOps(
 	builder *CompilerRuleBuilder,
 	env *SemanticEnv,
+	sym *semantics.CompiledSymbolTable,
 	grammarID syntaxa.GrammarLabel,
 	node *Node,
-) ([]rule.PrattPostfixOp[string, string], []rule.PrattPostfixRuleOp[rune, string, string, string, string]) {
+) ([]rule.PrattPostfixOp[uint32, uint32], []rule.PrattPostfixRuleOp[rune, uint32, uint32, string, uint32]) {
 	bodyNode := node.FindFirstKind(dslspec.NodePrattPostfixBody)
 
-	tokOps := make([]rule.PrattPostfixOp[string, string], 0)
-	ruleOps := make([]rule.PrattPostfixRuleOp[rune, string, string, string, string], 0)
+	tokOps := make([]rule.PrattPostfixOp[uint32, uint32], 0)
+	ruleOps := make([]rule.PrattPostfixRuleOp[rune, uint32, uint32, string, uint32], 0)
 
 	for _, def := range bodyNode.ChildrenUnsafe() {
 		target, leftBP := extractPostfixData(def, env)
 
 		if target.IsRule {
-			ruleOps = append(ruleOps, rule.PrattPostfixRuleOp[rune, string, string, string, string]{
+			ruleOps = append(ruleOps, rule.PrattPostfixRuleOp[rune, uint32, uint32, string, uint32]{
 				LeftBP:   leftBP,
-				NodeKind: target.NodeKind,
+				NodeKind: sym.NodeKindID(target.NodeKind),
 				Rule:     builder.Rule.Reference(grammarID, syntaxa.GrammarLabel(target.Ref)),
 			})
 		} else {
-			tokOps = append(tokOps, rule.PrattPostfixOp[string, string]{
-				Token:             target.Ref,
+			tokOps = append(tokOps, rule.PrattPostfixOp[uint32, uint32]{
+				Token:             sym.TokenID(target.Ref),
 				LeftBP:            leftBP,
-				NodeKind:          target.NodeKind,
+				NodeKind:          sym.NodeKindID(target.NodeKind),
 				TokenGrammarLabel: syntaxa.GrammarLabel(target.Ref),
 			})
 		}
@@ -1356,15 +1378,15 @@ func compilePrattPostfixOps(
 	return tokOps, ruleOps
 }
 
-func compilePrattImplicitOp(node *Node) *rule.PrattImplicitInfix[string, string] {
+func compilePrattImplicitOp(sym *semantics.CompiledSymbolTable, node *Node) *rule.PrattImplicitInfix[uint32, uint32] {
 	body := node.FindFirstKind(dslspec.NodePrattImplicitBody)
 	def := body.FindFirstKind(dslspec.NodePrattImplicitDef)
 
-	nodeKind := dslspec.NodeSingleTokenContent(def.FindFirstKind(dslspec.NodeParseNodeName))
+	nodeKind := sym.NodeKindID(dslspec.NodeSingleTokenContent(def.FindFirstKind(dslspec.NodeParseNodeName)))
 	leftBP := extractIntContent(def.FindFirstKind(dslspec.NodePrattLeftPrecedenceValue))
 	rightBP := extractIntContent(def.FindFirstKind(dslspec.NodePrattRightPrecedenceValue))
 
-	return &rule.PrattImplicitInfix[string, string]{
+	return &rule.PrattImplicitInfix[uint32, uint32]{
 		LeftBP:   leftBP,
 		RightBP:  rightBP,
 		NodeKind: nodeKind,

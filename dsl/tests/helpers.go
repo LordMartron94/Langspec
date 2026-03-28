@@ -6,6 +6,7 @@ import (
 	"lexarch"
 	"memcore"
 	"memforge"
+	"strconv"
 	"syntaxa"
 )
 
@@ -45,23 +46,24 @@ func setupTestCompiler() (
 	return compiler, scratchAllocFn, sink, teardown
 }
 
+// debugParseResult formats parse output from bootstrap.CompileParserFromSpec (compiled target: uint32 token/role/kind).
 func debugParseResult(
 	enable bool,
 	sink *dsl.LangSpecDiagnosticSink,
-	trace *syntaxa.ParseTrace[string],
-	rootNode *syntaxa.SyntaxaLSTNode[rune, string, string, string],
+	trace *syntaxa.ParseTrace[uint32],
+	rootNode *syntaxa.SyntaxaLSTNode[rune, uint32, uint32, uint32],
 ) {
 	if !enable {
 		return
 	}
 
-	dsl.RenderParseTrace(sink.Writer, trace, func(t string) string { return t })
+	dsl.RenderParseTrace(sink.Writer, trace, func(t uint32) string { return strconv.FormatUint(uint64(t), 10) })
 
 	if rootNode != nil {
 		lstDump := rootNode.DebugDump(
-			syntaxa.LSTDebugFormatter[rune, string, string, string]{
-				FormatKind:      func(k string) string { return k },
-				FormatToken:     func(l lexarch.Lexeme[rune, string, string]) string { return string(l.Raw) },
+			syntaxa.LSTDebugFormatter[rune, uint32, uint32, uint32]{
+				FormatKind:      func(k uint32) string { return strconv.FormatUint(uint64(k), 10) },
+				FormatToken:     func(l lexarch.Lexeme[rune, uint32, uint32]) string { return string(l.Raw) },
 				FormatAttribute: func(k string, v any) string { return fmt.Sprintf("%s=%v", k, v) },
 				ShowTokens:      true,
 				ShowAttributes:  true,

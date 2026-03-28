@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"foundation/system"
+	"langspec/dsl/semantics"
 	"langspec/editor"
 	"strings"
 )
@@ -64,6 +65,42 @@ func LoadSublimeConfigFromJSON(configPath string) (*SublimeConfiguration[string,
 	}
 
 	return &cfg, nil
+}
+
+/*
+SemanticManifestRemapFromStrings maps string-keyed manifest entries (e.g. from JSON) to uint32
+keys using the same IDs as the LangSpec compiler’s CompiledSymbolTable.
+*/
+func SemanticManifestRemapFromStrings(
+	sym *semantics.CompiledSymbolTable,
+	in SemanticManifest[string, string],
+) SemanticManifest[uint32, uint32] {
+	out := SemanticManifest[uint32, uint32]{
+		InvalidScope: in.InvalidScope,
+	}
+	if len(in.BaseTokenScopes) > 0 {
+		out.BaseTokenScopes = make(map[uint32]string, len(in.BaseTokenScopes))
+		for name, scope := range in.BaseTokenScopes {
+			out.BaseTokenScopes[sym.TokenID(name)] = scope
+		}
+	}
+	if len(in.NodeBindings) > 0 {
+		out.NodeBindings = make(map[uint32]NodeBinding[uint32], len(in.NodeBindings))
+		for nodeName, b := range in.NodeBindings {
+			nb := NodeBinding[uint32]{
+				Scopes:    b.Scopes,
+				MetaScope: b.MetaScope,
+			}
+			if len(b.TokenScopes) > 0 {
+				nb.TokenScopes = make(map[uint32][]string, len(b.TokenScopes))
+				for tokName, scopes := range b.TokenScopes {
+					nb.TokenScopes[sym.TokenID(tokName)] = scopes
+				}
+			}
+			out.NodeBindings[sym.NodeKindID(nodeName)] = nb
+		}
+	}
+	return out
 }
 
 // ----------------------------------------------------------------- CONTEXT PRODUCER

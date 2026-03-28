@@ -42,10 +42,10 @@ func TestClientDSLToolchain(t *testing.T) {
 		bootstrap.WithSublimeToolchain(
 			stringManifest,
 			func(
-				_ *lexarch.LexingRuleset[rune, string, string],
-				_ func(*editor.EditorCtx[rune, string, string, string, string]) toolchain.SublimeContext,
-			) func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
-				return adaptGoOverrideProducer(compiler)
+				_ *lexarch.LexingRuleset[rune, uint32, uint32],
+				_ func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext,
+			) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
+				return adaptGoOverrideProducer(compileResult, compiler)
 			},
 			[]string{".lspec"},
 			".lspec",
@@ -88,8 +88,9 @@ func adaptManifest(
 }
 
 func adaptGoOverrideProducer(
+	compileResult *dsl.LangSpecCompileResult,
 	compiler *dsl.LangSpecCompiler,
-) func(*editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
+) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
 
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
@@ -112,17 +113,19 @@ func adaptGoOverrideProducer(
 		dslspec.NodeParseSymbolReference.String(): dslspec.NodeParseSymbolReference,
 	}
 
-	return func(ctx *editor.EditorCtx[rune, string, string, string, string]) []*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext] {
+	sym := compileResult.CompiledSymbols
+
+	return func(ctx *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
 		var nativeToken *dsl.LangSpecLexerTokenType
 		var nativeNode *dsl.LangSpecParserNodeKind
 
-		if ctx.Token != nil {
-			if tokEnum, ok := tokenMap[*ctx.Token]; ok {
+		if ctx.Token != nil && sym != nil {
+			if tokEnum, ok := tokenMap[sym.TokenName(*ctx.Token)]; ok {
 				nativeToken = &tokEnum
 			}
 		}
-		if ctx.NodeKind != nil {
-			if nodeEnum, ok := nodeMap[*ctx.NodeKind]; ok {
+		if ctx.NodeKind != nil && sym != nil {
+			if nodeEnum, ok := nodeMap[sym.NodeKindName(*ctx.NodeKind)]; ok {
 				nativeNode = &nodeEnum
 			}
 		}
@@ -137,9 +140,9 @@ func adaptGoOverrideProducer(
 			return nil
 		}
 
-		out := make([]*editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext], len(nativeOverrides))
+		out := make([]*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext], len(nativeOverrides))
 		for i, nativeOverride := range nativeOverrides {
-			out[i] = &editor.EditorOverride[rune, string, string, string, string, toolchain.SublimeContext]{
+			out[i] = &editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]{
 				Pattern:          nativeOverride.Pattern,
 				PatternRegex:     nativeOverride.PatternRegex,
 				MatchContext:     nativeOverride.MatchContext,

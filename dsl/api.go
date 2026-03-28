@@ -163,9 +163,10 @@ type LangSpecCompileResult struct {
 	CompiledGrammarPackage GrammarPackage
 
 	CompiledToolPragmas []ToolPragma
-	SourceMap           map[*syntaxa.Grammar[string, string]]*Node
+	SourceMap           map[*syntaxa.Grammar[uint32, uint32]]*Node
 
-	EOFToken string
+	CompiledSymbols *semantics.CompiledSymbolTable
+	EOFToken        uint32
 }
 
 /*
@@ -301,6 +302,7 @@ func LangSpecCompilerCompile(
 	valState := &semantics.GrammarValidationState{
 		Package:   &compiled.grammarPackage,
 		SourceMap: compiled.sourceMap,
+		Symbols:   compiled.symbols,
 	}
 
 	postValidationEntries, postValidationErr := validation.LSTValidatorRun(
@@ -335,6 +337,7 @@ func LangSpecCompilerCompile(
 	result.CompiledGrammarPackage = compiled.grammarPackage
 	result.CompiledToolPragmas = compiled.toolPragmas
 	result.TargetLangspecVersion = compiled.targetLangspecVersion
+	result.CompiledSymbols = compiled.symbols
 	result.EOFToken = compiled.eofToken
 	result.SourceMap = compiled.sourceMap
 
