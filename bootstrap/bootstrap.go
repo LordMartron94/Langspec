@@ -95,7 +95,7 @@ func WithLexerPositionTrackingCompilerDefault() Option {
 /*
 WithNodePoolPrefill sets a fixed Syntaxa LST node pool prefill on the LangParser (see langspec.LangParserConfiguration.WithNodePoolPrefill).
 
-When unset, LangParser still derives a hint from source or file size when building the parse context.
+When unset, LangParser derives a hint from loaded source length when building the parse context.
 */
 func WithNodePoolPrefill(hint int) Option {
 	return func(c *ParserCompiler) {

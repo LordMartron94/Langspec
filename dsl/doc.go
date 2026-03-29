@@ -25,8 +25,8 @@
 //   - LST node kinds and structural constraints
 //   - multi-stage semantic validation pipelines
 //
-// while remaining decoupled from runtime concerns such as memory allocation,
-// streaming configuration, and performance tuning.
+// while remaining decoupled from runtime concerns such as memory allocation
+// and performance tuning.
 //
 // Public API: LangSpecCompilerConfiguration (with optional LangSpecDiagnosticSink),
 // LangSpecCompilerCreate, LangSpecCompilerCompile (returns LangSpecCompileResult),

@@ -63,7 +63,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	session := langspec.LangParserSessionCreate[rune](tmpPath, nil, false)
+	session := langspec.LangParserSessionCreate[rune](tmpPath, nil)
 	_, root, syntaxErrors, err := langspec.LangParserParseFile(parser, session, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse: %v\n", err)

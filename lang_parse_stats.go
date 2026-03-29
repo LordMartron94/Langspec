@@ -8,8 +8,8 @@ import (
 /*
 LangParseStats is filled by LangParserParseFile when the stats pointer is non-nil.
 
-LexPretokenize covers ScanModePreTokenizeAll materialization (LexerSessionEnsurePreTokenizedAll);
-for other scan modes it is zero. ParseOnly is SyntaxaParserParseWithContext wall time after that.
+LexPretokenize covers pretokenized lexeme materialization (LexerSessionEnsurePreTokenizedAll).
+ParseOnly is SyntaxaParserParseWithContext wall time after that.
 
 Stream holds raw peek/consume counts at the lexer boundary. RawLexemeStreamLen is len(preTokens)
 for the full input, read immediately after LexerSessionEnsurePreTokenizedAll (before parse), so it

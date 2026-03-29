@@ -10,9 +10,7 @@ import (
 	"lexarch"
 	"memarch"
 	"memcore"
-	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syntaxa"
 	"time"
@@ -109,15 +107,7 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithCompilati
 	return l
 }
 
-/* WithScanMode sets lexer token-scan mode for Peek/Consume behavior. */
-func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithScanMode(
-	mode lexarch.LexerScanMode,
-) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
-	l.scanConfig.Mode = mode
-	return l
-}
-
-/* WithScanConfig replaces lexer scan configuration including mode-specific tuning. */
+/* WithScanConfig replaces lexer scan configuration (stats, ForceRawCopy). */
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithScanConfig(
 	cfg lexarch.LexerScanConfig,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
@@ -262,66 +252,6 @@ func LangSpecCreate[
 }
 
 // ============================================================
-// STREAMING CONFIGURATION
-// ============================================================
-
-/*
-StreamingConfig defines the operational parameters for streaming lexing.
-
-Streaming lexing incrementally feeds observations into the lexer rather than
-loading the full source into memory. This enables parsing of very large files
-or continuous streams with bounded memory usage.
-
-Fields:
-
-  - ReadChunkSize:
-    Number of observations requested from the producer per read operation.
-    Larger values increase throughput but raise peak buffering and latency.
-    Smaller values reduce memory footprint but increase call overhead.
-
-  - MaxBuffered:
-    Maximum number of observations retained internally by the streaming
-    session before backpressure is applied.
-
-    This acts as a safety bound on memory usage and ensures the lexer cannot
-    outpace the parser indefinitely.
-
-Performance characteristics:
-
-  - Memory: O(MaxBuffered)
-  - Throughput: proportional to ReadChunkSize
-
-Typical tuning strategy:
-
-  - Increase ReadChunkSize for disk-heavy workloads
-  - Decrease MaxBuffered for tight memory environments
-*/
-type StreamingConfig struct {
-	ReadChunkSize int
-	MaxBuffered   int
-}
-
-/*
-DefaultStreamingConfig returns the default streaming configuration.
-
-Defaults are chosen to balance throughput and memory usage for typical
-source-file workloads while remaining safe for moderate-sized streams.
-
-Current defaults:
-
-  - ReadChunkSize: 25
-  - MaxBuffered:   30
-
-These values may be tuned per workload via the configuration builder.
-*/
-func DefaultStreamingConfig() StreamingConfig {
-	return StreamingConfig{
-		ReadChunkSize: 25,
-		MaxBuffered:   30,
-	}
-}
-
-// ============================================================
 // LANG PARSER CONFIGURATION
 // ============================================================
 
@@ -337,7 +267,6 @@ Concerns managed here include:
 
   - memory allocation strategy
   - automaton memory bounds
-  - streaming behavior
   - performance tuning parameters
 
 Separation of concerns:
@@ -360,10 +289,8 @@ type LangParserConfiguration[
 
 	nfaToDFAPipelineMinTemp, nfaToDFAPipelineMaxTemp memcore.MemoryUnitBytes
 
-	streaming StreamingConfig
-
 	// nodePoolPrefill is an optional override for syntaxa.SyntaxaParser.SetNodePoolPrefill.
-	// When zero, LangParser derives a hint from source length (sequential) or file size (streaming).
+	// When zero, LangParser derives a hint from loaded source length.
 	nodePoolPrefill int
 
 	// nodePoolGrowFn is an optional override for syntaxa.SyntaxaParser.SetNodePoolGrowFn (nil = syntaxa default batching).
@@ -384,10 +311,8 @@ Defaults:
 
   - Lexer automaton memory limit: 1 GB
   - NFA-to-DFA pipeline temp memory: min 1 KB, max 1 GB
-  - Streaming configuration: DefaultStreamingConfig()
 
-The caller is expected to tune memory and streaming parameters
-for their workload when necessary.
+The caller is expected to tune memory parameters for their workload when necessary.
 */
 func LangParserConfigurationCreate[
 	TObservation cmp.Ordered,
@@ -405,7 +330,6 @@ func LangParserConfigurationCreate[
 		maxLexerAutomatonMemory: 1 * memcore.GigaByte,
 		nfaToDFAPipelineMinTemp: 1 * memcore.KiloByte,
 		nfaToDFAPipelineMaxTemp: 1 * memcore.GigaByte,
-		streaming:               DefaultStreamingConfig(),
 		nodePoolPrefill:         0,
 		forceValidation:         false,
 		collectParseTrace:       false,
@@ -497,97 +421,6 @@ func (c *LangParserConfiguration[
 }
 
 /*
-WithStreamingConfig replaces the entire streaming configuration block.
-
-This is the preferred method when applying predefined profiles
-(e.g. low-memory, high-throughput, debugging, benchmarking).
-
-Example:
-
-	cfg.WithStreamingConfig(StreamingConfig{
-		ReadChunkSize: 128,
-		MaxBuffered:   256,
-	})
-*/
-func (c *LangParserConfiguration[
-	TObservation,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind,
-]) WithStreamingConfig(
-	cfg StreamingConfig,
-) *LangParserConfiguration[
-	TObservation,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind,
-] {
-	c.streaming = cfg
-	return c
-}
-
-/*
-WithStreamingReadChunkSize sets the number of observations pulled from
-the producer per streaming read.
-
-Effects:
-
-  - Larger size → higher throughput, higher latency, higher memory pressure
-  - Smaller size → lower memory usage, more frequent calls
-
-This may be tuned independently without affecting buffer limits.
-*/
-func (c *LangParserConfiguration[
-	TObservation,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind,
-]) WithStreamingReadChunkSize(
-	size int,
-) *LangParserConfiguration[
-	TObservation,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind,
-] {
-	c.streaming.ReadChunkSize = size
-	return c
-}
-
-/*
-WithStreamingMaxBuffered sets the maximum number of observations buffered
-by the streaming lexer session.
-
-This enforces a hard memory ceiling for streaming input and provides
-backpressure when the producer outpaces consumption.
-
-Lower values reduce memory footprint.
-Higher values improve throughput under bursty input.
-*/
-func (c *LangParserConfiguration[
-	TObservation,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind,
-]) WithStreamingMaxBuffered(
-	max int,
-) *LangParserConfiguration[
-	TObservation,
-	TToken,
-	TTokenRole,
-	TLexerState,
-	TNodeKind,
-] {
-	c.streaming.MaxBuffered = max
-	return c
-}
-
-/*
 WithNodePoolPrefill sets a fixed Syntaxa LST node pool prefill count on the parser before each parse.
 
 When hint is 0 (the default), LangParser computes a hint from the loaded source or file size.
@@ -651,7 +484,6 @@ The session can be reset by calling Reset, which allows it to be used once more.
 type LangParserSession[TObservation cmp.Ordered] struct {
 	sourceFile string
 	mapFn      func([]byte) ([]TObservation, error)
-	streaming  bool
 
 	inUse atomic.Bool
 }
@@ -659,22 +491,17 @@ type LangParserSession[TObservation cmp.Ordered] struct {
 /*
 LangParserSessionCreate creates a lang parser session instance.
 
-If streaming is set to false, it will read the entire file into memory and pass that to the lexer.
-If streaming is set to true, it will pass it to the lexer in chunks.
-
-During streaming, the lexer will receive the configured max buffer and readChunkSize.
+The full source file is read into memory and passed to the lexer session.
 
 NOTE: mapFn can be zero if the TObservation is byte or rune. If TObservation is byte/rune, mapFn will not be used.
 */
 func LangParserSessionCreate[TObservation cmp.Ordered](
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
-	streaming bool,
 ) *LangParserSession[TObservation] {
 	session := &LangParserSession[TObservation]{
 		sourceFile: sourceFile,
 		mapFn:      mapFn,
-		streaming:  streaming,
 	}
 	session.inUse.Store(false)
 	return session
@@ -695,17 +522,11 @@ func (l *LangParserSession[TObservation]) end() {
 /*
 Reset allows the lang parser session to be re-used.
 
-If streaming is set to false, it will read the entire file into memory and pass that to the lexer.
-If streaming is set to true, it will pass it to the lexer in chunks.
-
-During streaming, the lexer will receive the configured max buffer and readChunkSize.
-
 NOTE: mapFn can be zero if the TObservation is byte or rune. If TObservation is byte/rune, mapFn will not be used.
 */
 func (l *LangParserSession[TObservation]) Reset(
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
-	streaming bool,
 ) {
 	if l.inUse.Load() {
 		panic("Cannot reset an active lang-parser session.")
@@ -713,7 +534,6 @@ func (l *LangParserSession[TObservation]) Reset(
 
 	l.sourceFile = sourceFile
 	l.mapFn = mapFn
-	l.streaming = streaming
 
 	l.inUse.Store(false)
 }
@@ -727,8 +547,7 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 	lexer  *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole]
 	parser *syntaxa.SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 
-	lexingSessionCache          *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole]
-	lexingStreamingSessionCache *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole]
+	lexingSessionCache *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole]
 
 	destroyed atomic.Bool
 }
@@ -881,9 +700,8 @@ func LangParserLexFile[
 /*
 LangParserParseFile parses a source file into the LST as generated by the parsing engine.
 
-parseStats may be nil. When non-nil, LexPretokenize and ParseOnly are set (pretokenize timing
-applies to ScanModePreTokenizeAll), Stream and Engine are filled from the parse context, and
-lexer-derived counters are written after parsing.
+parseStats may be nil. When non-nil, LexPretokenize and ParseOnly are set (pretokenize materialization
+timing), Stream and Engine are filled from the parse context, and lexer-derived counters are written after parsing.
 */
 func LangParserParseFile[
 	TObservation cmp.Ordered,
@@ -921,12 +739,11 @@ func LangParserParseFile[
 		engineStatsPtr = &parseStats.Engine
 	}
 
-	parsingContext, sliceLexSession, streamLexSession, err := getParsingContextSessions(
+	parsingContext, sliceLexSession, err := buildSequentialParsingContext(
 		langParser,
 		session.sourceFile,
 		session.mapFn,
 		syntaxErrors,
-		session.streaming,
 		streamStatsPtr,
 		engineStatsPtr,
 	)
@@ -935,25 +752,14 @@ func LangParserParseFile[
 	}
 
 	if parseStats != nil {
-		if sliceLexSession != nil {
-			lexStart := time.Now()
-			if err2 := lexarch.LexerSessionEnsurePreTokenizedAll(langParser.lexer, sliceLexSession); err2 != nil {
-				return nil, nil, syntaxErrors, err2
-			}
-			parseStats.LexPretokenize = time.Since(lexStart)
-			n, ok := lexarch.LexerSessionPreTokenizedLexemeCount(sliceLexSession)
-			parseStats.RawLexemeStreamLen = n
-			parseStats.RawLexemeStreamOk = ok
-		} else if streamLexSession != nil {
-			lexStart := time.Now()
-			if err2 := lexarch.StreamingLexerSessionEnsurePreTokenizedAll(langParser.lexer, streamLexSession); err2 != nil {
-				return nil, nil, syntaxErrors, err2
-			}
-			parseStats.LexPretokenize = time.Since(lexStart)
-			n, ok := lexarch.StreamingLexerSessionPreTokenizedLexemeCount(streamLexSession)
-			parseStats.RawLexemeStreamLen = n
-			parseStats.RawLexemeStreamOk = ok
+		lexStart := time.Now()
+		if err2 := lexarch.LexerSessionEnsurePreTokenizedAll(langParser.lexer, sliceLexSession); err2 != nil {
+			return nil, nil, syntaxErrors, err2
 		}
+		parseStats.LexPretokenize = time.Since(lexStart)
+		n, ok := lexarch.LexerSessionPreTokenizedLexemeCount(sliceLexSession)
+		parseStats.RawLexemeStreamLen = n
+		parseStats.RawLexemeStreamOk = ok
 	}
 
 	parseStart := time.Now()
@@ -965,11 +771,7 @@ func LangParserParseFile[
 		parseStats.ParseOnly = time.Since(parseStart)
 		parseStats.LexObservationSteps = lexarch.LexerScanStatsObservationSteps(langParser.lexer)
 		parseStats.LSTNodeCount = parsingContext.Editor.CreatedCount()
-		if sliceLexSession != nil {
-			parseStats.FinalLexerNextTokenNumber = lexarch.LexerSessionNextTokenNumber(sliceLexSession)
-		} else if streamLexSession != nil {
-			parseStats.FinalLexerNextTokenNumber = lexarch.StreamingLexerSessionNextTokenNumber(streamLexSession)
-		}
+		parseStats.FinalLexerNextTokenNumber = lexarch.LexerSessionNextTokenNumber(sliceLexSession)
 	}
 
 	if err != nil {
@@ -1025,55 +827,6 @@ func LangParserLexScanStatsBind[
 }
 
 // ---------------------------------------------------------------- PRIVATE HELPERS
-
-func getParsingContextSessions[
-	TObservation cmp.Ordered,
-	TLexerState,
-	TToken,
-	TTokenRole,
-	TNodeKind comparable,
-](
-	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
-	sourceFile string,
-	mapFn func([]byte) ([]TObservation, error),
-	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
-	streaming bool,
-	streamStats *syntaxa.ParseStreamStats,
-	engineStats *syntaxa.ParseEngineStats,
-) (
-	*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	*lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole],
-	*lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole],
-	error,
-) {
-	if !streaming {
-		ctx, sliceSess, err := buildSequentialParsingContext(
-			langParser,
-			sourceFile,
-			mapFn,
-			syntaxErrors,
-			streamStats,
-			engineStats,
-		)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		return ctx, sliceSess, nil, nil
-	}
-
-	ctx, streamSess, err := buildStreamingParsingContext(
-		langParser,
-		sourceFile,
-		mapFn,
-		syntaxErrors,
-		streamStats,
-		engineStats,
-	)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return ctx, nil, streamSess, nil
-}
 
 func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
@@ -1163,253 +916,6 @@ func getLexerSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, 
 	return langParser.lexingSessionCache
 }
 
-func buildStreamingParsingContext[
-	TObservation cmp.Ordered,
-	TLexerState,
-	TToken,
-	TTokenRole,
-	TNodeKind comparable,
-](
-	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
-	sourceFile string,
-	mapFn func([]byte) ([]TObservation, error),
-	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
-	streamStats *syntaxa.ParseStreamStats,
-	engineStats *syntaxa.ParseEngineStats,
-) (
-	*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	*lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole],
-	error,
-) {
-	producer, err := newFileObservationProducer(
-		sourceFile,
-		mapFn,
-		32*1024,
-	)
-
-	if err != nil {
-		return nil, nil, fmt.Errorf("FS: open failed: %w", err)
-	}
-
-	lexingSession := getLexerStreamingSession(langParser, producer)
-
-	langParser.parser.SetNodePoolPrefill(
-		nodePoolPrefillFromObservationCount(sourceFileSizeBytesForPoolHint(sourceFile), langParser.config.nodePoolPrefill),
-	)
-
-	parsingContext := syntaxa.BuildExecRuleContextFromStreamingSession(
-		langParser.parser,
-		langParser.lexer,
-		lexingSession,
-		syntaxErrors,
-		streamStats,
-		engineStats,
-	)
-
-	return parsingContext, lexingSession, nil
-}
-
-func getLexerStreamingSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
-	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
-	producer lexarch.ObservationProducerFn[TObservation],
-) *lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole] {
-	if langParser.lexingStreamingSessionCache == nil {
-		switch langParser.config.spec.Lexer.positionMode {
-		case lexerSpecPositionModeRuneFast:
-			producerRunes, ok := any(producer).(lexarch.ObservationProducerFn[rune])
-			if !ok {
-				panic("WithRunePositionTrackingFast requires rune observations")
-			}
-			sessionRunes := lexarch.StreamingLexerSessionCreateRuneFast[TLexerState, TToken, TTokenRole](
-				langParser.config.spec.Lexer.initialState,
-				producerRunes,
-				langParser.config.streaming.ReadChunkSize,
-				langParser.config.streaming.MaxBuffered,
-				langParser.config.spec.Lexer.runeTabWidth,
-			)
-			session, ok := any(sessionRunes).(*lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole])
-			if !ok {
-				panic("rune fast streaming session type mismatch")
-			}
-			langParser.lexingStreamingSessionCache = session
-			return session
-		case lexerSpecPositionModeByteFast:
-			producerBytes, ok := any(producer).(lexarch.ObservationProducerFn[byte])
-			if !ok {
-				panic("WithBytePositionTrackingFast requires byte observations")
-			}
-			sessionBytes := lexarch.StreamingLexerSessionCreateByteFast[TLexerState, TToken, TTokenRole](
-				langParser.config.spec.Lexer.initialState,
-				producerBytes,
-				langParser.config.streaming.ReadChunkSize,
-				langParser.config.streaming.MaxBuffered,
-			)
-			session, ok := any(sessionBytes).(*lexarch.StreamingLexerSession[TObservation, TLexerState, TToken, TTokenRole])
-			if !ok {
-				panic("byte fast streaming session type mismatch")
-			}
-			langParser.lexingStreamingSessionCache = session
-			return session
-		default:
-			session := lexarch.StreamingLexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
-				langParser.config.spec.Lexer.initialState,
-				producer,
-				langParser.config.spec.Lexer.newlineDetect,
-				langParser.config.spec.Lexer.columnAdvanceFn,
-				langParser.config.streaming.ReadChunkSize,
-				langParser.config.streaming.MaxBuffered,
-			)
-			langParser.lexingStreamingSessionCache = session
-			return session
-		}
-	}
-
-	langParser.lexingStreamingSessionCache.Reset(producer, langParser.config.spec.Lexer.initialState)
-	return langParser.lexingStreamingSessionCache
-}
-
-func newFileObservationProducer[TObservation cmp.Ordered](
-	sourceFile string,
-	mapFn func([]byte) ([]TObservation, error),
-	bufSize int,
-) (lexarch.ObservationProducerFn[TObservation], error) {
-	const channelCapacity = 8
-
-	type observationChunk struct {
-		data   []TObservation
-		pooled bool
-	}
-
-	chunkPool := sync.Pool{
-		New: func() any {
-			return make([]TObservation, 0, bufSize)
-		},
-	}
-	chunks := make(chan observationChunk, channelCapacity)
-	errCh := make(chan error, 1)
-
-	var startStream func() error
-	acquireChunk := func(size int) []TObservation {
-		candidate := chunkPool.Get()
-		if candidate == nil {
-			return make([]TObservation, size)
-		}
-		buf := candidate.([]TObservation)
-		if cap(buf) < size {
-			return make([]TObservation, size)
-		}
-		return buf[:size]
-	}
-	releaseChunk := func(chunk []TObservation) {
-		if chunk == nil {
-			return
-		}
-		chunkPool.Put(chunk[:0])
-	}
-
-	switch any(*new(TObservation)).(type) {
-
-	case rune:
-		startStream = func() error {
-			return system.FileStreamRunes(sourceFile, bufSize, func(rs []rune) error {
-				out := acquireChunk(len(rs))
-				for i, r := range rs {
-					out[i] = TObservation(r)
-				}
-				chunks <- observationChunk{data: out, pooled: true}
-				return nil
-			})
-		}
-
-	case byte:
-		startStream = func() error {
-			return system.FileStreamBytes(sourceFile, bufSize, func(bs []byte) error {
-				out := acquireChunk(len(bs))
-				for i := range bs {
-					out[i] = TObservation(bs[i])
-				}
-				chunks <- observationChunk{data: out, pooled: true}
-				return nil
-			})
-		}
-
-	default:
-		if mapFn == nil {
-			return nil, fmt.Errorf(
-				"streaming producer: mapFn required for non-byte and non-rune observations",
-			)
-		}
-
-		startStream = func() error {
-			return system.FileStreamAs(
-				sourceFile,
-				bufSize,
-				mapFn,
-				func(chunk []TObservation) error {
-					out := acquireChunk(len(chunk))
-					copy(out, chunk)
-					chunks <- observationChunk{data: out, pooled: true}
-					return nil
-				},
-			)
-		}
-	}
-
-	started := false
-
-	var pending []TObservation
-	var pendingOwned []TObservation
-	pendingPooled := false
-
-	return func(dst []TObservation) (n int, done bool, err error) {
-
-		if !started {
-			started = true
-
-			go func() {
-				errCh <- startStream()
-				close(chunks)
-			}()
-		}
-
-		if len(pending) > 0 {
-			n = min(len(dst), len(pending))
-			copy(dst, pending[:n])
-			pending = pending[n:]
-			if len(pending) == 0 && pendingPooled {
-				releaseChunk(pendingOwned)
-				pendingOwned = nil
-				pendingPooled = false
-			}
-			return n, false, nil
-		}
-
-		next, ok := <-chunks
-		if ok {
-			pending = next.data
-			pendingOwned = next.data
-			pendingPooled = next.pooled
-
-			n = min(len(dst), len(pending))
-			copy(dst, pending[:n])
-			pending = pending[n:]
-			if len(pending) == 0 && pendingPooled {
-				releaseChunk(pendingOwned)
-				pendingOwned = nil
-				pendingPooled = false
-			}
-			return n, false, nil
-		}
-
-		streamErr := <-errCh
-		if streamErr != nil {
-			return 0, false, streamErr
-		}
-
-		return 0, true, nil
-	}, nil
-}
-
 func nodePoolPrefillFromObservationCount(observationCount int, override int) int {
 	if override > 0 {
 		return override
@@ -1430,14 +936,6 @@ func nodePoolPrefillFromObservationCount(observationCount int, override int) int
 		return maxHint
 	}
 	return h
-}
-
-func sourceFileSizeBytesForPoolHint(path string) int {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return int(fi.Size())
 }
 
 func getSourceInput[TObservation cmp.Ordered](

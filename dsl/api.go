@@ -98,13 +98,7 @@ func (c *LangSpecCompilerConfiguration) WithDiagnosticSink(sink *LangSpecDiagnos
 	return c
 }
 
-/* WithLexerScanMode sets lexarch scan mode for compiled language lexers. */
-func (c *LangSpecCompilerConfiguration) WithLexerScanMode(mode lexarch.LexerScanMode) *LangSpecCompilerConfiguration {
-	c.lexerScanConfig.Mode = mode
-	return c
-}
-
-/* WithLexerScanConfig sets full lexarch scan configuration for compiled language lexers. */
+/* WithLexerScanConfig sets lexarch scan configuration for compiled language lexers (stats, ForceRawCopy). */
 func (c *LangSpecCompilerConfiguration) WithLexerScanConfig(cfg lexarch.LexerScanConfig) *LangSpecCompilerConfiguration {
 	c.lexerScanConfig = cfg
 	return c
