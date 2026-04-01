@@ -838,6 +838,7 @@ func LangParserParseFile[
 	if parseStats != nil {
 		parseStats.ParseOnly = time.Since(parseStart)
 		parseStats.LexObservationSteps = 0
+		parseStats.LexObservationStepsOk = false
 		parseStats.LSTNodeCount = parsingContext.Editor.CreatedCount()
 		parseStats.FinalLexerNextTokenNumber = 0
 	}

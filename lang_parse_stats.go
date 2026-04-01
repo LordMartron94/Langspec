@@ -28,5 +28,6 @@ type LangParseStats struct {
 	RawLexemeStreamOk         bool
 	FinalLexerNextTokenNumber int
 	LexObservationSteps       uint64
+	LexObservationStepsOk     bool
 	LSTNodeCount              int
 }

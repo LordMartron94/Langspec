@@ -5,6 +5,7 @@ import (
 	"foundation/formatting"
 	"io"
 	"langspec/validation"
+	"lexarch"
 	"strings"
 	"syntaxa"
 	"text/tabwriter"
@@ -24,27 +25,59 @@ func RenderSyntaxErrorsWithContext(
 	}
 
 	lines := splitLinesRunes(source)
+	sourceText := string(source)
 
 	fmt.Fprintln(w, "\n===== SYNTAX ERRORS =====")
 
 	for _, e := range errs.Errors {
-		renderSingleSyntaxError(w, e, lines, advanceFn)
+		renderSingleSyntaxError(w, e, sourceText, lines, advanceFn)
 	}
 
 	fmt.Fprintln(w, "========================")
 }
 
-func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], lines [][]rune, advanceFn columnAdvanceFn) {
-	printSyntaxErrorHeader(w, e)
-	renderDiagnosticContext(w, lines, e.StartLine, e.StartColumn, e.EndLine, e.EndColumn, advanceFn)
+func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], source string, lines [][]rune, advanceFn columnAdvanceFn) {
+	startLine, startCol, endLine, endCol := resolveSyntaxErrorLineSpan(e, source)
+	printSyntaxErrorHeader(w, e, source)
+	renderDiagnosticContext(w, lines, startLine, startCol, endLine, endCol, advanceFn)
 }
 
-func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError[rune]) {
+func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError[rune], source string) {
 	typeStr := "syntax"
 	if e.ProducedByLexer {
 		typeStr = "lexer"
 	}
-	fmt.Fprintf(w, "[%s] (rule=%s) %s at %d:%d\n", typeStr, e.Rule, e.Message, e.StartLine, e.StartColumn)
+	startLine, startCol, _, _ := resolveSyntaxErrorLineSpan(e, source)
+	fmt.Fprintf(w, "[%s] (rule=%s) %s at %d:%d\n", typeStr, e.Rule, e.Message, startLine, startCol)
+}
+
+func resolveSyntaxErrorLineSpan(
+	e syntaxa.SyntaxError[rune],
+	source string,
+) (startLine, startColumn, endLine, endColumn int) {
+	if e.StartLine > 0 && e.EndLine > 0 {
+		return e.StartLine, e.StartColumn, e.EndLine, e.EndColumn
+	}
+
+	if source == "" {
+		return 0, 0, 0, 0
+	}
+
+	start := e.AbsolutePosition
+	if start < 0 {
+		start = 0
+	}
+	end := e.AbsoluteEnd
+	if end < start {
+		end = start
+	}
+
+	span := lexarch.ByteSpan{
+		Offset: uint32(start),
+		Length: uint32(end - start),
+	}
+	pos := lexarch.LexerByteSpanToPosition(span, source, 4)
+	return pos.StartLine, pos.StartColumn, pos.EndLine, pos.EndColumn
 }
 
 func renderValidationEntries(
@@ -387,15 +420,16 @@ func renderLexemes(
 		return
 	}
 	for i, lexeme := range lexemes {
+		startLine, startColumn, endLine, endColumn := syntaxa.LexemeLineSpan(lexeme)
 		debug := fmt.Sprintf(
 			"[%s|%s] %q @ %d:%d-%d:%d",
 			formatToken(lexeme.Token),
 			formatRole(lexeme.Role),
 			string(lexeme.Raw),
-			lexeme.StartLine,
-			lexeme.StartColumn,
-			lexeme.EndLine,
-			lexeme.EndColumn,
+			startLine,
+			startColumn,
+			endLine,
+			endColumn,
 		)
 		fmt.Fprintf(w, "%05d) %s\n", i, debug)
 	}
