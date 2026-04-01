@@ -5,18 +5,19 @@ import (
 	"foundation/formatting"
 	"io"
 	"langspec/validation"
-	"lexarch"
 	"strings"
 	"syntaxa"
 	"text/tabwriter"
 )
+
+type columnAdvanceFn func(rune, int) int
 
 /* RenderSyntaxErrorsWithContext writes a formatted report of syntax errors with source context to w. */
 func RenderSyntaxErrorsWithContext(
 	w io.Writer,
 	source []rune,
 	errs *syntaxa.SyntaxErrors[rune],
-	advanceFn lexarch.ColumnAdvanceFn[rune],
+	advanceFn columnAdvanceFn,
 ) {
 	if w == nil || errs == nil || len(errs.Errors) == 0 {
 		return
@@ -33,7 +34,7 @@ func RenderSyntaxErrorsWithContext(
 	fmt.Fprintln(w, "========================")
 }
 
-func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], lines [][]rune, advanceFn lexarch.ColumnAdvanceFn[rune]) {
+func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], lines [][]rune, advanceFn columnAdvanceFn) {
 	printSyntaxErrorHeader(w, e)
 	renderDiagnosticContext(w, lines, e.StartLine, e.StartColumn, e.EndLine, e.EndColumn, advanceFn)
 }
@@ -50,7 +51,7 @@ func renderValidationEntries(
 	w io.Writer,
 	source []rune,
 	entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
-	advanceFn lexarch.ColumnAdvanceFn[rune],
+	advanceFn columnAdvanceFn,
 ) {
 	if w == nil || entries == nil || len(entries.Results) == 0 {
 		return
@@ -71,7 +72,7 @@ func renderValidationStage(
 	w io.Writer,
 	stage validation.StageValidationResult[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	lines [][]rune,
-	advanceFn lexarch.ColumnAdvanceFn[rune],
+	advanceFn columnAdvanceFn,
 ) {
 	fmt.Fprintf(w, "\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
 
@@ -89,7 +90,7 @@ func renderValidationEntry(
 	w io.Writer,
 	entry validation.ValidationEntry[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	lines [][]rune,
-	advanceFn lexarch.ColumnAdvanceFn[rune],
+	advanceFn columnAdvanceFn,
 ) {
 	fmt.Fprintf(w, "  [%v] %s — %s\n", entry.Severity, entry.Code, entry.Message)
 
@@ -121,7 +122,7 @@ func renderFallbackValidationSpan(
 	}
 }
 
-func renderDiagnosticContext(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
+func renderDiagnosticContext(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn columnAdvanceFn) {
 	if !isValidSpanRange(startL, endL, len(lines)) {
 		renderInvalidSpanBlock(w, lines, startL, startC, endL, endC, advanceFn)
 		return
@@ -146,7 +147,7 @@ func renderSingleLineHighlight(
 	w io.Writer,
 	line []rune,
 	lineNum, startCol, endCol int,
-	advanceFn lexarch.ColumnAdvanceFn[rune],
+	advanceFn columnAdvanceFn,
 ) {
 	var sourceBuilder strings.Builder
 	var markerBuilder strings.Builder
@@ -203,7 +204,7 @@ func buildMarkerFragment(currentCol, startCol, endCol, width int) string {
 	return ""
 }
 
-func renderMultiLineHighlight(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
+func renderMultiLineHighlight(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn columnAdvanceFn) {
 	firstLine := lines[startL-1]
 	renderSingleLineHighlight(w, firstLine, startL, startC, len(firstLine)+1, advanceFn)
 
@@ -215,7 +216,7 @@ func renderMultiLineHighlight(w io.Writer, lines [][]rune, startL, startC, endL,
 	renderSingleLineHighlight(w, lastLine, endL, 1, endC, advanceFn)
 }
 
-func renderInvalidSpanBlock(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn lexarch.ColumnAdvanceFn[rune]) {
+func renderInvalidSpanBlock(w io.Writer, lines [][]rune, startL, startC, endL, endC int, advanceFn columnAdvanceFn) {
 	fmt.Fprintln(w, " ── INVALID OR OUT-OF-BOUNDS SPAN DETECTED ────────────────")
 	fmt.Fprintf(w, "  Requested: %d:%d to %d:%d | Total lines: %d\n", startL, startC, endL, endC, len(lines))
 
@@ -378,7 +379,7 @@ func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump, cfgDump st
 
 func renderLexemes(
 	w io.Writer,
-	lexemes []lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	lexemes []syntaxa.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	formatToken func(LangSpecLexerTokenType) string,
 	formatRole func(LangSpecLexerTokenRole) string,
 ) {
@@ -386,7 +387,16 @@ func renderLexemes(
 		return
 	}
 	for i, lexeme := range lexemes {
-		debug := lexeme.DebugString(formatToken, formatRole)
+		debug := fmt.Sprintf(
+			"[%s|%s] %q @ %d:%d-%d:%d",
+			formatToken(lexeme.Token),
+			formatRole(lexeme.Role),
+			string(lexeme.Raw),
+			lexeme.StartLine,
+			lexeme.StartColumn,
+			lexeme.EndLine,
+			lexeme.EndColumn,
+		)
 		fmt.Fprintf(w, "%05d) %s\n", i, debug)
 	}
 }

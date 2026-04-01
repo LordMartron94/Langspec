@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"langspec/dsl"
 	"langspec/dsl/semantics"
-	"lexarch"
 	"memcore"
 	"memforge"
 	"strconv"
@@ -72,7 +71,7 @@ func debugParseResult(
 					}
 					return strconv.FormatUint(uint64(k), 10)
 				},
-				FormatToken:     func(l lexarch.Lexeme[rune, uint32, uint32]) string { return string(l.Raw) },
+				FormatToken:     func(l syntaxa.Lexeme[rune, uint32, uint32]) string { return string(l.Raw) },
 				FormatAttribute: func(k string, v any) string { return fmt.Sprintf("%s=%v", k, v) },
 				ShowTokens:      true,
 				ShowAttributes:  true,

@@ -4,7 +4,6 @@ import (
 	"autarch/pattern"
 	"cmp"
 	"foundation/hash"
-	"lexarch"
 	"syntaxa"
 	"syntaxa/lowering"
 )
@@ -233,7 +232,7 @@ Edge cases:
 - Returns an error if BuildStateGraph or EditorIRFromStateGraph fails.
 */
 func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
-	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
+	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 ) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {

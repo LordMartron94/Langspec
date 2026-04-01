@@ -15,10 +15,17 @@ import (
 	"syntaxa/lowering"
 )
 
+func advanceRuneTab4(r rune, currentCol int) int {
+	if r == '\t' {
+		return currentCol + 4
+	}
+	return currentCol + 1
+}
+
 // --------------------------------------------------------------- TYPE ALIASES
 
 /* LexingRuleset is the lexing ruleset type for the LangSpec DSL lexer (rune observations). */
-type LexingRuleset = lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
+type LexingRuleset = langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole]
 
 /* ValidationStage is a validation stage for the DSL LST when grammar package state is not yet available. */
 type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
@@ -62,7 +69,7 @@ type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
 	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 	diagnosticSink            *LangSpecDiagnosticSink
-	lexerScanConfig           lexarch.LexerScanConfig
+	lexerPatternCompiler      lexarch.PatternCompilerMode
 
 	lexerPositionTracking LangSpecLexerPositionTracking
 	lexerRuneTabWidth     int
@@ -85,7 +92,7 @@ func LangSpecCompilerConfigurationCreate(
 		scratchAllocationFunction: scratchAllocationFunction,
 		stageReporter:             stageReporter,
 		diagnosticSink:            nil,
-		lexerScanConfig:           lexarch.LexerScanConfigDefault(),
+		lexerPatternCompiler:      lexarch.PATTERN_COMPILE_GLUSHKOV,
 	}
 }
 
@@ -98,9 +105,9 @@ func (c *LangSpecCompilerConfiguration) WithDiagnosticSink(sink *LangSpecDiagnos
 	return c
 }
 
-/* WithLexerScanConfig sets lexarch scan configuration for compiled language lexers (stats, ForceRawCopy). */
-func (c *LangSpecCompilerConfiguration) WithLexerScanConfig(cfg lexarch.LexerScanConfig) *LangSpecCompilerConfiguration {
-	c.lexerScanConfig = cfg
+/* WithLexerPatternCompiler sets the lexarch pattern compiler backend for compiled language lexers. */
+func (c *LangSpecCompilerConfiguration) WithLexerPatternCompiler(mode lexarch.PatternCompilerMode) *LangSpecCompilerConfiguration {
+	c.lexerPatternCompiler = mode
 	return c
 }
 
@@ -187,7 +194,7 @@ type LangSpecCompiler struct {
 	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 
-	lexingRuleSet *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole]
+	lexingRuleSet *langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole]
 	programRule   Rule
 
 	sessionCache *langspec.LangParserSession[rune]
@@ -282,7 +289,7 @@ func LangSpecCompilerCompile(
 
 	// 2. Handle syntax errors
 	if syntaxErrors.HasErrors() {
-		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))
+		RenderSyntaxErrorsWithContext(compiler.diagnosticWriter, contentRune, syntaxErrors, advanceRuneTab4)
 		return result, fmt.Errorf("langspec parse failed with %d syntax errors", len(syntaxErrors.Errors))
 	}
 
@@ -303,7 +310,7 @@ func LangSpecCompilerCompile(
 	}
 
 	if hasCriticalValidationErrors(validationEntries) {
-		renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries, lexarch.ColumnAdvanceRune(4))
+		renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("parsing failed with validation errors")
 	}
 
@@ -336,7 +343,7 @@ func LangSpecCompilerCompile(
 	}
 
 	if hasCriticalValidationErrors(postValidationEntries) {
-		renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, lexarch.ColumnAdvanceRune(4))
+		renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("compilation failed with grammar safety errors")
 	}
 
@@ -453,7 +460,7 @@ func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCom
 					return k.String()
 				},
 
-				FormatToken: func(l lexarch.Lexeme[
+				FormatToken: func(l syntaxa.Lexeme[
 					rune,
 					LangSpecLexerTokenType,
 					LangSpecLexerTokenRole,
@@ -502,7 +509,7 @@ func LangSpecCompilerScopeMap(compiler *LangSpecCompiler) map[LangSpecLexerToken
 LangSpecCompilerLexingRuleSet returns the lexing ruleset used by the DSL compiler.
 Used by editor integrations to build syntax highlighting IR without depending on parser internals.
 */
-func LangSpecCompilerLexingRuleSet(compiler *LangSpecCompiler) *lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole] {
+func LangSpecCompilerLexingRuleSet(compiler *LangSpecCompiler) *langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole] {
 	return compiler.lexingRuleSet
 }
 

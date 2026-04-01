@@ -4,13 +4,16 @@ import (
 	"sort"
 	"strconv"
 
-	dslspec "langspec/dsl/spec"
 	. "langspec/dsl/spec"
+	dslspec "langspec/dsl/spec"
 )
 
+const compiledTokenIDStart = uint32(2)
+
 /*
-CompiledSymbolTable holds deterministic uint32 IDs (1..N per category) for compiled
-target-language token types, token roles, and parse node kinds. ID 0 is reserved as invalid.
+CompiledSymbolTable holds deterministic uint32 IDs for compiled target-language symbols.
+Token IDs start at 2 to avoid lexarch reserved token kinds (0=ERROR, 1=EOF).
+Role and node IDs start at 1. ID 0 is reserved as invalid.
 */
 type CompiledSymbolTable struct {
 	tokenNameByID []string
@@ -34,7 +37,7 @@ func CompiledSymbolTableBuild(tokens, roles, nodeKinds []string) *CompiledSymbol
 	}
 	t.tokenNameByID = make([]string, len(tokens))
 	for i, name := range tokens {
-		id := uint32(i + 1)
+		id := compiledTokenIDStart + uint32(i)
 		t.tokenNameByID[i] = name
 		t.tokenIDByName[name] = id
 	}
@@ -61,10 +64,10 @@ func (t *CompiledSymbolTable) TokenID(name string) uint32 {
 }
 
 func (t *CompiledSymbolTable) TokenName(id uint32) string {
-	if t == nil || id == 0 || int(id) > len(t.tokenNameByID) {
+	if t == nil || id < compiledTokenIDStart || int(id-compiledTokenIDStart+1) > len(t.tokenNameByID) {
 		return "Token(" + strconv.FormatUint(uint64(id), 10) + ")"
 	}
-	return t.tokenNameByID[id-1]
+	return t.tokenNameByID[id-compiledTokenIDStart]
 }
 
 func (t *CompiledSymbolTable) RoleID(name string) uint32 {

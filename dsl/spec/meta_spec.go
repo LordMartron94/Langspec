@@ -2,7 +2,6 @@ package spec
 
 import (
 	"langspec"
-	"lexarch"
 	"syntaxa"
 	"syntaxa/rule"
 )
@@ -32,17 +31,13 @@ and program rule for the LangSpec meta-language (.lspec).
 func BuildLangSpecDSLSpec() (
 	LanguageSpec,
 	*langspec.LangSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	*langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	Rule,
 ) {
 	factory, templates := dslSpecFactoryAndTemplates()
 	languageSpec := buildLanguageSpec(factory, templates)
 
 	lexerSpec, ruleset := buildLangSpecDSLLexerSpec(languageSpec)
-	lexerSpec.WithDFADebugFormatter(
-		lexarch.LexerDebugFormatterCreateRune[LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole](),
-	)
-
 	ruleBuilder := rule.RuleBuilderCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
 		LangSpecLexerTokenType.String,
 	)

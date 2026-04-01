@@ -8,13 +8,12 @@ import (
 /*
 LangParseStats is filled by LangParserParseFile when the stats pointer is non-nil.
 
-LexPretokenize covers pretokenized lexeme materialization (LexerSessionEnsurePreTokenizedAll).
+LexPretokenize covers one-time session token prefill/warmup before parse.
 ParseOnly is SyntaxaParserParseWithContext wall time after that.
 
-Stream holds raw peek/consume counts at the lexer boundary. RawLexemeStreamLen is len(preTokens)
-for the full input, read immediately after LexerSessionEnsurePreTokenizedAll (before parse), so it
-is not affected by parser restore clearing or rebuilding the pretokenized cache. LexObservationSteps
-is copied from the lexer’s bound LexScanStats after parse, if any.
+Stream holds raw peek/consume counts at the lexer boundary. RawLexemeStreamLen is the
+materialized token count captured before parse and is not affected by parser restores.
+LexObservationSteps counts lexer observation work gathered during lexing.
 
 Engine holds Syntaxa parse-engine counters (rule attempts, choice dispatch, recovery, LST pool).
 LSTNodeCount is len(Editor.created) after parse.

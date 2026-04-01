@@ -1,13 +1,13 @@
 package tests
 
 import (
+	"langspec"
 	"langspec/bootstrap"
 	"langspec/dsl"
 	dsleditor "langspec/dsl/editor"
 	dslspec "langspec/dsl/spec"
 	"langspec/editor"
 	"langspec/toolchain"
-	"lexarch"
 	"testing"
 )
 
@@ -42,7 +42,7 @@ func TestClientDSLToolchain(t *testing.T) {
 		bootstrap.WithSublimeToolchain(
 			stringManifest,
 			func(
-				_ *lexarch.LexingRuleset[rune, uint32, uint32],
+				_ *editor.LexingRuleSet[rune, uint32, uint32],
 				_ func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext,
 			) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
 				return adaptGoOverrideProducer(compileResult, compiler)
@@ -93,6 +93,7 @@ func adaptGoOverrideProducer(
 ) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
 
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
+	editorRuleset := convertRulesetToEditorForToolchain(ruleset)
 	scopeMap := dsl.LangSpecCompilerScopeMap(compiler)
 
 	manifest := dsleditor.LangSpecEditorManifest
@@ -100,7 +101,7 @@ func adaptGoOverrideProducer(
 
 	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind](manifest)
 
-	nativeProducer := dsleditor.BuildEditorOverrideProducer(ruleset, ctxProducer)
+	nativeProducer := dsleditor.BuildEditorOverrideProducer(editorRuleset, ctxProducer)
 
 	tokenMap := map[string]dsl.LangSpecLexerTokenType{
 		dslspec.TokLineComment.String():  dslspec.TokLineComment,
@@ -171,4 +172,20 @@ func adaptGoOverrideProducer(
 
 		return out
 	}
+}
+
+func convertRulesetToEditorForToolchain(
+	ruleset *langspec.LexerRuleset[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+) *editor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole] {
+	sourceRules := langspec.LexerRulesetGetRules(*ruleset)
+	out := make([]editor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole], 0, len(sourceRules))
+	for _, rule := range sourceRules {
+		out = append(out, editor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole]{
+			Token:    rule.Token,
+			Role:     rule.Role,
+			Pattern:  rule.Pattern,
+			Priority: rule.Priority,
+		})
+	}
+	return editor.LexingRuleSetCreate(out...)
 }

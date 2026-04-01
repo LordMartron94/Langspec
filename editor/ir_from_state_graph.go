@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"autarch/pattern"
-	"lexarch"
 	"syntaxa"
 	"syntaxa/lowering"
 )
@@ -54,7 +53,7 @@ func EditorIRFromStateGraph[
 	TContext any,
 ](
 	sg *lowering.StateGraph[TToken, TNodeKind],
-	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
+	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
 ) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {
@@ -64,11 +63,11 @@ func EditorIRFromStateGraph[
 
 	sanitizer := text.NewIdentifierSanitizer()
 
-	tokenToRule := make(map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole])
+	tokenToRule := make(map[TToken]LexingRule[TObservation, TToken, TTokenRole])
 	tokenToPriority := make(map[TToken]int)
 	tokenToRuleIndex := make(map[TToken]int)
 
-	for i, rule := range lexingRuleset.GetRules() {
+	for i, rule := range LexingRuleSetGetRules(lexingRuleset) {
 		tokenToRule[rule.Token] = rule
 		tokenToPriority[rule.Token] = rule.Priority
 		tokenToRuleIndex[rule.Token] = i
@@ -232,7 +231,7 @@ func buildEditorTransitionsFromGeneric[
 ](
 	tr lowering.Transition[TToken, TNodeKind],
 	stateByID map[string]*EditorState[TObservation, TContext],
-	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	tokenToRule map[TToken]LexingRule[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
@@ -272,7 +271,7 @@ func buildDefaultTransition[
 ](
 	tr lowering.Transition[TToken, TNodeKind],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	tokenToRule map[TToken]LexingRule[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	stateByID map[string]*EditorState[TObservation, TContext],
 ) (EditorTransition[TObservation, TContext], bool) {
@@ -303,7 +302,7 @@ func buildOverrideTransition[
 	tr lowering.Transition[TToken, TNodeKind],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	override EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-	tokenToRule map[TToken]lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	tokenToRule map[TToken]LexingRule[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	stateByID map[string]*EditorState[TObservation, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
@@ -470,7 +469,7 @@ func buildAmbientFromStateGraph[
 	TNodeKind comparable,
 	TContext any,
 ](
-	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
+	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
 	grammarTokens map[TToken]bool,
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
@@ -500,7 +499,7 @@ func buildAmbientTransitionsForToken[
 	TNodeKind comparable,
 	TContext any,
 ](
-	rule lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole],
+	rule LexingRule[TObservation, TToken, TTokenRole],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
@@ -567,22 +566,22 @@ func getSortedAmbientCandidates[
 	TToken comparable,
 	TTokenRole comparable,
 ](
-	lexingRuleset *lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
+	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
 	grammarTokens map[TToken]bool,
 	tokenToRuleIndex map[TToken]int,
 ) []struct {
-	rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+	rule     LexingRule[TObservation, TToken, TTokenRole]
 	priority int
 } {
 	var candidates []struct {
-		rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+		rule     LexingRule[TObservation, TToken, TTokenRole]
 		priority int
 	}
 
-	for _, rule := range lexingRuleset.GetRules() {
+	for _, rule := range LexingRuleSetGetRules(lexingRuleset) {
 		if !grammarTokens[rule.Token] {
 			candidates = append(candidates, struct {
-				rule     lexarch.LexerRuleReadOnly[TObservation, TToken, TTokenRole]
+				rule     LexingRule[TObservation, TToken, TTokenRole]
 				priority int
 			}{rule: rule, priority: rule.Priority})
 		}

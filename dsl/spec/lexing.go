@@ -2,10 +2,7 @@ package spec
 
 import (
 	"langspec"
-	"lexarch"
 )
-
-var runeFormatter = lexarch.RuneFormatterDefault()
 
 /*
 BuildLexerSpec creates the LexerSpec and LexingRuleset from the language spec.
@@ -13,7 +10,7 @@ Iterates spec.Tokens and adds a rule for each token with Pattern != nil.
 */
 func BuildLexerSpec(spec LanguageSpec) (
 	*langspec.LexerSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState],
-	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	*langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole],
 ) {
 	lexerSpec := langspec.LexerSpecCreate[
 		rune,
@@ -21,21 +18,15 @@ func BuildLexerSpec(spec LanguageSpec) (
 		LangSpecLexerTokenRole](
 		TokEOF,
 		LANG_SPEC_LEXER_STATE_DEFAULT,
-		lexarch.NewlineDetectorRune(),
-		lexarch.ColumnAdvanceRune(4),
-		lexarch.RunesToBytesDefault(),
-		runeFormatter,
-		lexarch.LexarchRuneDomain(),
+		func(r rune) string { return string(r) },
+		nil,
 		func(t LangSpecLexerTokenType) string { return t.String() },
 	)
 
-	rs := lexarch.LexingRulesetCreate[
-		rune,
+	rs := langspec.LexerRulesetCreate[
 		LangSpecLexerTokenType,
 		LangSpecLexerTokenRole,
-	](
-		lexarch.TokenResolutionStepLongestThenPriority[LangSpecLexerTokenType],
-	)
+	]()
 
 	for _, tok := range spec.Tokens {
 		if tok.Pattern != nil {
@@ -52,7 +43,7 @@ func BuildLexerSpec(spec LanguageSpec) (
 
 func buildLangSpecDSLLexerSpec(spec LanguageSpec) (
 	*langspec.LexerSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState],
-	*lexarch.LexingRuleset[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	*langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole],
 ) {
 	return BuildLexerSpec(spec)
 }

@@ -6,11 +6,11 @@ import (
 	"foundation/bytes"
 	"foundation/domain"
 	"foundation/hash"
+	"langspec"
 	"langspec/dsl"
 	dslspec "langspec/dsl/spec"
 	langspeceditor "langspec/editor"
 	"langspec/toolchain"
-	"lexarch"
 )
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
@@ -34,6 +34,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](manifest)
 
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
+	editorRuleset := convertRulesetToEditor(ruleset)
 
 	irConfig := langspeceditor.EditorIRConfigurationCreate(
 		hasher,
@@ -44,14 +45,14 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{node.String()}, 0x00))
 		},
 		ctxProducer,
-		BuildEditorOverrideProducer(ruleset, ctxProducer),
+		BuildEditorOverrideProducer(editorRuleset, ctxProducer),
 		func(left, right toolchain.SublimeContext) bool {
 			return left == right
 		},
 	)
 
 	runnerCfg := &toolchain.SublimeRunnerConfig[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState, dsl.LangSpecParserNodeKind]{
-		LexerRuleset:   ruleset,
+		LexerRuleset:   editorRuleset,
 		GrammarPackage: dsl.LangSpecCompilerGrammarPackage(compiler),
 		IRConfig:       irConfig,
 		FileExtensions: []string{".lspec"},
@@ -63,12 +64,28 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	return toolchain.RunSublimeGenerator(runnerCfg)
 }
 
+func convertRulesetToEditor(
+	ruleset *langspec.LexerRuleset[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+) *langspeceditor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole] {
+	sourceRules := langspec.LexerRulesetGetRules(*ruleset)
+	out := make([]langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole], 0, len(sourceRules))
+	for _, rule := range sourceRules {
+		out = append(out, langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole]{
+			Token:    rule.Token,
+			Role:     rule.Role,
+			Pattern:  rule.Pattern,
+			Priority: rule.Priority,
+		})
+	}
+	return langspeceditor.LexingRuleSetCreate(out...)
+}
+
 /*
 BuildEditorOverrideProducer returns an override producer for LangSpec DSL tokens (comments, regex, symbol refs).
 Pass the result into EditorIRConfigurationCreate together with ctxProducer from the manifest.
 */
 func BuildEditorOverrideProducer(
-	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+	ruleset *langspeceditor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
 	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
 ) func(editorCtx *EditorCtx) []*EditorOverride {
 	return func(editorCtx *EditorCtx) []*EditorOverride {
@@ -95,7 +112,7 @@ func BuildEditorOverrideProducer(
 }
 
 func identifierRefOverrides(
-	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+	ruleset *langspeceditor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
 	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
 ) []*EditorOverride {
 	identRegex := getTokenRegex(ruleset, dslspec.TokIdentifier)
@@ -125,10 +142,10 @@ func identifierRefOverrides(
 
 // Helper to extract the regex string natively from your lexer rules
 func getTokenRegex(
-	ruleset *lexarch.LexingRuleset[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+	ruleset *langspeceditor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
 	token dsl.LangSpecLexerTokenType,
 ) string {
-	for _, rule := range ruleset.GetRules() {
+	for _, rule := range langspeceditor.LexingRuleSetGetRules(ruleset) {
 		if rule.Token == token {
 			regex, err := rule.Pattern.ToRegEx()
 			if err != nil {

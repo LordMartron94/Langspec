@@ -7,7 +7,7 @@ import (
 	"langspec/dsl"
 	"langspec/dsl/generator"
 	dslspec "langspec/dsl/spec"
-	"lexarch"
+	langspeceditor "langspec/editor"
 	"testing"
 )
 
@@ -37,7 +37,7 @@ func TestMaintainerGenerateLSpecExample(t *testing.T) {
 
 	if err := generator.GenerateLSpec(
 		dsl.LangSpecCompilerGrammarPackage(compiler),
-		dsl.LangSpecCompilerLexingRuleSet(compiler),
+		convertRulesetToEditor(dsl.LangSpecCompilerLexingRuleSet(compiler)),
 		testOutput,
 		genCfg,
 	); err != nil {
@@ -66,7 +66,7 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 
 	if err := generator.GenerateLSpec(
 		dsl.LangSpecCompilerGrammarPackage(compiler),
-		dsl.LangSpecCompilerLexingRuleSet(compiler),
+		convertRulesetToEditor(dsl.LangSpecCompilerLexingRuleSet(compiler)),
 		testOutput,
 		genCfg,
 	); err != nil {
@@ -89,11 +89,32 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 	debugParseResult(false, sink, trace, rootNode, compiledSym)
 
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		dsl.RenderSyntaxErrorsWithContext(sink.Writer, contentRune, syntaxErrors, lexarch.ColumnAdvanceRune(4))
+		dsl.RenderSyntaxErrorsWithContext(sink.Writer, contentRune, syntaxErrors, func(r rune, col int) int {
+			if r == '\t' {
+				return col + 4
+			}
+			return col + 1
+		})
 		t.Fatalf("langspec generated-file parse failed with %d syntax errors", len(syntaxErrors.Errors))
 	}
 
 	if err != nil {
 		t.Fatalf("langspec generated-file parse failed: %s", err.Error())
 	}
+}
+
+func convertRulesetToEditor(
+	ruleset *langspec.LexerRuleset[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
+) *langspeceditor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole] {
+	sourceRules := langspec.LexerRulesetGetRules(*ruleset)
+	out := make([]langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole], 0, len(sourceRules))
+	for _, rule := range sourceRules {
+		out = append(out, langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole]{
+			Token:    rule.Token,
+			Role:     rule.Role,
+			Pattern:  rule.Pattern,
+			Priority: rule.Priority,
+		})
+	}
+	return langspeceditor.LexingRuleSetCreate(out...)
 }

@@ -120,13 +120,13 @@ func generateBindingsCode(packageName string, prefix string, tokens []string, no
 		sb.WriteString("import \"strconv\"\n\n")
 	}
 
-	writeUint32TypeBlock(&sb, prefix, "Token", tokens)
-	writeUint32TypeBlock(&sb, prefix, "Node", nodes)
+	writeUint32TypeBlock(&sb, prefix, "Token", tokens, 2)
+	writeUint32TypeBlock(&sb, prefix, "Node", nodes, 1)
 
 	return strings.TrimSpace(sb.String()) + "\n"
 }
 
-func writeUint32TypeBlock(sb *strings.Builder, prefix string, kind string, items []string) {
+func writeUint32TypeBlock(sb *strings.Builder, prefix string, kind string, items []string, startID int) {
 	if len(items) == 0 {
 		return
 	}
@@ -142,7 +142,7 @@ func writeUint32TypeBlock(sb *strings.Builder, prefix string, kind string, items
 	sb.WriteString("const (\n")
 
 	for i, item := range items {
-		id := i + 1
+		id := startID + i
 		constName := item
 		if prefix != "" {
 			constName = fmt.Sprintf("%s_%s", prefix, item)
@@ -159,9 +159,9 @@ func writeUint32TypeBlock(sb *strings.Builder, prefix string, kind string, items
 	sb.WriteString("}\n\n")
 
 	sb.WriteString(fmt.Sprintf("func (t %s) String() string {\n", typeName))
-	sb.WriteString("\tif t == 0 || int(t) > len(" + tableVar + ") {\n")
+	sb.WriteString("\tif t < " + strconv.Itoa(startID) + " || int(t-" + strconv.Itoa(startID) + ") >= len(" + tableVar + ") {\n")
 	sb.WriteString("\t\treturn \"" + typeName + "(\" + strconv.FormatUint(uint64(t), 10) + \")\"\n")
 	sb.WriteString("\t}\n")
-	sb.WriteString("\treturn " + tableVar + "[t-1]\n")
+	sb.WriteString("\treturn " + tableVar + "[t-" + strconv.Itoa(startID) + "]\n")
 	sb.WriteString("}\n\n")
 }

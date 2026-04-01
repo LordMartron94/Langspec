@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"foundation/hash"
 	"foundation/system"
+	"langspec"
 	"langspec/dsl"
 	"langspec/editor"
 	"langspec/editor/sublime"
-	"lexarch"
 	"strings"
 	"syntaxa"
 )
@@ -38,7 +38,7 @@ SublimeRunnerConfig holds the lexer, grammar, IR config, file extensions, base s
 and scope suffix for a single Sublime generator run. Used after the toolchain has built the editor IR.
 */
 type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
-	LexerRuleset   *lexarch.LexingRuleset[TObservation, TToken, TTokenRole]
+	LexerRuleset   *editor.LexingRuleSet[TObservation, TToken, TTokenRole]
 	GrammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 	IRConfig       *editor.EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, SublimeContext]
 	FileExtensions []string
@@ -221,9 +221,10 @@ func executeSublimeToolchain(
 	)
 
 	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
+	editorRuleset := convertRulesetToEditor(ruleset)
 
 	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, uint32]{
-		LexerRuleset:   &ruleset,
+		LexerRuleset:   editorRuleset,
 		GrammarPackage: &compileResult.CompiledGrammarPackage,
 		IRConfig:       irConfig,
 		FileExtensions: fileExtensions,
@@ -233,6 +234,22 @@ func executeSublimeToolchain(
 	}
 
 	return RunSublimeGenerator(runnerCfg)
+}
+
+func convertRulesetToEditor(
+	ruleset langspec.LexerRuleset[uint32, uint32],
+) *editor.LexingRuleSet[rune, uint32, uint32] {
+	sourceRules := langspec.LexerRulesetGetRules(ruleset)
+	out := make([]editor.LexingRule[rune, uint32, uint32], 0, len(sourceRules))
+	for _, rule := range sourceRules {
+		out = append(out, editor.LexingRule[rune, uint32, uint32]{
+			Token:    rule.Token,
+			Role:     rule.Role,
+			Pattern:  rule.Pattern,
+			Priority: rule.Priority,
+		})
+	}
+	return editor.LexingRuleSetCreate(out...)
 }
 
 /*

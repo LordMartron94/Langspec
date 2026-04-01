@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"foundation/system"
 	"foundation/text"
+	"langspec/editor"
 	"langspec/toolchain"
-	"lexarch"
 	"slices"
 	"strings"
 	"syntaxa"
@@ -132,7 +132,7 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithGoBindingsConfigura
 /* GenerateLSpec writes a .lspec file from the given grammar package and lexer ruleset using configuration. */
 func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
-	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
+	lexingRuleSet *editor.LexingRuleSet[rune, TToken, TTokenRole],
 	outputPath string,
 	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
 ) error {
@@ -145,7 +145,7 @@ func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 
 func writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
-	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
+	lexingRuleSet *editor.LexingRuleSet[rune, TToken, TTokenRole],
 	outputPath string,
 	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
 ) error {
@@ -164,7 +164,7 @@ func writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 
 func createGenerator[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
-	lexingRuleSet *lexarch.LexingRuleset[rune, TToken, TTokenRole],
+	lexingRuleSet *editor.LexingRuleSet[rune, TToken, TTokenRole],
 	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
 ) *generator[TToken, TTokenRole, TNodeKind, TLexerState] {
 	return &generator[TToken, TTokenRole, TNodeKind, TLexerState]{
@@ -192,7 +192,7 @@ func createGenerator[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 
 type generator[TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
 	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState]
-	lexingRuleSet  *lexarch.LexingRuleset[rune, TToken, TTokenRole]
+	lexingRuleSet  *editor.LexingRuleSet[rune, TToken, TTokenRole]
 
 	targetLSpecVersion string
 	emitRegex          bool
@@ -290,7 +290,7 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildGoBindingsP
 }
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPatternSection() Doc {
-	rules := g.lexingRuleSet.GetRules()
+	rules := editor.LexingRuleSetGetRules(g.lexingRuleSet)
 	if len(rules) == 0 {
 		return concat(doctext("PATTERN {"), line(), doctext("}"))
 	}
@@ -311,14 +311,14 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPatternSect
 	)
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPatternRule(lexRule lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole]) Doc {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPatternRule(lexRule editor.LexingRule[rune, TToken, TTokenRole]) Doc {
 	if g.emitRegex {
 		return g.buildRegExRuleDoc(lexRule)
 	}
 	return g.buildDecompiledRuleDoc(lexRule)
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildRegExRuleDoc(lexRule lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole]) Doc {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildRegExRuleDoc(lexRule editor.LexingRule[rune, TToken, TTokenRole]) Doc {
 	regex, err := lexRule.Pattern.ToRegEx()
 	if err != nil {
 		panic(fmt.Errorf("engine error while converting pattern to RegEx: %w", err))
@@ -327,7 +327,7 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildRegExRuleDo
 	return doctext(ruleStr)
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildDecompiledRuleDoc(lexRule lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole]) Doc {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildDecompiledRuleDoc(lexRule editor.LexingRule[rune, TToken, TTokenRole]) Doc {
 	patternName := g.formatPatternName(lexRule.Token)
 	decompiler := newLSpecDecompiler()
 	lexRule.Pattern.Accept(decompiler.visitor())
@@ -446,7 +446,7 @@ func (d *lspecDecompiler) String() string {
 }
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLexSection() Doc {
-	rules := g.lexingRuleSet.GetRules()
+	rules := editor.LexingRuleSetGetRules(g.lexingRuleSet)
 	if len(rules) == 0 {
 		return concat(doctext("LEX {"), line(), doctext("}"))
 	}
@@ -493,7 +493,7 @@ type lexRow struct {
 	Meta     string
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLexRows(rules []lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole]) []lexRow {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLexRows(rules []editor.LexingRule[rune, TToken, TTokenRole]) []lexRow {
 	rows := make([]lexRow, 0, len(rules))
 	for _, rule := range rules {
 		rows = append(rows, g.buildSingleLexRow(rule))
@@ -501,7 +501,7 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLexRows(rul
 	return rows
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRow(rule lexarch.LexerRuleReadOnly[rune, TToken, TTokenRole]) lexRow {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRow(rule editor.LexingRule[rune, TToken, TTokenRole]) lexRow {
 	var attributes []string
 
 	if g.eofToken != nil && rule.Token == *g.eofToken {

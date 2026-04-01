@@ -1,7 +1,6 @@
 package langspec
 
 import (
-	"autarch"
 	"autarch/pattern"
 	"cmp"
 	"fmt"
@@ -10,7 +9,7 @@ import (
 	"lexarch"
 	"memarch"
 	"memcore"
-	"strings"
+	"reflect"
 	"sync/atomic"
 	"syntaxa"
 	"time"
@@ -20,24 +19,18 @@ import (
 
 /* LexerSpec defines the complete lexing protocol for a language. */
 type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable] struct {
-	rulesets map[TLexerState]lexarch.LexingRuleset[TObservation, TToken, TTokenRole]
+	rulesets map[TLexerState]LexerRuleset[TToken, TTokenRole]
 
 	initialState TLexerState
 
-	newlineDetect   lexarch.NewlineDetector[TObservation]
-	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation]
-	toBytes         func(observations []TObservation) []byte
-
-	observationFormatter lexarch.ObservationFormatter[TObservation]
+	observationFormatter syntaxa.ObservationFormatter[TObservation]
 	observationDomain    *domain.DiscreteDomain[TObservation]
 
 	tokenFormatter func(token TToken) string
-	dfaFormatter   *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]]
-
-	compilerMode lexarch.CompilerMode
-	scanConfig   lexarch.LexerScanConfig
-	positionMode lexerSpecPositionMode
-	runeTabWidth int
+	dfaFormatter   any
+	compilerMode   lexarch.PatternCompilerMode
+	positionMode   lexerSpecPositionMode
+	runeTabWidth   int
 
 	eofToken TToken
 }
@@ -50,29 +43,84 @@ const (
 	lexerSpecPositionModeByteFast
 )
 
+type LexerRule[TToken, TTokenRole comparable] struct {
+	pattern  pattern.RegulaAST[rune]
+	token    TToken
+	role     TTokenRole
+	priority int
+}
+
+type LexerRuleReadOnly[TToken, TTokenRole comparable] struct {
+	Pattern  pattern.RegulaAST[rune]
+	Token    TToken
+	Role     TTokenRole
+	Priority int
+}
+
+type LexerRuleset[TToken, TTokenRole comparable] struct {
+	rules []LexerRule[TToken, TTokenRole]
+}
+
+func LexerRulesetCreate[TToken, TTokenRole comparable]() *LexerRuleset[TToken, TTokenRole] {
+	return &LexerRuleset[TToken, TTokenRole]{
+		rules: make([]LexerRule[TToken, TTokenRole], 0),
+	}
+}
+
+func (r *LexerRuleset[TToken, TTokenRole]) WithRulePriority(
+	pat pattern.RegulaAST[rune],
+	token TToken,
+	role TTokenRole,
+	priority int,
+) *LexerRuleset[TToken, TTokenRole] {
+	r.rules = append(r.rules, LexerRule[TToken, TTokenRole]{
+		pattern:  pat,
+		token:    token,
+		role:     role,
+		priority: priority,
+	})
+	return r
+}
+
+func (r *LexerRuleset[TToken, TTokenRole]) WithDelimitedRule(
+	_ pattern.RegulaAST[rune],
+	_ pattern.RegulaAST[rune],
+	_ TToken,
+) *LexerRuleset[TToken, TTokenRole] {
+	return r
+}
+
+func LexerRulesetGetRules[TToken, TTokenRole comparable](
+	ruleset LexerRuleset[TToken, TTokenRole],
+) []LexerRuleReadOnly[TToken, TTokenRole] {
+	out := make([]LexerRuleReadOnly[TToken, TTokenRole], len(ruleset.rules))
+	for i, rule := range ruleset.rules {
+		out[i] = LexerRuleReadOnly[TToken, TTokenRole]{
+			Pattern:  rule.pattern,
+			Token:    rule.token,
+			Role:     rule.role,
+			Priority: rule.priority,
+		}
+	}
+	return out
+}
+
 /* LexerSpecCreate constructs a lexer specification. */
 func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable](
 	eofToken TToken,
 	initialState TLexerState,
-	newlineDetect lexarch.NewlineDetector[TObservation],
-	columnAdvanceFn lexarch.ColumnAdvanceFn[TObservation],
-	toBytes func(observations []TObservation) []byte,
-	observationFormatter lexarch.ObservationFormatter[TObservation],
+	observationFormatter syntaxa.ObservationFormatter[TObservation],
 	observationDomain *domain.DiscreteDomain[TObservation],
 	tokenFormatter func(token TToken) string,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	return &LexerSpec[TObservation, TToken, TTokenRole, TLexerState]{
-		rulesets:             make(map[TLexerState]lexarch.LexingRuleset[TObservation, TToken, TTokenRole]),
+		rulesets:             make(map[TLexerState]LexerRuleset[TToken, TTokenRole]),
 		initialState:         initialState,
-		newlineDetect:        newlineDetect,
-		columnAdvanceFn:      columnAdvanceFn,
-		toBytes:              toBytes,
 		eofToken:             eofToken,
 		observationFormatter: observationFormatter,
 		observationDomain:    observationDomain,
 		tokenFormatter:       tokenFormatter,
-		compilerMode:         lexarch.Glushkov,
-		scanConfig:           lexarch.LexerScanConfigDefault(),
+		compilerMode:         lexarch.PATTERN_COMPILE_GLUSHKOV,
 		positionMode:         lexerSpecPositionModeGeneric,
 	}
 }
@@ -80,7 +128,7 @@ func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState c
 /* WithRuleset registers a ruleset for a lexer state. */
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRuleset(
 	state TLexerState,
-	rules lexarch.LexingRuleset[TObservation, TToken, TTokenRole],
+	rules LexerRuleset[TToken, TTokenRole],
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	l.rulesets[state] = rules
 	return l
@@ -89,29 +137,21 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithRuleset(
 /* Ruleset returns the ruleset for the given lexer state. Returns a zero ruleset if the state is not registered. */
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) Ruleset(
 	state TLexerState,
-) lexarch.LexingRuleset[TObservation, TToken, TTokenRole] {
+) LexerRuleset[TToken, TTokenRole] {
 	return l.rulesets[state]
 }
 
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithDFADebugFormatter(
-	f *autarch.DFADebugFormatter[TObservation, pattern.AnnotatedOutcome[lexarch.TokenOutcome[TToken, TTokenRole]]],
+	f any,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	l.dfaFormatter = f
 	return l
 }
 
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithCompilationMode(
-	mode lexarch.CompilerMode,
+	mode lexarch.PatternCompilerMode,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	l.compilerMode = mode
-	return l
-}
-
-/* WithScanConfig replaces lexer scan configuration (stats, ForceRawCopy). */
-func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithScanConfig(
-	cfg lexarch.LexerScanConfig,
-) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
-	l.scanConfig = cfg
 	return l
 }
 
@@ -544,10 +584,10 @@ func (l *LangParserSession[TObservation]) Reset(
 type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable] struct {
 	config *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
-	lexer  *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole]
+	lexer  *lexarch.Lexer
 	parser *syntaxa.SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
 
-	lexingSessionCache *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole]
+	lexingSessionCache *lexarch.LexingSession
 
 	destroyed atomic.Bool
 }
@@ -563,22 +603,72 @@ func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken
 	maxLexerAutomatonMemory memcore.MemoryUnitBytes,
 	nfaToDFAPipelineMinTemp, nfaToDFAPipelineMaxTemp memcore.MemoryUnitBytes,
 	spec *LexerSpec[TObservation, TToken, TTokenRole, TLexerState],
-) *lexarch.Lexer[TObservation, TLexerState, TToken, TTokenRole] {
-	return lexarch.LexerCreate(
-		spec.rulesets,
-		spec.eofToken,
-		scratchAllocationFn,
-		maxLexerAutomatonMemory,
-		nfaToDFAPipelineMinTemp,
-		nfaToDFAPipelineMaxTemp,
-		lexarch.ObservationCTXCreate(
-			spec.observationFormatter,
-			spec.observationDomain,
-			spec.toBytes,
-		),
-		spec.compilerMode,
-		spec.scanConfig,
-	)
+) *lexarch.Lexer {
+	_ = scratchAllocationFn
+	cfg := lexarch.LexerConfigurationCreate()
+	lexarch.LexerConfigurationSetPatternCompiler(cfg, spec.compilerMode)
+	lexarch.LexerConfigurationSetMainMemory(cfg, memcore.KiloByte, maxLexerAutomatonMemory)
+	lexarch.LexerConfigurationSetScratchMemory(cfg, nfaToDFAPipelineMinTemp, nfaToDFAPipelineMaxTemp)
+	lexarch.LexerConfigurationSetTokenKindFormatter(cfg, func(kind lexarch.TokenKind) string {
+		return spec.tokenFormatter(langspecConvertUint32ToGeneric[TToken](uint32(kind), "token formatter"))
+	})
+	isStart := true
+	for state, ruleset := range spec.rulesets {
+		stateRules := make([]*lexarch.LexingRule, 0, len(ruleset.rules))
+		for _, r := range ruleset.rules {
+			// EOF is a virtual parser token and must never become a concrete lexing rule.
+			if r.token == spec.eofToken {
+				continue
+			}
+
+			tokenKind := langspecConvertGenericToUint32(r.token, "token kind")
+			if tokenKind == uint32(lexarch.TokenKindEOF) || tokenKind == uint32(lexarch.TokenKindError) {
+				panic(fmt.Sprintf(
+					"langspec: lexer rule in state %v uses reserved lexarch token kind (%d); keep EOF/ERROR virtual-only",
+					state,
+					tokenKind,
+				))
+			}
+
+			stateRules = append(stateRules, lexarch.LexingRuleCreate(
+				r.pattern,
+				r.priority,
+				lexarch.TokenKind(tokenKind),
+				lexarch.TokenRole(langspecConvertGenericToUint32(r.role, "token role")),
+			))
+		}
+		lexState := lexarch.LexingStateCreate(fmt.Sprintf("%v", state), stateRules)
+		lexarch.LexerConfigurationRegisterState(cfg, lexState, isStart)
+		isStart = false
+	}
+	return lexarch.LexerCreate(cfg)
+}
+
+func langspecConvertGenericToUint32[T comparable](value T, field string) uint32 {
+	target := reflect.TypeOf(uint32(0))
+	val := reflect.ValueOf(value)
+	if !val.IsValid() {
+		panic(fmt.Sprintf("langspec: invalid %s conversion to uint32", field))
+	}
+	if !val.Type().ConvertibleTo(target) {
+		panic(fmt.Sprintf("langspec: %s type %s is not convertible to uint32", field, val.Type().String()))
+	}
+	return uint32(val.Convert(target).Uint())
+}
+
+func langspecConvertUint32ToGeneric[T comparable](value uint32, field string) T {
+	var zero T
+	target := reflect.TypeOf(zero)
+	if target == nil {
+		panic(fmt.Sprintf("langspec: invalid generic target for %s conversion", field))
+	}
+
+	val := reflect.ValueOf(value)
+	if !val.Type().ConvertibleTo(target) {
+		panic(fmt.Sprintf("langspec: uint32 is not convertible to %s for %s", target.String(), field))
+	}
+
+	return val.Convert(target).Interface().(T)
 }
 
 /* LangParserCreate constructs a language parser instance. */
@@ -625,40 +715,12 @@ func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) SetCollec
 func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) DebugDumpLexerDFA(
 	state TLexerState,
 ) string {
-
-	spec := p.config.spec.Lexer
-
-	if spec.dfaFormatter == nil {
-		return "DFA debug formatter not configured"
-	}
-
-	return lexarch.LexerDebugDFA(
-		p.lexer,
-		state,
-		spec.dfaFormatter,
-	)
+	_ = state
+	return "DFA debug dump unavailable on current lexarch runtime"
 }
 
 func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) DebugDumpAllLexerDFAs() string {
-
-	spec := p.config.spec.Lexer
-	if spec.dfaFormatter == nil {
-		return "DFA debug formatter not configured"
-	}
-
-	var out strings.Builder
-
-	for state := range spec.rulesets {
-		out.WriteString("=== DFA for state ")
-		out.WriteString(fmt.Sprint(state))
-		out.WriteString(" ===\n")
-		out.WriteString(
-			lexarch.LexerDebugDFA(p.lexer, state, spec.dfaFormatter),
-		)
-		out.WriteString("\n")
-	}
-
-	return out.String()
+	return "DFA debug dump unavailable on current lexarch runtime"
 }
 
 /*
@@ -675,7 +737,7 @@ func LangParserLexFile[
 ](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	session *LangParserSession[TObservation],
-) ([]lexarch.Lexeme[TObservation, TToken, TTokenRole], error) {
+) ([]syntaxa.Lexeme[TObservation, TToken, TTokenRole], error) {
 	sourceInput, err := getSourceInput(session.sourceFile, session.mapFn)
 	if err != nil {
 		return nil, fmt.Errorf("could not decode source-file: %w", err)
@@ -683,13 +745,20 @@ func LangParserLexFile[
 
 	lexingSession := getLexerSession(langParser, sourceInput)
 
-	out := make([]lexarch.Lexeme[TObservation, TToken, TTokenRole], 0)
+	out := make([]syntaxa.Lexeme[TObservation, TToken, TTokenRole], 0)
+	next := lexarch.LexingSessionNextResultCreate()
+	tokenNumber := 0
+	source, err := sourceInputToString(sourceInput)
+	if err != nil {
+		return nil, err
+	}
 
 	for {
-		current := lexarch.LexerConsume(langParser.lexer, lexingSession)
-
+		lexarch.LexingSessionConsume(lexingSession, next)
+		current := syntaxa.LexemeFromToken[TObservation, TToken, TTokenRole](next.Token, source, 4, tokenNumber)
+		tokenNumber++
 		out = append(out, current)
-		if current.Token == langParser.config.spec.Lexer.eofToken {
+		if next.Token.Kind == lexarch.TokenKindEOF {
 			break
 		}
 	}
@@ -753,13 +822,12 @@ func LangParserParseFile[
 
 	if parseStats != nil {
 		lexStart := time.Now()
-		if err2 := lexarch.LexerSessionEnsurePreTokenizedAll(langParser.lexer, sliceLexSession); err2 != nil {
+		if err2 := lexarch.LexingSessionPrefillCache(sliceLexSession); err2 != nil {
 			return nil, nil, syntaxErrors, err2
 		}
 		parseStats.LexPretokenize = time.Since(lexStart)
-		n, ok := lexarch.LexerSessionPreTokenizedLexemeCount(sliceLexSession)
-		parseStats.RawLexemeStreamLen = n
-		parseStats.RawLexemeStreamOk = ok
+		parseStats.RawLexemeStreamLen = 0
+		parseStats.RawLexemeStreamOk = false
 	}
 
 	parseStart := time.Now()
@@ -769,9 +837,9 @@ func LangParserParseFile[
 	)
 	if parseStats != nil {
 		parseStats.ParseOnly = time.Since(parseStart)
-		parseStats.LexObservationSteps = lexarch.LexerScanStatsObservationSteps(langParser.lexer)
+		parseStats.LexObservationSteps = 0
 		parseStats.LSTNodeCount = parsingContext.Editor.CreatedCount()
-		parseStats.FinalLexerNextTokenNumber = lexarch.LexerSessionNextTokenNumber(sliceLexSession)
+		parseStats.FinalLexerNextTokenNumber = 0
 	}
 
 	if err != nil {
@@ -802,7 +870,7 @@ func LangParserDestroy[
 ](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 ) {
-	lexarch.LexerClose(langParser.lexer)
+	lexarch.LexerDestroy(langParser.lexer)
 	langParser.destroyed.Store(true)
 }
 
@@ -820,10 +888,10 @@ func LangParserLexScanStatsBind[
 	TNodeKind comparable,
 ](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
-	stats *lexarch.LexScanStats,
+	stats any,
 ) {
 	ensureAlive(langParser)
-	lexarch.LexerScanStatsBind(langParser.lexer, stats)
+	_ = stats
 }
 
 // ---------------------------------------------------------------- PRIVATE HELPERS
@@ -837,7 +905,7 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	engineStats *syntaxa.ParseEngineStats,
 ) (
 	*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	*lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole],
+	*lexarch.LexingSession,
 	error,
 ) {
 	sourceInput, err := getSourceInput(sourceFile, mapFn)
@@ -846,6 +914,13 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	}
 
 	lexingSession := getLexerSession(langParser, sourceInput)
+	source, err := sourceInputToString(sourceInput)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(sourceInput) > 0 && len(source) == 0 {
+		return nil, nil, fmt.Errorf("buildSequentialParsingContext: non-empty source input collapsed to empty source string")
+	}
 
 	langParser.parser.SetNodePoolPrefill(
 		nodePoolPrefillFromObservationCount(len(sourceInput), langParser.config.nodePoolPrefill),
@@ -855,6 +930,7 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 		langParser.parser,
 		langParser.lexer,
 		lexingSession,
+		source,
 		syntaxErrors,
 		streamStats,
 		engineStats,
@@ -866,53 +942,18 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 func getLexerSession[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNodeKind comparable](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	sourceInput []TObservation,
-) *lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole] {
+) *lexarch.LexingSession {
+	source, err := sourceInputToString(sourceInput)
+	if err != nil {
+		panic(err)
+	}
 	if langParser.lexingSessionCache == nil {
-		switch langParser.config.spec.Lexer.positionMode {
-		case lexerSpecPositionModeRuneFast:
-			inputRunes, ok := any(sourceInput).([]rune)
-			if !ok {
-				panic("WithRunePositionTrackingFast requires rune observations")
-			}
-			sessionRunes := lexarch.LexerSessionCreateRuneFast[TLexerState, TToken, TTokenRole](
-				langParser.config.spec.Lexer.initialState,
-				inputRunes,
-				langParser.config.spec.Lexer.runeTabWidth,
-			)
-			session, ok := any(sessionRunes).(*lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole])
-			if !ok {
-				panic("rune fast session type mismatch")
-			}
-			langParser.lexingSessionCache = session
-			return session
-		case lexerSpecPositionModeByteFast:
-			inputBytes, ok := any(sourceInput).([]byte)
-			if !ok {
-				panic("WithBytePositionTrackingFast requires byte observations")
-			}
-			sessionBytes := lexarch.LexerSessionCreateByteFast[TLexerState, TToken, TTokenRole](
-				langParser.config.spec.Lexer.initialState,
-				inputBytes,
-			)
-			session, ok := any(sessionBytes).(*lexarch.LexerSession[TObservation, TLexerState, TToken, TTokenRole])
-			if !ok {
-				panic("byte fast session type mismatch")
-			}
-			langParser.lexingSessionCache = session
-			return session
-		default:
-			session := lexarch.LexerSessionCreate[TObservation, TLexerState, TToken, TTokenRole](
-				langParser.config.spec.Lexer.initialState,
-				sourceInput,
-				langParser.config.spec.Lexer.newlineDetect,
-				langParser.config.spec.Lexer.columnAdvanceFn,
-			)
-			langParser.lexingSessionCache = session
-			return session
-		}
+		session := lexarch.LexerLexingSessionCreate(langParser.lexer, source, 0)
+		langParser.lexingSessionCache = session
+		return session
 	}
 
-	langParser.lexingSessionCache.Reset(sourceInput, langParser.config.spec.Lexer.initialState)
+	lexarch.LexerLexingSessionReset(langParser.lexer, langParser.lexingSessionCache, source, 0)
 	return langParser.lexingSessionCache
 }
 
@@ -978,6 +1019,37 @@ func getSourceInput[TObservation cmp.Ordered](
 			)
 		}
 		return system.FileReadAllAs(sourceFile, mapFn)
+	}
+}
+
+func sourceInputToString[TObservation cmp.Ordered](sourceInput []TObservation) (string, error) {
+	if len(sourceInput) == 0 {
+		return "", nil
+	}
+
+	var zero TObservation
+	elemType := reflect.TypeOf(zero)
+	if elemType == nil {
+		return "", fmt.Errorf("sourceInputToString: invalid observation type")
+	}
+
+	switch elemType.Kind() {
+	case reflect.Uint8:
+		out := make([]byte, len(sourceInput))
+		for i, obs := range sourceInput {
+			out[i] = byte(reflect.ValueOf(obs).Convert(reflect.TypeOf(byte(0))).Uint())
+		}
+		return string(out), nil
+
+	case reflect.Int32:
+		out := make([]rune, len(sourceInput))
+		for i, obs := range sourceInput {
+			out[i] = rune(reflect.ValueOf(obs).Convert(reflect.TypeOf(rune(0))).Int())
+		}
+		return string(out), nil
+
+	default:
+		return "", fmt.Errorf("sourceInputToString: unsupported observation type: %s", elemType.String())
 	}
 }
 

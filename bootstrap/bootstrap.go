@@ -14,7 +14,7 @@ import (
 // ----------------------------------------------------------------- CONFIGURATION
 
 type SublimeOverrideFactory func(
-	ruleset *lexarch.LexingRuleset[rune, uint32, uint32],
+	ruleset *editor.LexingRuleSet[rune, uint32, uint32],
 	ctxProducer func(ctx *editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext,
 ) func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
 
@@ -22,8 +22,8 @@ type ParserCompiler struct {
 	specFile       string
 	allocFn        memarch.AllocationFn
 	diagnosticSink *dsl.LangSpecDiagnosticSink
-	lexerScanSet   bool
-	lexerScanCfg   lexarch.LexerScanConfig
+	lexerPatternCompilerSet bool
+	lexerPatternCompiler    lexarch.PatternCompilerMode
 
 	lexerPositionSet      bool
 	lexerPositionTracking dsl.LangSpecLexerPositionTracking
@@ -52,11 +52,11 @@ func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
 	}
 }
 
-/* WithLexerScanConfig sets lexer scan configuration for parser compilation. */
-func WithLexerScanConfig(cfg lexarch.LexerScanConfig) Option {
+/* WithLexerPatternCompiler sets lexer pattern compiler mode for parser compilation. */
+func WithLexerPatternCompiler(mode lexarch.PatternCompilerMode) Option {
 	return func(c *ParserCompiler) {
-		c.lexerScanSet = true
-		c.lexerScanCfg = cfg
+		c.lexerPatternCompilerSet = true
+		c.lexerPatternCompiler = mode
 	}
 }
 
@@ -236,8 +236,8 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	if cfg.diagnosticSink != nil {
 		compilerConfig.WithDiagnosticSink(cfg.diagnosticSink)
 	}
-	if cfg.lexerScanSet {
-		compilerConfig.WithLexerScanConfig(cfg.lexerScanCfg)
+	if cfg.lexerPatternCompilerSet {
+		compilerConfig.WithLexerPatternCompiler(cfg.lexerPatternCompiler)
 	}
 	if cfg.lexerPositionSet {
 		switch cfg.lexerPositionTracking {
@@ -355,7 +355,7 @@ func dispatchInMemorySublimeGeneration(
 
 	var overrideProducer func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
 	if cfg.sublimeFactory != nil {
-		overrideProducer = cfg.sublimeFactory(&ruleset, ctxProducer)
+		overrideProducer = cfg.sublimeFactory(convertRulesetToEditor(ruleset), ctxProducer)
 	}
 
 	return toolchain.RunSublimeToolchainFromMemory(
@@ -366,4 +366,20 @@ func dispatchInMemorySublimeGeneration(
 		cfg.fileExtensions,
 		cfg.scopeExtension,
 	)
+}
+
+func convertRulesetToEditor(
+	ruleset langspec.LexerRuleset[uint32, uint32],
+) *editor.LexingRuleSet[rune, uint32, uint32] {
+	sourceRules := langspec.LexerRulesetGetRules(ruleset)
+	out := make([]editor.LexingRule[rune, uint32, uint32], 0, len(sourceRules))
+	for _, rule := range sourceRules {
+		out = append(out, editor.LexingRule[rune, uint32, uint32]{
+			Token:    rule.Token,
+			Role:     rule.Role,
+			Pattern:  rule.Pattern,
+			Priority: rule.Priority,
+		})
+	}
+	return editor.LexingRuleSetCreate(out...)
 }

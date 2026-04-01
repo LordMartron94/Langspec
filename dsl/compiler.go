@@ -3,6 +3,7 @@ package dsl
 import (
 	"autarch/pattern"
 	"fmt"
+	"foundation/domain"
 	"langspec"
 	"langspec/dsl/semantics"
 	dslspec "langspec/dsl/spec"
@@ -18,7 +19,7 @@ type LexerSpec = langspec.LexerSpec[rune, uint32, uint32, string]
 type ParserSpec = langspec.ParserSpec[rune, uint32, uint32, string, uint32]
 type RuleRegistry = syntaxa.RuleRegistry[rune, uint32, uint32, string, uint32]
 
-type LexerRuleset = lexarch.LexingRuleset[rune, uint32, uint32]
+type LexerRuleset = langspec.LexerRuleset[uint32, uint32]
 
 type CompiledRule = syntaxa.ParserRule[rune, uint32, uint32, string, uint32]
 type CompilerRuleBuilder = rule.RuleBuilder[rune, uint32, uint32, string, uint32]
@@ -94,22 +95,18 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	tokStrs, roleStrs, nodeStrs := semantics.CollectCompiledSymbolStrings(rootNode, env, eofName)
 	sym := semantics.CompiledSymbolTableBuild(tokStrs, roleStrs, nodeStrs)
 	eofToken := sym.TokenID(eofName)
+	domainRunes := domain.DiscreteDomainRuneCreate()
 
-	domain := lexarch.LexarchRuneDomain()
 	lexerSpec := langspec.LexerSpecCreate[rune, uint32, uint32, string](
 		eofToken,
 		"default",
-		lexarch.NewlineDetectorRune(),
-		lexarch.ColumnAdvanceRune(4),
-		lexarch.RunesToBytesDefault(),
-		lexarch.RuneFormatterDefault(),
-		domain,
+		func(r rune) string { return string(r) },
+		nil,
 		func(t uint32) string {
 			return sym.TokenName(t)
 		},
 	)
-	lexerSpec.WithCompilationMode(lexarch.Glushkov)
-	lexerSpec.WithScanConfig(comp.config.lexerScanConfig)
+	lexerSpec.WithCompilationMode(lexarch.PATTERN_COMPILE_GLUSHKOV)
 	switch comp.config.lexerPositionTracking {
 	case LangSpecLexerPositionTrackingGeneric:
 		// LexerSpecCreate leaves generic position mode.
@@ -120,7 +117,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	}
 
 	lspecCompiler := compiler{
-		factory: pattern.RegulaASTFactoryCreate(domain),
+		factory: pattern.RegulaASTFactoryCreate(domainRunes),
 	}
 	patternCtx := &patternCompileCtx{
 		c:        &lspecCompiler,
@@ -281,9 +278,7 @@ func extractStringArray(arrayNode *Node) []string {
 }
 
 func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {
-	ruleset := lexarch.LexingRulesetCreate[rune, uint32, uint32](
-		lexarch.TokenResolutionStepLongestThenPriority[uint32],
-	)
+	ruleset := langspec.LexerRulesetCreate[uint32, uint32]()
 
 	lexSection := ctx.rootNode.FindFirstKind(dslspec.NodeLexSection)
 	lexRules := c.gatherRules(lexSection, ctx)
@@ -1520,20 +1515,20 @@ func nodeFormattedContent(node *Node, formatAttribute string) string {
 }
 
 func lexemeRawContent(
-	lexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	lexeme syntaxa.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 ) string {
 	return string(lexeme.Raw)
 }
 
 func lexemeKindEqualTo(
-	lexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	lexeme syntaxa.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	target LangSpecLexerTokenType,
 ) bool {
 	return lexeme.Token == target
 }
 
 func lexemeRawContentEqualTo(
-	lexeme lexarch.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
+	lexeme syntaxa.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
 	target string,
 ) bool {
 	return strings.EqualFold(string(lexeme.Raw), target)
