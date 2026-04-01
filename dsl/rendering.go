@@ -5,7 +5,6 @@ import (
 	"foundation/formatting"
 	"io"
 	"langspec/validation"
-	"lexarch"
 	"strings"
 	"syntaxa"
 	"text/tabwriter"
@@ -72,12 +71,11 @@ func resolveSyntaxErrorLineSpan(
 		end = start
 	}
 
-	span := lexarch.ByteSpan{
-		Offset: uint32(start),
-		Length: uint32(end - start),
+	sl, sc, el, ec, ok := syntaxa.LineSpanFromByteOffsets(start, end, source, 4)
+	if !ok {
+		return 0, 0, 0, 0
 	}
-	pos := lexarch.LexerByteSpanToPosition(span, source, 4)
-	return pos.StartLine, pos.StartColumn, pos.EndLine, pos.EndColumn
+	return sl, sc, el, ec
 }
 
 func renderValidationEntries(

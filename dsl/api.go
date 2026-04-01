@@ -165,6 +165,7 @@ type LangSpecCompileResult struct {
 	Trace             *syntaxa.ParseTrace[LangSpecLexerTokenType]
 	SyntaxErrors      *syntaxa.SyntaxErrors[rune]
 	ValidationEntries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+	SourceRunes       []rune
 
 	LanguageName    string
 	LanguageVersion string
@@ -285,6 +286,7 @@ func LangSpecCompilerCompile(
 		RootNode:     rootNode,
 		Trace:        trace,
 		SyntaxErrors: syntaxErrors,
+		SourceRunes:  contentRune,
 	}
 
 	// 2. Handle syntax errors
@@ -449,6 +451,7 @@ func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCom
 	}
 
 	if config.DebugLST {
+		sourceText := string(result.SourceRunes)
 		lstDump := result.RootNode.DebugDump(
 			syntaxa.LSTDebugFormatter[
 				rune,
@@ -477,8 +480,10 @@ func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCom
 				ShowTokens:     true,
 				ShowAttributes: true,
 
-				ShowByteSpan: true,
-				ShowLineSpan: true,
+				ShowByteSpan:     true,
+				ShowLineSpan:     true,
+				LineSpanSource:   sourceText,
+				LineSpanTabWidth: 4,
 
 				ShowNodeID:   true,
 				ShowRevision: false,
