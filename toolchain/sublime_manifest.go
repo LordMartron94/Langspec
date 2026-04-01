@@ -7,6 +7,7 @@ import (
 	"foundation/system"
 	"langspec/dsl/semantics"
 	"langspec/editor"
+	"strconv"
 	"strings"
 )
 
@@ -81,7 +82,7 @@ func SemanticManifestRemapFromStrings(
 	if len(in.BaseTokenScopes) > 0 {
 		out.BaseTokenScopes = make(map[uint32]string, len(in.BaseTokenScopes))
 		for name, scope := range in.BaseTokenScopes {
-			out.BaseTokenScopes[sym.TokenID(name)] = scope
+			out.BaseTokenScopes[resolveManifestTokenID(sym, name)] = scope
 		}
 	}
 	if len(in.NodeBindings) > 0 {
@@ -94,13 +95,27 @@ func SemanticManifestRemapFromStrings(
 			if len(b.TokenScopes) > 0 {
 				nb.TokenScopes = make(map[uint32][]string, len(b.TokenScopes))
 				for tokName, scopes := range b.TokenScopes {
-					nb.TokenScopes[sym.TokenID(tokName)] = scopes
+					nb.TokenScopes[resolveManifestTokenID(sym, tokName)] = scopes
 				}
 			}
-			out.NodeBindings[sym.NodeKindID(nodeName)] = nb
+			out.NodeBindings[resolveManifestNodeID(sym, nodeName)] = nb
 		}
 	}
 	return out
+}
+
+func resolveManifestTokenID(sym *semantics.CompiledSymbolTable, key string) uint32 {
+	if id, err := strconv.ParseUint(strings.TrimSpace(key), 10, 32); err == nil {
+		return uint32(id)
+	}
+	return sym.TokenID(key)
+}
+
+func resolveManifestNodeID(sym *semantics.CompiledSymbolTable, key string) uint32 {
+	if id, err := strconv.ParseUint(strings.TrimSpace(key), 10, 32); err == nil {
+		return uint32(id)
+	}
+	return sym.NodeKindID(key)
 }
 
 // ----------------------------------------------------------------- CONTEXT PRODUCER
