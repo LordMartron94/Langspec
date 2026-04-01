@@ -3,6 +3,7 @@ package semantics
 import (
 	"fmt"
 	"langspec/validation"
+	"lexarch"
 	"strconv"
 	"strings"
 	"syntaxa"
@@ -13,7 +14,7 @@ import (
 
 type GrammarValidationState struct {
 	Package   *GrammarPackage
-	SourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node
+	SourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
 	Symbols   *CompiledSymbolTable
 }
 
@@ -597,7 +598,7 @@ func processGrammarSafety(ctx *ValidationCtx) {
 	checkGrammarChoiceConflicts(ctx, pkg, analysis, sourceMap)
 }
 
-func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[uint32]) {
+func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 
 	for ruleName, rootGrammar := range pkg.Grammars {
@@ -615,7 +616,7 @@ func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis
 	}
 }
 
-func hasLeftRecursion(g *syntaxa.Grammar[uint32, uint32], pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[uint32], visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
+func hasLeftRecursion(g *syntaxa.Grammar[lexarch.TokenKind, uint32], pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis, visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
 	if g == nil {
 		return false
 	}
@@ -665,12 +666,12 @@ func hasLeftRecursion(g *syntaxa.Grammar[uint32, uint32], pkg *GrammarPackage, a
 	return false
 }
 
-func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis[uint32]) {
+func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[uint32, uint32])
-	walk = func(g *syntaxa.Grammar[uint32, uint32]) {
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
@@ -704,14 +705,14 @@ func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, anal
 func checkGrammarChoiceConflicts(
 	ctx *ValidationCtx,
 	pkg *GrammarPackage,
-	analysis *syntaxa.GrammarAnalysis[uint32],
-	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node,
+	analysis *syntaxa.GrammarAnalysis,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
 ) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[uint32, uint32])
-	walk = func(g *syntaxa.Grammar[uint32, uint32]) {
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
@@ -734,13 +735,13 @@ func checkGrammarChoiceConflicts(
 func analyzeChoiceNode(
 	ctx *ValidationCtx,
 	pkg *GrammarPackage,
-	analysis *syntaxa.GrammarAnalysis[uint32],
-	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node,
+	analysis *syntaxa.GrammarAnalysis,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
 	parseSection *Node,
-	choiceNode *syntaxa.Grammar[uint32, uint32],
+	choiceNode *syntaxa.Grammar[lexarch.TokenKind, uint32],
 ) {
-	seenTokens := make(map[uint32]int)
-	reportedPrev := make(map[uint32]bool)
+	seenTokens := make(map[lexarch.TokenKind]int)
+	reportedPrev := make(map[lexarch.TokenKind]bool)
 	sym := ctx.RunState.Symbols
 
 	ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*choiceNode.NodePath)]
@@ -789,17 +790,17 @@ func analyzeChoiceNode(
 	}
 }
 
-func formatCompiledToken(sym *CompiledSymbolTable, id uint32) string {
+func formatCompiledToken(sym *CompiledSymbolTable, id lexarch.TokenKind) string {
 	if sym != nil {
-		return sym.TokenName(id)
+		return sym.TokenName(uint32(id))
 	}
 	return strconv.FormatUint(uint64(id), 10)
 }
 
 func resolveConflictNode(
 	ctx *ValidationCtx,
-	sourceMap map[*syntaxa.Grammar[uint32, uint32]]*Node,
-	grammarNode *syntaxa.Grammar[uint32, uint32],
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
+	grammarNode *syntaxa.Grammar[lexarch.TokenKind, uint32],
 	fallbackRuleNode *Node,
 ) *Node {
 	exactNode := sourceMap[grammarNode]
@@ -1166,7 +1167,7 @@ func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 	return nil
 }
 
-func lookaheadsMutuallyExclusive(la1, la2 []syntaxa.Lookahead[uint32]) bool {
+func lookaheadsMutuallyExclusive(la1, la2 []syntaxa.Lookahead[lexarch.TokenKind]) bool {
 	for _, req1 := range la1 {
 		for _, req2 := range la2 {
 			if req1.Offset == req2.Offset && req1.Expected != req2.Expected {

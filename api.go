@@ -23,7 +23,7 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 
 	initialState TLexerState
 
-	observationFormatter syntaxa.ObservationFormatter[TObservation]
+	observationFormatter syntaxa.ObservationFormatter
 	observationDomain    *domain.DiscreteDomain[TObservation]
 
 	tokenFormatter func(token TToken) string
@@ -109,7 +109,7 @@ func LexerRulesetGetRules[TToken, TTokenRole comparable](
 func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable](
 	eofToken TToken,
 	initialState TLexerState,
-	observationFormatter syntaxa.ObservationFormatter[TObservation],
+	observationFormatter syntaxa.ObservationFormatter,
 	observationDomain *domain.DiscreteDomain[TObservation],
 	tokenFormatter func(token TToken) string,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
@@ -175,7 +175,7 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithBytePosit
 // ------------------------------------------------------------ PARSER SPEC
 
 /* ParserSyntaxErrorHook is an optional hook that runs post-parsing to process syntax errors. */
-type ParserSyntaxErrorHook[TObservation cmp.Ordered] func(errors *syntaxa.SyntaxErrors[TObservation]) error
+type ParserSyntaxErrorHook[TObservation cmp.Ordered] func(errors *syntaxa.SyntaxErrors) error
 
 /* ParserSpec defines the grammar and LST contract. */
 type ParserSpec[
@@ -188,9 +188,9 @@ type ParserSpec[
 	rootNodeKind  TNodeKind
 	errorNodeKind TNodeKind
 
-	grammarPackage    *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
-	registry          syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
-	nodePostProcessor syntaxa.NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind]
+	grammarPackage    *syntaxa.GrammarPackage[TNodeKind]
+	registry          syntaxa.RuleRegistry[TNodeKind]
+	nodePostProcessor syntaxa.NodePostProcessor[TNodeKind]
 
 	errorHook ParserSyntaxErrorHook[TObservation]
 
@@ -199,7 +199,7 @@ type ParserSpec[
 	freezeAfterParse bool
 
 	// getAnalysis supplies nullable/first/follow for the parser; optional (e.g. lowering.GetAnalysis(grammarPackage)).
-	getAnalysis func() *syntaxa.GrammarAnalysis[TToken]
+	getAnalysis func() *syntaxa.GrammarAnalysis
 }
 
 /*
@@ -218,11 +218,11 @@ func ParserSpecCreate[
 	TLexerState,
 	TNodeKind comparable,
 ](
-	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
-	registry syntaxa.RuleRegistry[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind],
+	registry syntaxa.RuleRegistry[TNodeKind],
 	rootNodeKind, errorNodeKind TNodeKind,
 	freezeAfterParse bool,
-	getAnalysis func() *syntaxa.GrammarAnalysis[TToken],
+	getAnalysis func() *syntaxa.GrammarAnalysis,
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	return &ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
 		grammarPackage:    grammarPackage,
@@ -254,7 +254,7 @@ func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) W
 }
 
 func (p *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) WithPostProcessor(
-	postProcessor syntaxa.NodePostProcessor[TObservation, TToken, TTokenRole, TNodeKind],
+	postProcessor syntaxa.NodePostProcessor[TNodeKind],
 ) *ParserSpec[TObservation, TToken, TTokenRole, TLexerState, TNodeKind] {
 	p.nodePostProcessor = postProcessor
 	return p
@@ -585,7 +585,7 @@ type LangParser[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole, TNode
 	config *LangParserConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]
 
 	lexer  *lexarch.Lexer
-	parser *syntaxa.SyntaxaParser[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
+	parser *syntaxa.SyntaxaParser[TNodeKind]
 
 	lexingSessionCache *lexarch.LexingSession
 
@@ -680,16 +680,22 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 	parser := syntaxa.SyntaxaParserCreate(
 		config.spec.Parser.grammarPackage,
 		config.spec.Parser.registry,
-		config.spec.Lexer.tokenFormatter,
+		func(token lexarch.TokenKind) string {
+			return config.spec.Lexer.tokenFormatter(langspecConvertUint32ToGeneric[TToken](uint32(token), "parser token formatter"))
+		},
 		config.spec.Lexer.observationFormatter,
 		config.spec.Parser.nodePostProcessor,
-		config.spec.Lexer.eofToken,
+		lexarch.TokenKind(langspecConvertGenericToUint32(config.spec.Lexer.eofToken, "parser eof token")),
 		config.spec.Parser.rootNodeKind,
 		config.spec.Parser.errorNodeKind,
 		config.spec.Parser.freezeAfterParse,
 		config.spec.Parser.getAnalysis,
 	)
-	parser.SetDefaultSkips(config.spec.Parser.defaultSkipRoles...)
+	skipRoles := make([]lexarch.TokenRole, 0, len(config.spec.Parser.defaultSkipRoles))
+	for _, role := range config.spec.Parser.defaultSkipRoles {
+		skipRoles = append(skipRoles, lexarch.TokenRole(langspecConvertGenericToUint32(role, "parser skip role")))
+	}
+	parser.SetDefaultSkips(skipRoles...)
 	parser.EnableTrace(config.collectParseTrace)
 	if config.nodePoolGrowFn != nil {
 		parser.SetNodePoolGrowFn(config.nodePoolGrowFn)
@@ -703,7 +709,7 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 }
 
 /* GetGrammarPackage returns the grammar package used by the parser (for debug dumps, editor IR, etc.). */
-func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) GetGrammarPackage() *syntaxa.GrammarPackage[TObs, TToken, TTokenRole, TNodeKind, TLexerState] {
+func (p *LangParser[TObs, TLexerState, TToken, TTokenRole, TNodeKind]) GetGrammarPackage() *syntaxa.GrammarPackage[TNodeKind] {
 	return p.config.spec.Parser.grammarPackage
 }
 
@@ -737,7 +743,7 @@ func LangParserLexFile[
 ](
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	session *LangParserSession[TObservation],
-) ([]syntaxa.Lexeme[TObservation, TToken, TTokenRole], error) {
+) ([]syntaxa.Lexeme, error) {
 	sourceInput, err := getSourceInput(session.sourceFile, session.mapFn)
 	if err != nil {
 		return nil, fmt.Errorf("could not decode source-file: %w", err)
@@ -745,7 +751,7 @@ func LangParserLexFile[
 
 	lexingSession := getLexerSession(langParser, sourceInput)
 
-	out := make([]syntaxa.Lexeme[TObservation, TToken, TTokenRole], 0)
+	out := make([]syntaxa.Lexeme, 0)
 	next := lexarch.LexingSessionNextResultCreate()
 	tokenNumber := 0
 	source, err := sourceInputToString(sourceInput)
@@ -755,7 +761,7 @@ func LangParserLexFile[
 
 	for {
 		lexarch.LexingSessionConsume(lexingSession, next)
-		current := syntaxa.LexemeFromToken[TObservation, TToken, TTokenRole](next.Token, source, 4, tokenNumber)
+		current := syntaxa.LexemeFromToken(next.Token, source, 4, tokenNumber)
 		tokenNumber++
 		out = append(out, current)
 		if next.Token.Kind == lexarch.TokenKindEOF {
@@ -783,9 +789,9 @@ func LangParserParseFile[
 	session *LangParserSession[TObservation],
 	parseStats *LangParseStats,
 ) (
-	*syntaxa.ParseTrace[TToken],
-	*syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
-	*syntaxa.SyntaxErrors[TObservation],
+	*syntaxa.ParseTrace,
+	*syntaxa.SyntaxaLSTNode[TNodeKind],
+	*syntaxa.SyntaxErrors,
 	error,
 ) {
 	ensureAlive(langParser)
@@ -797,8 +803,8 @@ func LangParserParseFile[
 		return nil, nil, nil, fmt.Errorf("source file non-existent: %s", session.sourceFile)
 	}
 
-	syntaxErrors := &syntaxa.SyntaxErrors[TObservation]{
-		Errors: make([]syntaxa.SyntaxError[TObservation], 0),
+	syntaxErrors := &syntaxa.SyntaxErrors{
+		Errors: make([]syntaxa.SyntaxError, 0),
 	}
 
 	var streamStatsPtr *syntaxa.ParseStreamStats
@@ -901,11 +907,11 @@ func buildSequentialParsingContext[TObservation cmp.Ordered, TLexerState, TToken
 	langParser *LangParser[TObservation, TLexerState, TToken, TTokenRole, TNodeKind],
 	sourceFile string,
 	mapFn func([]byte) ([]TObservation, error),
-	syntaxErrors *syntaxa.SyntaxErrors[TObservation],
+	syntaxErrors *syntaxa.SyntaxErrors,
 	streamStats *syntaxa.ParseStreamStats,
 	engineStats *syntaxa.ParseEngineStats,
 ) (
-	*syntaxa.ExecRuleContext[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
+	*syntaxa.ExecRuleContext[TNodeKind],
 	*lexarch.LexingSession,
 	error,
 ) {

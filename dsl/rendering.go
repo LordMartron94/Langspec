@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"lexarch"
 	"fmt"
 	"foundation/formatting"
 	"io"
@@ -16,7 +17,7 @@ type columnAdvanceFn func(rune, int) int
 func RenderSyntaxErrorsWithContext(
 	w io.Writer,
 	source []rune,
-	errs *syntaxa.SyntaxErrors[rune],
+	errs *syntaxa.SyntaxErrors,
 	advanceFn columnAdvanceFn,
 ) {
 	if w == nil || errs == nil || len(errs.Errors) == 0 {
@@ -35,13 +36,13 @@ func RenderSyntaxErrorsWithContext(
 	fmt.Fprintln(w, "========================")
 }
 
-func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError[rune], source string, lines [][]rune, advanceFn columnAdvanceFn) {
+func renderSingleSyntaxError(w io.Writer, e syntaxa.SyntaxError, source string, lines [][]rune, advanceFn columnAdvanceFn) {
 	startLine, startCol, endLine, endCol := resolveSyntaxErrorLineSpan(e, source)
 	printSyntaxErrorHeader(w, e, source)
 	renderDiagnosticContext(w, lines, startLine, startCol, endLine, endCol, advanceFn)
 }
 
-func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError[rune], source string) {
+func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError, source string) {
 	typeStr := "syntax"
 	if e.ProducedByLexer {
 		typeStr = "lexer"
@@ -51,7 +52,7 @@ func printSyntaxErrorHeader(w io.Writer, e syntaxa.SyntaxError[rune], source str
 }
 
 func resolveSyntaxErrorLineSpan(
-	e syntaxa.SyntaxError[rune],
+	e syntaxa.SyntaxError,
 	source string,
 ) (startLine, startColumn, endLine, endColumn int) {
 	if e.StartLine > 0 && e.EndLine > 0 {
@@ -301,10 +302,10 @@ func splitLinesRunes(runes []rune) [][]rune {
 }
 
 /* RenderParseTrace writes a tabular parse trace to w using formatToken for token display. */
-func RenderParseTrace[TToken any](
+func RenderParseTrace(
 	w io.Writer,
-	trace *syntaxa.ParseTrace[TToken],
-	formatToken func(TToken) string,
+	trace *syntaxa.ParseTrace,
+	formatToken func(lexarch.TokenKind) string,
 ) {
 	if w == nil {
 		return
@@ -340,8 +341,8 @@ func RenderParseTrace[TToken any](
 
 		tokens := fmt.Sprintf("%s / %s", formatToken(ev.RawToken), formatToken(ev.LogicalToken))
 		recStatus := formatRecoveryStatus(ev.RecoveryAttempted, ev.Recovered, ev.LandedOnOurs)
-		syncSet := formatting.FormatSlice(ev.RecoveryTokenSet, formatting.FormatSliceOptions[TToken]{
-			FormatItem: func(index int, value TToken) string {
+		syncSet := formatting.FormatSlice(ev.RecoveryTokenSet, formatting.FormatSliceOptions[lexarch.TokenKind]{
+			FormatItem: func(index int, value lexarch.TokenKind) string {
 				return formatToken(value)
 			},
 			Prefix:       "[",
@@ -410,9 +411,9 @@ func RenderGrammarDumps(w io.Writer, grammarDump, grammarPackageDump, cfgDump st
 
 func renderLexemes(
 	w io.Writer,
-	lexemes []syntaxa.Lexeme[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole],
-	formatToken func(LangSpecLexerTokenType) string,
-	formatRole func(LangSpecLexerTokenRole) string,
+	lexemes []syntaxa.Lexeme,
+	formatToken func(lexarch.TokenKind) string,
+	formatRole func(lexarch.TokenRole) string,
 ) {
 	if w == nil || len(lexemes) == 0 {
 		return

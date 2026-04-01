@@ -4,6 +4,7 @@ import (
 	"autarch/pattern"
 	"cmp"
 	"foundation/hash"
+	"lexarch"
 	"syntaxa"
 	"syntaxa/lowering"
 )
@@ -62,7 +63,7 @@ contextsEqual is used to deduplicate states by context.
 type EditorIRConfiguration[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any] struct {
 	hasher *hash.XXH3Hasher
 
-	tokenHasher      func(token TToken) uint64
+	tokenHasher      func(token lexarch.TokenKind) uint64
 	nodeKindHasher   func(nodeKind TNodeKind) uint64
 	contextProducer  func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]
@@ -76,7 +77,7 @@ All parameters must be non-nil when the configuration is used to build EditorIR.
 */
 func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	hasher *hash.XXH3Hasher,
-	tokenHasher func(token TToken) uint64,
+	tokenHasher func(token lexarch.TokenKind) uint64,
 	nodeKindHasher func(nodeKind TNodeKind) uint64,
 	contextProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) TContext,
 	overrideProducer func(editorCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) []*EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
@@ -231,9 +232,9 @@ Prerequisites:
 Edge cases:
 - Returns an error if BuildStateGraph or EditorIRFromStateGraph fails.
 */
-func EditorIRCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
+func EditorIRCreate[TObservation cmp.Ordered, TToken ~uint32, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
-	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 ) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {
 	sg, err := lowering.BuildStateGraph(grammarPackage, config.tokenHasher, config.nodeKindHasher, config.hasher)

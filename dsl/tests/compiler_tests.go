@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"lexarch"
 	"foundation/system"
 	"langspec"
 	"langspec/bootstrap"
@@ -26,7 +27,7 @@ func TestMaintainerGenerateLSpecExample(t *testing.T) {
 		currentLSpecVersion,
 		[]dsl.LangSpecLexerTokenRole{dslspec.LANG_SPEC_COMMENT_ROLE, dslspec.LANG_SPEC_WHITESPACE_ROLE},
 	).
-		WithTokenFormatter(dsl.LangSpecLexerTokenType.String).
+		WithTokenFormatter(func(token lexarch.TokenKind) string { return dsl.LangSpecLexerTokenType(token).String() }).
 		WithTokenRoleFormatter(dsl.LangSpecLexerTokenRole.String).
 		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
 		WithEofToken(dslspec.TokEOF).
@@ -35,7 +36,7 @@ func TestMaintainerGenerateLSpecExample(t *testing.T) {
 		).
 		WithGoBindingsConfiguration(testGoBindingsOutputFile, "compiler")
 
-	if err := generator.GenerateLSpec(
+	if err := generator.GenerateLSpec[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind, dsl.LangSpecLexerState](
 		dsl.LangSpecCompilerGrammarPackage(compiler),
 		convertRulesetToEditor(dsl.LangSpecCompilerLexingRuleSet(compiler)),
 		testOutput,
@@ -55,7 +56,7 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 		currentLSpecVersion,
 		[]dsl.LangSpecLexerTokenRole{dslspec.LANG_SPEC_COMMENT_ROLE, dslspec.LANG_SPEC_WHITESPACE_ROLE},
 	).
-		WithTokenFormatter(dsl.LangSpecLexerTokenType.String).
+		WithTokenFormatter(func(token lexarch.TokenKind) string { return dsl.LangSpecLexerTokenType(token).String() }).
 		WithTokenRoleFormatter(dsl.LangSpecLexerTokenRole.String).
 		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
 		WithEofToken(dslspec.TokEOF).
@@ -64,7 +65,7 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 		).
 		WithGoBindingsConfiguration(testGoBindingsOutputFile, "compiler")
 
-	if err := generator.GenerateLSpec(
+	if err := generator.GenerateLSpec[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind, dsl.LangSpecLexerState](
 		dsl.LangSpecCompilerGrammarPackage(compiler),
 		convertRulesetToEditor(dsl.LangSpecCompilerLexingRuleSet(compiler)),
 		testOutput,

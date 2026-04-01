@@ -3,6 +3,7 @@ package spec
 import (
 	"autarch/pattern"
 	"foundation/domain"
+	"lexarch"
 	"syntaxa"
 	"syntaxa/rule"
 )
@@ -413,10 +414,10 @@ func (b *dslGrammarBuilder) program() Rule {
 
 	return b.g.RootByNode(NodeProgram, false,
 		b.g.rb.Rule.Required(b.header(), "must have header"),
-		b.g.rb.Rule.OptionalPrefix(b.pragmaSection(), TokKWPragma),
-		b.g.rb.Rule.OptionalPrefix(b.patternSection(), TokKWPattern),
+		b.g.rb.Rule.OptionalPrefix(b.pragmaSection(), lexarch.TokenKind(TokKWPragma)),
+		b.g.rb.Rule.OptionalPrefix(b.patternSection(), lexarch.TokenKind(TokKWPattern)),
 		b.g.rb.Rule.Required(b.lexSection(), "must have lex ruleset"),
-		b.g.rb.Rule.OptionalPrefix(b.prattSection(), TokKWPratt),
+		b.g.rb.Rule.OptionalPrefix(b.prattSection(), lexarch.TokenKind(TokKWPratt)),
 		b.g.rb.Rule.Required(b.parseSection(), "must have parse ruleset"),
 		b.g.expectVirtualInRule(NodeProgram, TokEOF),
 	)
@@ -444,7 +445,7 @@ func (b *dslGrammarBuilder) pragmaSection() Rule {
 		TokKWPragma,
 		b.pragmaBlockList(),
 	)
-	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, lexarch.TokenKind(TokSemicolon), lexarch.TokenKind(TokBraceClose))
 }
 
 func (b *dslGrammarBuilder) pragmaBlockList() Rule {
@@ -457,18 +458,18 @@ func (b *dslGrammarBuilder) pragmaBlock() Rule {
 		b.blockKey(),
 		b.pragmaConfigurationList(),
 	)
-	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, lexarch.TokenKind(TokSemicolon), lexarch.TokenKind(TokBraceClose))
 }
 
 func (b *dslGrammarBuilder) blockKey() Rule {
 	return b.g.rb.Scope(LangSpecGrammarIDFromNode(NodePragmaBlockKey)).Path(
 		NodePragmaBlockKey,
 		NodePragmaBlockKeyPrefix,
-		TokKWTool,
-		TokDot,
+		lexarch.TokenKind(TokKWTool),
+		lexarch.TokenKind(TokDot),
 		LangSpecGrammarIDFromNode(NodePragmaBlockKeySegment),
 		NodePragmaBlockKeySegment,
-		TokIdentifier,
+		lexarch.TokenKind(TokIdentifier),
 	)
 }
 
@@ -486,26 +487,26 @@ func (b *dslGrammarBuilder) pragmaConfiguration() Rule {
 			b.g.expectOneOf(NodePragmaValue, TokIdentifier, TokStringLiteral, TokKWTrue, TokKWFalse)),
 		).
 		expectVirtualInRule(TokSemicolon).
-		build(), TokSemicolon)
+		build(), lexarch.TokenKind(TokSemicolon))
 }
 
 func (b *dslGrammarBuilder) stringArray() Rule {
 	elementListRule := b.g.rb.Rule.TransparentSequence(
 		"STRING_ARRAY_ELEMENT_LIST",
-		b.g.rb.Token.Expect(LangSpecGrammarIDFromNode(NodeStringLiteral), NodeStringLiteral, TokStringLiteral),
+		b.g.rb.Token.Expect(LangSpecGrammarIDFromNode(NodeStringLiteral), NodeStringLiteral, lexarch.TokenKind(TokStringLiteral)),
 		b.g.rb.Rule.TransparentZeroOrMore(
 			"STRING_ARRAY_ELEMENT_LIST_TAIL",
 			b.g.rb.Rule.TransparentSequence(
 				"STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT",
-				b.g.rb.Token.ExpectVirtual("COMMA", TokComma),
-				b.g.rb.Token.Expect(LangSpecGrammarIDFromNode(NodeStringLiteral), NodeStringLiteral, TokStringLiteral),
+				b.g.rb.Token.ExpectVirtual("COMMA", lexarch.TokenKind(TokComma)),
+				b.g.rb.Token.Expect(LangSpecGrammarIDFromNode(NodeStringLiteral), NodeStringLiteral, lexarch.TokenKind(TokStringLiteral)),
 			),
 		),
 	)
 
 	return b.g.rb.Rule.Nest(
 		LangSpecGrammarIDFromNode(NodeStringArray), NodeStringArray,
-		TokBracketOpen, TokBracketClose,
+		lexarch.TokenKind(TokBracketOpen), lexarch.TokenKind(TokBracketClose),
 		elementListRule,
 	)
 }
@@ -519,7 +520,7 @@ func (b *dslGrammarBuilder) patternSection() Rule {
 		TokKWPattern,
 		b.patternDefinitionList(),
 	)
-	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, lexarch.TokenKind(TokSemicolon), lexarch.TokenKind(TokBraceClose))
 }
 
 func (b *dslGrammarBuilder) patternDefinitionList() Rule {
@@ -542,33 +543,33 @@ func (b *dslGrammarBuilder) patternDefinition() Rule {
 		expectVirtualInRule(TokAssignment).
 		requiredRule(b.patternExpr(), "pattern definition must have an expression").
 		expectVirtualInRule(TokSemicolon).
-		build(), TokSemicolon)
+		build(), lexarch.TokenKind(TokSemicolon))
 }
 
 func (b *dslGrammarBuilder) patternExpr() Rule {
-	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+	cfg := rule.PrattConfig[LangSpecParserNodeKind]{
 		Primary: b.patternSegment(),
 
-		PrefixOps: []rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		PrefixOps: []rule.PrattPrefixOp[LangSpecParserNodeKind]{
 			b.g.PrefixOp(TokNegation, 40, NodePatternNegation),
 		},
 
-		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		PostfixOps: []rule.PrattPostfixOp[LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokStar, 30, NodePatternStar),
 			b.g.PostfixOp(TokPlus, 30, NodePatternPlus),
 			b.g.PostfixOp(TokOptional, 30, NodePatternOptional),
 		},
 
-		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+		PostfixRuleOps: []rule.PrattPostfixRuleOp[LangSpecParserNodeKind]{
 			b.g.PostfixRuleOp(30, NodeRepetition, b.patternRepetition()),
 		},
 
-		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		InfixOps: []rule.PrattInfixOp[LangSpecParserNodeKind]{
 			b.g.InfixOp(TokPipe, 10, 9, NodePatternAlternation),
 			b.g.InfixOp(TokRange, 60, 61, NodePatternRange),
 		},
 
-		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecParserNodeKind]{
 			LeftBP:   20,
 			RightBP:  19,
 			NodeKind: NodePatternConcat,
@@ -669,7 +670,7 @@ func (b *dslGrammarBuilder) lexSection() Rule {
 }
 
 func (b *dslGrammarBuilder) lexRuleList() Rule {
-	lexRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.lexRule(), TokSemicolon)
+	lexRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.lexRule(), lexarch.TokenKind(TokSemicolon))
 	return b.g.TransparentZeroOrMoreByNode(NodeLexRule, "LIST", lexRuleWithRecovery)
 }
 
@@ -713,7 +714,7 @@ func (b *dslGrammarBuilder) prattSection() Rule {
 		TokKWPratt,
 		b.prattExprDefList(),
 	)
-	return b.g.rb.Rule.RecoverSync(blockRule, TokSemicolon, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, lexarch.TokenKind(TokSemicolon), lexarch.TokenKind(TokBraceClose))
 }
 
 func (b *dslGrammarBuilder) prattExprDefList() Rule {
@@ -871,7 +872,7 @@ func (b *dslGrammarBuilder) parseIgnoreSection() Rule {
 		TokKWIgnore,
 		b.parseIgnoreRoleList(),
 	)
-	return b.g.rb.Rule.RecoverSync(blockRule, TokBraceClose)
+	return b.g.rb.Rule.RecoverSync(blockRule, lexarch.TokenKind(TokBraceClose))
 }
 
 func (b *dslGrammarBuilder) parseIgnoreRoleList() Rule {
@@ -887,7 +888,7 @@ func (b *dslGrammarBuilder) parseIgnoreRole() Rule {
 }
 
 func (b *dslGrammarBuilder) parseRuleList() Rule {
-	parseRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.parseRule(), TokSemicolon)
+	parseRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.parseRule(), lexarch.TokenKind(TokSemicolon))
 	return b.g.TransparentZeroOrMoreByNode(NodeParseRule, "LIST", parseRuleWithRecovery)
 }
 
@@ -909,10 +910,10 @@ func (b *dslGrammarBuilder) parseRule() Rule {
 }
 
 func (b *dslGrammarBuilder) parseRuleExpr() Rule {
-	cfg := rule.PrattConfig[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+	cfg := rule.PrattConfig[LangSpecParserNodeKind]{
 		Primary: b.parseSegment(),
 
-		PrefixRuleOps: []rule.PrattPrefixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+		PrefixRuleOps: []rule.PrattPrefixRuleOp[LangSpecParserNodeKind]{
 			{
 				RightBP:  40,
 				NodeKind: NodeParseModifierPredict,
@@ -920,21 +921,21 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 			},
 		},
 
-		PostfixOps: []rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		PostfixOps: []rule.PrattPostfixOp[LangSpecParserNodeKind]{
 			b.g.PostfixOp(TokOptional, 30, NodeParseOptional),
 			b.g.PostfixOp(TokStar, 30, NodeParseStar),
 			b.g.PostfixOp(TokPlus, 30, NodeParsePlus),
 		},
 
-		PostfixRuleOps: []rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+		PostfixRuleOps: []rule.PrattPostfixRuleOp[LangSpecParserNodeKind]{
 			b.g.PostfixRuleOp(30, NodeRepetition, b.patternRepetition()),
 		},
 
-		InfixOps: []rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		InfixOps: []rule.PrattInfixOp[LangSpecParserNodeKind]{
 			b.g.InfixOp(TokPipe, 10, 9, NodeParseAlternation),
 		},
 
-		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		ImplicitInfix: &rule.PrattImplicitInfix[LangSpecParserNodeKind]{
 			LeftBP:   20,
 			RightBP:  19,
 			NodeKind: NodeParseConcat,

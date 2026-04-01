@@ -34,7 +34,7 @@ type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenTyp
 type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
 
 /* NodeFinalizationCtx is the syntaxa finalization context for DSL parse nodes. */
-type NodeFinalizationCtx = syntaxa.FinalizationCtx[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
+type NodeFinalizationCtx = syntaxa.FinalizationCtx[LangSpecParserNodeKind]
 
 /* AttributeAs reads a typed attribute from a DSL LST node, delegating to syntaxa.AttributeAs. */
 func AttributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, bool) {
@@ -162,8 +162,8 @@ Callers can inspect the result without parsing stdout.
 */
 type LangSpecCompileResult struct {
 	RootNode          *Node
-	Trace             *syntaxa.ParseTrace[LangSpecLexerTokenType]
-	SyntaxErrors      *syntaxa.SyntaxErrors[rune]
+	Trace             *syntaxa.ParseTrace
+	SyntaxErrors      *syntaxa.SyntaxErrors
 	ValidationEntries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 	SourceRunes       []rune
 
@@ -178,7 +178,7 @@ type LangSpecCompileResult struct {
 	CompiledGrammarPackage GrammarPackage
 
 	CompiledToolPragmas []ToolPragma
-	SourceMap           map[*syntaxa.Grammar[uint32, uint32]]*Node
+	SourceMap           map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
 
 	CompiledSymbols *semantics.CompiledSymbolTable
 	EOFToken        uint32
@@ -395,8 +395,8 @@ func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string)
 	}
 
 	renderLexemes(compiler.diagnosticWriter, lexemes,
-		func(t LangSpecLexerTokenType) string { return t.String() },
-		func(r LangSpecLexerTokenRole) string { return r.String() },
+		func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() },
+		func(r lexarch.TokenRole) string { return LangSpecLexerTokenRole(r).String() },
 	)
 
 	return nil
@@ -405,9 +405,9 @@ func LangSpecCompilerDebugLexemes(compiler *LangSpecCompiler, sourceFile string)
 /* LangSpecCompilerDebugGrammar writes grammar and grammar-package debug dumps to the diagnostic writer. */
 func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	grammarDump := compiler.programRule.GetGrammar().DebugDump(
-		syntaxa.GrammarDebugFormatter[LangSpecLexerTokenType, LangSpecParserNodeKind]{
+		syntaxa.GrammarDebugFormatter[lexarch.TokenKind, LangSpecParserNodeKind]{
 			FormatKind:           syntaxa.GrammarKind.String,
-			FormatToken:          LangSpecLexerTokenType.String,
+			FormatToken: func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() },
 			FormatOutputNodeKind: LangSpecParserNodeKind.String,
 			FormatRange: func(min int, max *int) string {
 				if max == nil {
@@ -422,10 +422,10 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	)
 
 	grammarPackage := compiler.parser.GetGrammarPackage()
-	getAnalysis := func() *syntaxa.GrammarAnalysis[LangSpecLexerTokenType] { return lowering.GetAnalysis(grammarPackage) }
+	getAnalysis := func() *syntaxa.GrammarAnalysis { return lowering.GetAnalysis(grammarPackage) }
 	grammarPackageDump := grammarPackage.DebugDump(
-		syntaxa.GrammarPackageDebugFormatter[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState]{
-			FormatToken: LangSpecLexerTokenType.String,
+		syntaxa.GrammarPackageDebugFormatter[LangSpecParserNodeKind]{
+			FormatToken: func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() },
 		},
 		getAnalysis,
 	)
@@ -433,7 +433,7 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	var cfgDump string
 	if cfg, _, _ := lowering.ToPatternGrammar(grammarPackage.Root, grammarPackage.AdditionalRules, grammarPackage.Grammars); cfg != nil {
 		cfgDump = cfg.DebugDump(
-			pattern.NewContextaCleanFormatter[LangSpecLexerTokenType, struct{}](LangSpecLexerTokenType.String),
+			pattern.NewContextaCleanFormatter[lexarch.TokenKind, struct{}](func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() }),
 		)
 	}
 
@@ -447,27 +447,18 @@ When config.DebugParseTrace is true, event-level trace output requires parse tra
 */
 func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
 	if config.DebugParseTrace {
-		RenderParseTrace(compiler.diagnosticWriter, result.Trace, func(t LangSpecLexerTokenType) string { return t.String() })
+		RenderParseTrace(compiler.diagnosticWriter, result.Trace, func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() })
 	}
 
 	if config.DebugLST {
 		sourceText := string(result.SourceRunes)
 		lstDump := result.RootNode.DebugDump(
-			syntaxa.LSTDebugFormatter[
-				rune,
-				LangSpecLexerTokenType,
-				LangSpecLexerTokenRole,
-				LangSpecParserNodeKind,
-			]{
+			syntaxa.LSTDebugFormatter[LangSpecParserNodeKind]{
 				FormatKind: func(k LangSpecParserNodeKind) string {
 					return k.String()
 				},
 
-				FormatToken: func(l syntaxa.Lexeme[
-					rune,
-					LangSpecLexerTokenType,
-					LangSpecLexerTokenRole,
-				]) string {
+				FormatToken: func(l syntaxa.Lexeme) string {
 					return string(l.Raw)
 				},
 
@@ -530,6 +521,6 @@ func LangSpecCompilerProgramRule(compiler *LangSpecCompiler) Rule {
 LangSpecCompilerGrammarPackage returns the grammar package used by the DSL parser.
 Use for editor IR (e.g. syntax highlighting) or debug dumps.
 */
-func LangSpecCompilerGrammarPackage(compiler *LangSpecCompiler) *syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState] {
+func LangSpecCompilerGrammarPackage(compiler *LangSpecCompiler) *syntaxa.GrammarPackage[LangSpecParserNodeKind] {
 	return compiler.parser.GetGrammarPackage()
 }

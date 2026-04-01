@@ -2,6 +2,7 @@ package spec
 
 import (
 	"langspec"
+	"lexarch"
 	"syntaxa"
 	"syntaxa/rule"
 )
@@ -11,11 +12,11 @@ AdditionalRulesFromBuilder returns all defined context-boundary grammars from th
 except the root, for use as ProducePackage additionalRules (disconnected sub-graphs).
 */
 func AdditionalRulesFromBuilder(
-	rb *rule.RuleBuilder[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	root *syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind],
-) []*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind] {
+	rb *rule.RuleBuilder[LangSpecParserNodeKind],
+	root *syntaxa.Grammar[lexarch.TokenKind, LangSpecParserNodeKind],
+) []*syntaxa.Grammar[lexarch.TokenKind, LangSpecParserNodeKind] {
 	defined := rb.GetDefinedGrammars()
-	out := make([]*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind], 0, len(defined))
+	out := make([]*syntaxa.Grammar[lexarch.TokenKind, LangSpecParserNodeKind], 0, len(defined))
 	for _, g := range defined {
 		if g != root {
 			out = append(out, g)
@@ -38,8 +39,8 @@ func BuildLangSpecDSLSpec() (
 	languageSpec := buildLanguageSpec(factory, templates)
 
 	lexerSpec, ruleset := buildLangSpecDSLLexerSpec(languageSpec)
-	ruleBuilder := rule.RuleBuilderCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
-		LangSpecLexerTokenType.String,
+	ruleBuilder := rule.RuleBuilderCreate[LangSpecParserNodeKind](
+		func(token lexarch.TokenKind) string { return LangSpecLexerTokenType(token).String() },
 	)
 	g := grammarDefinerCreate(ruleBuilder)
 	programRule := buildProgramRule(g)

@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"lexarch"
 	"syntaxa"
 	"syntaxa/rule"
 )
@@ -43,7 +44,7 @@ GrammarID is derived from (node, suffix). Use suffix "" for the default slot or 
 */
 func (g *GrammarDefiner) Expect(node LangSpecParserNodeKind, suffix string, tok LangSpecLexerTokenType) Rule {
 	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
-	return g.rb.Token.Expect(grammarID, node, tok)
+	return g.rb.Token.Expect(grammarID, node, lexarch.TokenKind(tok))
 }
 
 /*
@@ -59,7 +60,7 @@ using the given grammarID. Use for header expectations when the node maps to mul
 grammar IDs (e.g. NodeVersion for DSL vs Langspec version) via GrammarIDOverride.
 */
 func (g *GrammarDefiner) expectTokenWithGrammarID(grammarID syntaxa.GrammarLabel, node LangSpecParserNodeKind, tok LangSpecLexerTokenType) Rule {
-	return g.rb.Token.Expect(grammarID, node, tok)
+	return g.rb.Token.Expect(grammarID, node, lexarch.TokenKind(tok))
 }
 
 /*
@@ -67,7 +68,7 @@ expectVirtual returns a rule that consumes the token without creating an LST nod
 Uses VirtualGrammarIDToGrammarID to resolve the virtual ID to syntaxa.GrammarLabel.
 */
 func (g *GrammarDefiner) expectVirtual(v VirtualGrammarID, tok LangSpecLexerTokenType) Rule {
-	return g.rb.Token.ExpectVirtual(VirtualGrammarIDToGrammarID(v), tok)
+	return g.rb.Token.ExpectVirtual(VirtualGrammarIDToGrammarID(v), lexarch.TokenKind(tok))
 }
 
 /*
@@ -79,7 +80,7 @@ func (g *GrammarDefiner) expectVirtualInRule(node LangSpecParserNodeKind, tok La
 	baseID := string(LangSpecGrammarIDFromNode(node))
 	uniqueID := syntaxa.GrammarLabel(fmt.Sprintf("%s_VIRTUAL_%v", baseID, tok))
 
-	return g.rb.Token.ExpectVirtual(uniqueID, tok)
+	return g.rb.Token.ExpectVirtual(uniqueID, lexarch.TokenKind(tok))
 }
 
 /*
@@ -88,7 +89,7 @@ of that kind. GrammarID is derived from the node via LangSpecGrammarIDFromNode(n
 */
 func (g *GrammarDefiner) expectOneOf(node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
-	return g.rb.Token.ExpectOneOf(grammarID, node, tokens...)
+	return g.rb.Token.ExpectOneOf(grammarID, node, langSpecTokenKinds(tokens)...)
 }
 
 /*
@@ -96,7 +97,7 @@ expectOneOfWithGrammarID returns a rule that expects one of the tokens and creat
 LST node, using the given grammarID. Use when the node maps to multiple grammar IDs.
 */
 func (g *GrammarDefiner) expectOneOfWithGrammarID(grammarID syntaxa.GrammarLabel, node LangSpecParserNodeKind, tokens ...LangSpecLexerTokenType) Rule {
-	return g.rb.Token.ExpectOneOf(grammarID, node, tokens...)
+	return g.rb.Token.ExpectOneOf(grammarID, node, langSpecTokenKinds(tokens)...)
 }
 
 /*
@@ -119,7 +120,7 @@ TransparentNestByNode creates a transparent nest (open ... close) with grammar I
 func (g *GrammarDefiner) TransparentNestByNode(node LangSpecParserNodeKind, suffix string, open, close LangSpecLexerTokenType, body Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
 	return g.memoize(grammarID, func() Rule {
-		return g.rb.Rule.TransparentNest(grammarID, open, close, body)
+		return g.rb.Rule.TransparentNest(grammarID, lexarch.TokenKind(open), lexarch.TokenKind(close), body)
 	})
 }
 
@@ -149,7 +150,7 @@ NestByNode builds a nest (open ... close) with grammar ID derived from node (suf
 func (g *GrammarDefiner) NestByNode(node LangSpecParserNodeKind, open, close LangSpecLexerTokenType, body Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.memoize(grammarID, func() Rule {
-		return g.rb.Rule.Nest(grammarID, node, open, close, body)
+		return g.rb.Rule.Nest(grammarID, node, lexarch.TokenKind(open), lexarch.TokenKind(close), body)
 	})
 }
 
@@ -179,16 +180,16 @@ OptionalSuffixByNode builds an optional-suffix rule (rule followed by optional t
 func (g *GrammarDefiner) OptionalSuffixByNode(node LangSpecParserNodeKind, rule Rule, tok LangSpecLexerTokenType) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
 	return g.memoize(grammarID, func() Rule {
-		return g.rb.Rule.OptionalSuffix(grammarID, node, rule, tok)
+		return g.rb.Rule.OptionalSuffix(grammarID, node, rule, lexarch.TokenKind(tok))
 	})
 }
 
 /*
 InfixOp returns a Pratt infix operator descriptor with TokenGrammarLabel and NodeKind derived from node (suffix "").
 */
-func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int, node LangSpecParserNodeKind) rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
-	return rule.PrattInfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-		Token:             tok,
+func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int, node LangSpecParserNodeKind) rule.PrattInfixOp[LangSpecParserNodeKind] {
+	return rule.PrattInfixOp[LangSpecParserNodeKind]{
+		Token:             lexarch.TokenKind(tok),
 		LeftBP:            leftBP,
 		RightBP:           rightBP,
 		NodeKind:          node,
@@ -196,18 +197,18 @@ func (g *GrammarDefiner) InfixOp(tok LangSpecLexerTokenType, leftBP, rightBP int
 	}
 }
 
-func (g *GrammarDefiner) PrefixOp(tok LangSpecLexerTokenType, rightBP int, node LangSpecParserNodeKind) rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
-	return rule.PrattPrefixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-		Token:             tok,
+func (g *GrammarDefiner) PrefixOp(tok LangSpecLexerTokenType, rightBP int, node LangSpecParserNodeKind) rule.PrattPrefixOp[LangSpecParserNodeKind] {
+	return rule.PrattPrefixOp[LangSpecParserNodeKind]{
+		Token:             lexarch.TokenKind(tok),
 		RightBP:           rightBP,
 		NodeKind:          node,
 		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
 	}
 }
 
-func (g *GrammarDefiner) PostfixOp(tok LangSpecLexerTokenType, leftBP int, node LangSpecParserNodeKind) rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind] {
-	return rule.PrattPostfixOp[LangSpecLexerTokenType, LangSpecParserNodeKind]{
-		Token:             tok,
+func (g *GrammarDefiner) PostfixOp(tok LangSpecLexerTokenType, leftBP int, node LangSpecParserNodeKind) rule.PrattPostfixOp[LangSpecParserNodeKind] {
+	return rule.PrattPostfixOp[LangSpecParserNodeKind]{
+		Token:             lexarch.TokenKind(tok),
 		LeftBP:            leftBP,
 		NodeKind:          node,
 		TokenGrammarLabel: LangSpecGrammarIDFromNode(node),
@@ -221,8 +222,8 @@ func (g *GrammarDefiner) PostfixRuleOp(
 	leftBP int,
 	node LangSpecParserNodeKind,
 	r Rule,
-) rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind] {
-	return rule.PrattPostfixRuleOp[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind]{
+) rule.PrattPostfixRuleOp[LangSpecParserNodeKind] {
+	return rule.PrattPostfixRuleOp[LangSpecParserNodeKind]{
 		LeftBP:   leftBP,
 		NodeKind: node,
 		Rule:     r,
@@ -248,8 +249,8 @@ func (g *GrammarDefiner) block(
 			g.expectToken(kwNode, kwTok),
 			g.rb.Rule.TransparentNest(
 				LangSpecGrammarIDFromNodeWithSuffix(node, "BLOCK_NEST"),
-				TokBraceOpen,
-				TokBraceClose,
+				lexarch.TokenKind(TokBraceOpen),
+				lexarch.TokenKind(TokBraceClose),
 				bodyRule,
 			),
 			g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
@@ -273,8 +274,8 @@ func (g *GrammarDefiner) blockByRule(
 			kwRule,
 			g.rb.Rule.TransparentNest(
 				LangSpecGrammarIDFromNodeWithSuffix(node, "BLOCK_NEST"),
-				TokBraceOpen,
-				TokBraceClose,
+				lexarch.TokenKind(TokBraceOpen),
+				lexarch.TokenKind(TokBraceClose),
 				bodyRule,
 			),
 			g.rb.Rule.Optional(g.expectVirtualInRule(node, TokSemicolon)),
@@ -341,4 +342,12 @@ func (s *SequenceBuilder) build() Rule {
 	return s.g.memoize(s.grammarID, func() Rule {
 		return s.g.rb.Rule.Sequence(s.grammarID, s.nodeKind, s.rules...)
 	})
+}
+
+func langSpecTokenKinds(tokens []LangSpecLexerTokenType) []lexarch.TokenKind {
+	out := make([]lexarch.TokenKind, len(tokens))
+	for i, tok := range tokens {
+		out[i] = lexarch.TokenKind(tok)
+	}
+	return out
 }

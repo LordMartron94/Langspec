@@ -3,6 +3,7 @@ package spec
 import (
 	"foundation/text"
 	"langspec"
+	"lexarch"
 	"syntaxa"
 	"syntaxa/lowering"
 )
@@ -17,13 +18,13 @@ const (
 
 func buildLangSpecDSLParserSpec(
 	programRule Rule,
-	registry syntaxa.RuleRegistry[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
-	additionalRules []*syntaxa.Grammar[LangSpecLexerTokenType, LangSpecParserNodeKind],
+	registry syntaxa.RuleRegistry[LangSpecParserNodeKind],
+	additionalRules []*syntaxa.Grammar[lexarch.TokenKind, LangSpecParserNodeKind],
 ) (
 	*langspec.ParserSpec[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind],
 	Rule,
 ) {
-	grammarPkg := new(syntaxa.GrammarPackage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, LangSpecLexerState])
+	grammarPkg := new(syntaxa.GrammarPackage[LangSpecParserNodeKind])
 	*grammarPkg = syntaxa.ProducePackage(
 		programRule.GetGrammar(),
 		additionalRules,
@@ -31,8 +32,8 @@ func buildLangSpecDSLParserSpec(
 		"0.0.0",
 		&programRule,
 	)
-	getAnalysis := func() *syntaxa.GrammarAnalysis[LangSpecLexerTokenType] { return lowering.GetAnalysis(grammarPkg) }
-	parserSpec := langspec.ParserSpecCreate(
+	getAnalysis := func() *syntaxa.GrammarAnalysis { return lowering.GetAnalysis(grammarPkg) }
+	parserSpec := langspec.ParserSpecCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecLexerState, LangSpecParserNodeKind](
 		grammarPkg,
 		registry,
 		NodeProgram,
@@ -59,7 +60,7 @@ func applyLiteralAttributes(node *Node, finalizationCTX *NodeFinalizationCtx, _ 
 	token := lexemes[0]
 	raw := string(token.Raw)
 
-	switch token.Token {
+	switch LangSpecLexerTokenType(token.Token) {
 	case TokStringLiteral:
 		inner := stripQuotes(raw, '"')
 		finalizationCTX.SetAttribute(node, ATTRIBUTE_LITERAL_STRING_VALUE, text.Unescape(inner))

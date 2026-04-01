@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"lexarch"
 	"autarch/pattern"
 	"fmt"
 	"foundation/bytes"
@@ -38,8 +39,9 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 
 	irConfig := langspeceditor.EditorIRConfigurationCreate(
 		hasher,
-		func(token dsl.LangSpecLexerTokenType) uint64 {
-			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{token.String()}, 0x00))
+		func(token lexarch.TokenKind) uint64 {
+			t := dsl.LangSpecLexerTokenType(token)
+			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{t.String()}, 0x00))
 		},
 		func(node dsl.LangSpecParserNodeKind) uint64 {
 			return hash.XXH3HasherHash64(hasher, bytes.StringSliceToBytes([]string{node.String()}, 0x00))

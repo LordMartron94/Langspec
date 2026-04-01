@@ -1,6 +1,7 @@
 package toolchain
 
 import (
+	"lexarch"
 	"cmp"
 	"errors"
 	"fmt"
@@ -39,7 +40,7 @@ and scope suffix for a single Sublime generator run. Used after the toolchain ha
 */
 type SublimeRunnerConfig[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable] struct {
 	LexerRuleset   *editor.LexingRuleSet[TObservation, TToken, TTokenRole]
-	GrammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState]
+	GrammarPackage *syntaxa.GrammarPackage[TNodeKind]
 	IRConfig       *editor.EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, SublimeContext]
 	FileExtensions []string
 	BaseScope      string
@@ -207,7 +208,7 @@ func executeSublimeToolchain(
 
 	irConfig := editor.EditorIRConfigurationCreate(
 		hasher,
-		func(token uint32) uint64 {
+		func(token lexarch.TokenKind) uint64 {
 			return uint64(token)
 		},
 		func(nodeKind uint32) uint64 {
@@ -266,7 +267,7 @@ Prerequisites:
 Edge cases:
 - Returns an error if editor IR creation or file write fails.
 */
-func RunSublimeGenerator[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable](
+func RunSublimeGenerator[TObservation cmp.Ordered, TToken ~uint32, TTokenRole, TLexerState, TNodeKind comparable](
 	cfg *SublimeRunnerConfig[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 ) error {
 	editorIR, err := editor.EditorIRCreate(

@@ -8,6 +8,7 @@ import (
 	"foundation/text"
 	"langspec/editor"
 	"langspec/toolchain"
+	"lexarch"
 	"slices"
 	"strings"
 	"syntaxa"
@@ -17,10 +18,10 @@ import (
 // ----------------------------------------------------------------- TYPES
 
 /* GeneratorConfig controls emitted .lspec layout and optional tool PRAGMA blocks for maintainer generation. */
-type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
+type GeneratorConfig[TToken ~uint32, TTokenRole, TNodeKind comparable] struct {
 	targetLSpecVersion string
 
-	tokenFormatter     func(token TToken) string
+	tokenFormatter     func(token lexarch.TokenKind) string
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
 
@@ -43,13 +44,13 @@ type GeneratorConfig[TToken, TTokenRole, TNodeKind comparable] struct {
 }
 
 /* GeneratorConfigCreate returns a config with default formatters and the given skipped lexer roles. */
-func GeneratorConfigCreate[TToken, TTokenRole, TNodeKind comparable](
+func GeneratorConfigCreate[TToken ~uint32, TTokenRole, TNodeKind comparable](
 	targetLSpecVersion string,
 	skippedRoles []TTokenRole,
 ) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	return &GeneratorConfig[TToken, TTokenRole, TNodeKind]{
 		targetLSpecVersion: targetLSpecVersion,
-		tokenFormatter: func(token TToken) string {
+		tokenFormatter: func(token lexarch.TokenKind) string {
 			return fmt.Sprintf("%v", token)
 		},
 		tokenRoleFormatter: func(tokenRole TTokenRole) string {
@@ -71,7 +72,7 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEmitRegEx(value boo
 }
 
 /* WithTokenFormatter sets the formatter used for token names in emitted .lspec text. */
-func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithTokenFormatter(formatter func(token TToken) string) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
+func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithTokenFormatter(formatter func(token lexarch.TokenKind) string) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.tokenFormatter = formatter
 	return g
 }
@@ -130,8 +131,8 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithGoBindingsConfigura
 // ----------------------------------------------------------------- ENTRY
 
 /* GenerateLSpec writes a .lspec file from the given grammar package and lexer ruleset using configuration. */
-func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
+func GenerateLSpec[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable](
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind],
 	lexingRuleSet *editor.LexingRuleSet[rune, TToken, TTokenRole],
 	outputPath string,
 	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
@@ -140,16 +141,16 @@ func GenerateLSpec[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 		return fmt.Errorf("given path '%s' is not an lspec path", outputPath)
 	}
 
-	return writeLSpecDocument(grammarPackage, lexingRuleSet, outputPath, configuration)
+	return writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState](grammarPackage, lexingRuleSet, outputPath, configuration)
 }
 
-func writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
+func writeLSpecDocument[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable](
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind],
 	lexingRuleSet *editor.LexingRuleSet[rune, TToken, TTokenRole],
 	outputPath string,
 	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
 ) error {
-	gen := createGenerator(grammarPackage, lexingRuleSet, configuration)
+	gen := createGenerator[TToken, TTokenRole, TNodeKind, TLexerState](grammarPackage, lexingRuleSet, configuration)
 	document := gen.buildDocument()
 
 	printer := newPrettyPrinter(configuration.columnThreshold)
@@ -162,8 +163,8 @@ func writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 	return nil
 }
 
-func createGenerator[TToken, TTokenRole, TNodeKind, TLexerState comparable](
-	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState],
+func createGenerator[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable](
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind],
 	lexingRuleSet *editor.LexingRuleSet[rune, TToken, TTokenRole],
 	configuration *GeneratorConfig[TToken, TTokenRole, TNodeKind],
 ) *generator[TToken, TTokenRole, TNodeKind, TLexerState] {
@@ -190,14 +191,14 @@ func createGenerator[TToken, TTokenRole, TNodeKind, TLexerState comparable](
 
 // ----------------------------------------------------------------- INTERNAL HELPERS
 
-type generator[TToken, TTokenRole, TNodeKind, TLexerState comparable] struct {
-	grammarPackage *syntaxa.GrammarPackage[rune, TToken, TTokenRole, TNodeKind, TLexerState]
+type generator[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable] struct {
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind]
 	lexingRuleSet  *editor.LexingRuleSet[rune, TToken, TTokenRole]
 
 	targetLSpecVersion string
 	emitRegex          bool
 
-	tokenFormatter     func(token TToken) string
+	tokenFormatter     func(token lexarch.TokenKind) string
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
 
@@ -323,12 +324,12 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildRegExRuleDo
 	if err != nil {
 		panic(fmt.Errorf("engine error while converting pattern to RegEx: %w", err))
 	}
-	ruleStr := fmt.Sprintf("%s : `%s`;", g.formatPatternName(lexRule.Token), regex)
+	ruleStr := fmt.Sprintf("%s : `%s`;", g.formatPatternName(lexarch.TokenKind(lexRule.Token)), regex)
 	return doctext(ruleStr)
 }
 
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildDecompiledRuleDoc(lexRule editor.LexingRule[rune, TToken, TTokenRole]) Doc {
-	patternName := g.formatPatternName(lexRule.Token)
+	patternName := g.formatPatternName(lexarch.TokenKind(lexRule.Token))
 	decompiler := newLSpecDecompiler()
 	lexRule.Pattern.Accept(decompiler.visitor())
 
@@ -515,9 +516,9 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRo
 
 	return lexRow{
 		Priority: rule.Priority,
-		Token:    g.tokenFormatter(rule.Token),
+		Token:    g.tokenFormatter(lexarch.TokenKind(rule.Token)),
 		Role:     g.tokenRoleFormatter(rule.Role),
-		Pattern:  g.formatPatternName(rule.Token),
+		Pattern:  g.formatPatternName(lexarch.TokenKind(rule.Token)),
 		Meta:     meta,
 	}
 }
@@ -617,8 +618,9 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 	)
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[TToken, TNodeKind]) Doc {
-	decompiler := newParseDecompiler(g.tokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold)
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
+	parseTokenFormatter := g.tokenFormatter
+	decompiler := newParseDecompiler(parseTokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold)
 	return decompiler.BuildRuleDoc(labelStr, ruleNode)
 }
 
@@ -629,21 +631,21 @@ const (
 	layoutBlock
 )
 
-type parseDecompiler[TToken, TNodeKind comparable] struct {
-	tokenFormatter    func(TToken) string
+type parseDecompiler[TNodeKind comparable] struct {
+	tokenFormatter    func(lexarch.TokenKind) string
 	nodeKindFormatter func(TNodeKind) string
 	sanitizer         func(string) string
 	columnThreshold   int
 	currentRuleLabel  string
 }
 
-func newParseDecompiler[TToken, TNodeKind comparable](
-	tokenFormatter func(TToken) string,
+func newParseDecompiler[TNodeKind comparable](
+	tokenFormatter func(lexarch.TokenKind) string,
 	nodeKindFormatter func(TNodeKind) string,
 	sanitizer func(string) string,
 	columnThreshold int,
-) *parseDecompiler[TToken, TNodeKind] {
-	return &parseDecompiler[TToken, TNodeKind]{
+) *parseDecompiler[TNodeKind] {
+	return &parseDecompiler[TNodeKind]{
 		tokenFormatter:    tokenFormatter,
 		nodeKindFormatter: nodeKindFormatter,
 		sanitizer:         sanitizer,
@@ -651,7 +653,7 @@ func newParseDecompiler[TToken, TNodeKind comparable](
 	}
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) BuildRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) BuildRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	d.currentRuleLabel = labelStr
 
 	headerDoc := d.buildHeaderDoc(labelStr, ruleNode)
@@ -666,7 +668,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) BuildRuleDoc(labelStr string, ruleN
 	)
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) buildHeaderDoc(labelStr string, ruleNode *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) buildHeaderDoc(labelStr string, ruleNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	isTransparent := ruleNode.OutputNodeKind == nil || ruleNode.Kind == syntaxa.GToken || ruleNode.Kind == syntaxa.GChoice
 
 	nodeName := labelStr
@@ -690,7 +692,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) buildHeaderDoc(labelStr string, rul
 	return concat(doctext(base), d.buildSyncDoc(ruleNode.RecoveryTokens))
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) buildSyncDoc(tokens []TToken) Doc {
+func (d *parseDecompiler[TNodeKind]) buildSyncDoc(tokens []lexarch.TokenKind) Doc {
 	docs := []Doc{doctext(" sync (")}
 	for i, t := range tokens {
 		if i > 0 {
@@ -702,7 +704,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) buildSyncDoc(tokens []TToken) Doc {
 	return concat(docs...)
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) walk(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) walk(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	if g == nil {
 		return doctext("")
 	}
@@ -720,7 +722,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) walk(g *syntaxa.Grammar[TToken, TNo
 	return nodeDoc
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) buildLookaheadDoc(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) buildLookaheadDoc(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	if len(g.Lookaheads) == 0 {
 		return nil
 	}
@@ -733,7 +735,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) buildLookaheadDoc(g *syntaxa.Gramma
 	return concat(doctext("predict ("), doctext(strings.Join(parts, ", ")), doctext(")"), space())
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) mapGrammarToDoc(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) mapGrammarToDoc(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	var baseDoc Doc
 
 	switch g.Kind {
@@ -776,7 +778,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapGrammarToDoc(g *syntaxa.Grammar[
 	return baseDoc
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) mapConcat(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) mapConcat(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	var docs []Doc
 	forceBreak := len(g.Children) >= 1
 
@@ -801,7 +803,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapConcat(g *syntaxa.Grammar[TToken
 	return group(concat(docs...))
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) concatChildDoc(parent *syntaxa.Grammar[TToken, TNodeKind], child *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) concatChildDoc(parent *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], child *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	childDoc := d.walk(child)
 
 	if child.Kind == syntaxa.GChoice {
@@ -811,7 +813,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) concatChildDoc(parent *syntaxa.Gram
 	return childDoc
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) mapChoice(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) mapChoice(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	var docs []Doc
 	for i, child := range g.Children {
 		if i > 0 {
@@ -822,11 +824,11 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapChoice(g *syntaxa.Grammar[TToken
 	return group(concat(docs...))
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) choiceChildDoc(parent *syntaxa.Grammar[TToken, TNodeKind], child *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) choiceChildDoc(parent *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], child *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	return d.walk(child)
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) mapNest(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) mapNest(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	openTok := d.tokenFormatter(*g.OpenToken)
 	closeTok := d.tokenFormatter(*g.CloseToken)
 
@@ -860,7 +862,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) mapNest(g *syntaxa.Grammar[TToken, 
 	)
 }
 
-func isReferenceBody[TToken, TNodeKind comparable](g *syntaxa.Grammar[TToken, TNodeKind]) (*syntaxa.Grammar[TToken, TNodeKind], bool) {
+func isReferenceBody[TNodeKind comparable](g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) (*syntaxa.Grammar[lexarch.TokenKind, TNodeKind], bool) {
 	if len(g.Children) != 1 {
 		return nil, false
 	}
@@ -873,18 +875,18 @@ func isReferenceBody[TToken, TNodeKind comparable](g *syntaxa.Grammar[TToken, TN
 	return child, true
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) mapRepeat(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) mapRepeat(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	body := d.wrapIfComplex(g.Children[0])
 	modifier := d.getRepeatModifier(g.Min, g.Max)
 	return concat(body, doctext(modifier))
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) mapOptional(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) mapOptional(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	body := d.wrapIfComplex(g.Children[0])
 	return concat(body, doctext("?"))
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) wrapIfComplex(g *syntaxa.Grammar[TToken, TNodeKind]) Doc {
+func (d *parseDecompiler[TNodeKind]) wrapIfComplex(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	isComplex := g.Kind == syntaxa.GChoice || g.Kind == syntaxa.GConcat || g.Kind == syntaxa.GRepeat || g.Kind == syntaxa.GOptional
 	body := d.walk(g)
 
@@ -900,7 +902,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) wrapIfComplex(g *syntaxa.Grammar[TT
 	)
 }
 
-func (d *parseDecompiler[TToken, TNodeKind]) getRepeatModifier(min int, max *int) string {
+func (d *parseDecompiler[TNodeKind]) getRepeatModifier(min int, max *int) string {
 	if min == 0 && max == nil {
 		return "*"
 	}
@@ -917,7 +919,7 @@ func (d *parseDecompiler[TToken, TNodeKind]) getRepeatModifier(min int, max *int
 
 // --- UTIL
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) formatPatternName(token TToken) string {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) formatPatternName(token lexarch.TokenKind) string {
 	raw := g.tokenFormatter(token)
 	safe := g.sanitizeIdentifier(raw)
 	return fmt.Sprintf("pat_%s", safe)

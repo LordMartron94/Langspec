@@ -41,7 +41,7 @@ type ValidationEntry[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind com
 	Code     string
 	Message  string
 	Severity ValidationSeverity
-	Node     *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	Node     *syntaxa.SyntaxaLSTNode[TNodeKind]
 	Start    int
 	End      int
 	Notes    []string
@@ -128,16 +128,16 @@ func (v *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind]) HasFata
 
 /* LSTValidationStageContext is passed to each stage processor; it holds the LST root, typed run state, and report helpers. */
 type LSTValidationStageContext[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any] struct {
-	RootNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]
+	RootNode *syntaxa.SyntaxaLSTNode[TNodeKind]
 	RunState TState
 
-	NewValidationEntry func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]
+	NewValidationEntry func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaLSTNode[TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]
 
-	ReportDiagnostic func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind])
-	ReportInfo       func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind])
-	ReportWarning    func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind])
-	ReportError      func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind])
-	ReportFatal      func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind])
+	ReportDiagnostic func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind])
+	ReportInfo       func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind])
+	ReportWarning    func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind])
+	ReportError      func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind])
+	ReportFatal      func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind])
 
 	ReportValidationEntry func(entry ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind])
 }
@@ -218,7 +218,7 @@ runState is passed to each stage's processor as ctx.RunState (type TState). Stop
 */
 func LSTValidatorRun[TObservation cmp.Ordered, TToken, TTokenRole, TNodeKind comparable, TState any](
 	configuration *LSTValidatorConfiguration[TObservation, TToken, TTokenRole, TNodeKind, TState],
-	rootNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	rootNode *syntaxa.SyntaxaLSTNode[TNodeKind],
 	stageFilter func(stage *LSTValidationStage[TObservation, TToken, TTokenRole, TNodeKind, TState]) bool,
 	runState TState,
 ) (*ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind], error) {
@@ -258,11 +258,11 @@ func buildValidationContextForStage[
 	TState any,
 ](
 	stageName string,
-	rootNode *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind],
+	rootNode *syntaxa.SyntaxaLSTNode[TNodeKind],
 	sharedValidationEntries *ValidationEntries[TObservation, TToken, TTokenRole, TNodeKind],
 	runState TState,
 ) *LSTValidationStageContext[TObservation, TToken, TTokenRole, TNodeKind, TState] {
-	newValidationEntry := func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind] {
+	newValidationEntry := func(code, message string, severity ValidationSeverity, node *syntaxa.SyntaxaLSTNode[TNodeKind]) ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind] {
 		return ValidationEntry[TObservation, TToken, TTokenRole, TNodeKind]{
 			Code:     code,
 			Message:  message,
@@ -279,19 +279,19 @@ func buildValidationContextForStage[
 		RootNode:           rootNode,
 		RunState:           runState,
 		NewValidationEntry: newValidationEntry,
-		ReportDiagnostic: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+		ReportDiagnostic: func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind]) {
 			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_DIAGNOSTIC, node))
 		},
-		ReportInfo: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+		ReportInfo: func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind]) {
 			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_INFO, node))
 		},
-		ReportWarning: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+		ReportWarning: func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind]) {
 			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_WARNING, node))
 		},
-		ReportError: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+		ReportError: func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind]) {
 			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_ERROR, node))
 		},
-		ReportFatal: func(code, message string, node *syntaxa.SyntaxaLSTNode[TObservation, TToken, TTokenRole, TNodeKind]) {
+		ReportFatal: func(code, message string, node *syntaxa.SyntaxaLSTNode[TNodeKind]) {
 			reportValidationEntry(newValidationEntry(code, message, VALIDATION_SEVERITY_FATAL, node))
 		},
 		ReportValidationEntry: reportValidationEntry,

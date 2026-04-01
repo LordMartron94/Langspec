@@ -3,6 +3,7 @@ package editor
 import (
 	"cmp"
 	"foundation/text"
+	"lexarch"
 	"sort"
 
 	"autarch/pattern"
@@ -46,16 +47,16 @@ Edge cases:
 */
 func EditorIRFromStateGraph[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 	TNodeKind comparable,
 	TLexerState comparable,
 	TContext any,
 ](
-	sg *lowering.StateGraph[TToken, TNodeKind],
+	sg *lowering.StateGraph[TNodeKind],
 	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-	grammarPackage *syntaxa.GrammarPackage[TObservation, TToken, TTokenRole, TNodeKind, TLexerState],
+	grammarPackage *syntaxa.GrammarPackage[TNodeKind],
 ) (*EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext], error) {
 	if sg == nil || config == nil || grammarPackage == nil {
 		return nil, nil
@@ -63,14 +64,14 @@ func EditorIRFromStateGraph[
 
 	sanitizer := text.NewIdentifierSanitizer()
 
-	tokenToRule := make(map[TToken]LexingRule[TObservation, TToken, TTokenRole])
-	tokenToPriority := make(map[TToken]int)
-	tokenToRuleIndex := make(map[TToken]int)
+	tokenToRule := make(map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole])
+	tokenToPriority := make(map[lexarch.TokenKind]int)
+	tokenToRuleIndex := make(map[lexarch.TokenKind]int)
 
 	for i, rule := range LexingRuleSetGetRules(lexingRuleset) {
-		tokenToRule[rule.Token] = rule
-		tokenToPriority[rule.Token] = rule.Priority
-		tokenToRuleIndex[rule.Token] = i
+		tokenToRule[lexarch.TokenKind(rule.Token)] = rule
+		tokenToPriority[lexarch.TokenKind(rule.Token)] = rule.Priority
+		tokenToRuleIndex[lexarch.TokenKind(rule.Token)] = i
 	}
 
 	stateByID := make(map[string]*EditorState[TObservation, TContext])
@@ -136,10 +137,10 @@ func EditorIRFromStateGraph[
 
 		type pair struct {
 			priority int
-			tr       lowering.Transition[TToken, TNodeKind]
+			tr       lowering.Transition[TNodeKind]
 		}
 		pairs := make([]pair, 0, len(transList))
-		addedTokens := make(map[TToken]bool)
+		addedTokens := make(map[lexarch.TokenKind]bool)
 
 		for _, tr := range transList {
 			if !addedTokens[tr.Token] {
@@ -223,24 +224,25 @@ func EditorIRFromStateGraph[
 
 func buildEditorTransitionsFromGeneric[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 	TLexerState comparable,
 	TNodeKind comparable,
 	TContext any,
 ](
-	tr lowering.Transition[TToken, TNodeKind],
+	tr lowering.Transition[TNodeKind],
 	stateByID map[string]*EditorState[TObservation, TContext],
-	tokenToRule map[TToken]LexingRule[TObservation, TToken, TTokenRole],
+	tokenToRule map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
 ) []EditorTransition[TObservation, TContext] {
 
 	edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-		Token:    &tr.Token,
 		NodeKind: tr.NodeKind,
 	}
+	token := TToken(tr.Token)
+	edCtx.Token = &token
 	overrides := config.overrideProducer(edCtx)
 
 	// Fallback to the default single transition if no overrides exist
@@ -263,15 +265,15 @@ func buildEditorTransitionsFromGeneric[
 
 func buildDefaultTransition[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 	TLexerState comparable,
 	TNodeKind comparable,
 	TContext any,
 ](
-	tr lowering.Transition[TToken, TNodeKind],
+	tr lowering.Transition[TNodeKind],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	tokenToRule map[TToken]LexingRule[TObservation, TToken, TTokenRole],
+	tokenToRule map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	stateByID map[string]*EditorState[TObservation, TContext],
 ) (EditorTransition[TObservation, TContext], bool) {
@@ -293,16 +295,16 @@ func buildDefaultTransition[
 
 func buildOverrideTransition[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 	TLexerState comparable,
 	TNodeKind comparable,
 	TContext any,
 ](
-	tr lowering.Transition[TToken, TNodeKind],
+	tr lowering.Transition[TNodeKind],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	override EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-	tokenToRule map[TToken]LexingRule[TObservation, TToken, TTokenRole],
+	tokenToRule map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole],
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	stateByID map[string]*EditorState[TObservation, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
@@ -375,7 +377,7 @@ func resolveTargets[TObservation cmp.Ordered, TContext any](
 	return targets
 }
 
-func determinePopAmount[TToken, TNodeKind comparable](tr lowering.Transition[TToken, TNodeKind]) int {
+func determinePopAmount[TNodeKind comparable](tr lowering.Transition[TNodeKind]) int {
 	if tr.PopAmount > 0 {
 		return tr.PopAmount
 	}
@@ -416,22 +418,22 @@ func getOrCreateDelimitedState[
 	return s
 }
 
-func collectGrammarTokens[TToken, TNodeKind comparable](
-	grammars map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-) map[TToken]bool {
-	seen := make(map[*syntaxa.Grammar[TToken, TNodeKind]]bool)
-	result := make(map[TToken]bool)
+func collectGrammarTokens[TNodeKind comparable](
+	grammars map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) map[lexarch.TokenKind]bool {
+	seen := make(map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]bool)
+	result := make(map[lexarch.TokenKind]bool)
 	for _, g := range grammars {
 		walkGrammarTokens(g, grammars, seen, result)
 	}
 	return result
 }
 
-func walkGrammarTokens[TToken, TNodeKind comparable](
-	g *syntaxa.Grammar[TToken, TNodeKind],
-	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[TToken, TNodeKind],
-	seen map[*syntaxa.Grammar[TToken, TNodeKind]]bool,
-	tokens map[TToken]bool,
+func walkGrammarTokens[TNodeKind comparable](
+	g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	rules map[syntaxa.GrammarLabel]*syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	seen map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]bool,
+	tokens map[lexarch.TokenKind]bool,
 ) {
 	if g == nil || seen[g] {
 		return
@@ -439,13 +441,13 @@ func walkGrammarTokens[TToken, TNodeKind comparable](
 	seen[g] = true
 	switch g.Kind {
 	case syntaxa.GToken:
-		tokens[g.Token] = true
+		tokens[lexarch.TokenKind(g.Token)] = true
 	case syntaxa.GNest:
 		if g.OpenToken != nil {
-			tokens[*g.OpenToken] = true
+			tokens[lexarch.TokenKind(*g.OpenToken)] = true
 		}
 		if g.CloseToken != nil {
-			tokens[*g.CloseToken] = true
+			tokens[lexarch.TokenKind(*g.CloseToken)] = true
 		}
 	case syntaxa.GReference:
 		target := g.ResolvedReference
@@ -463,18 +465,18 @@ func walkGrammarTokens[TToken, TNodeKind comparable](
 
 func buildAmbientFromStateGraph[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 	TLexerState comparable,
 	TNodeKind comparable,
 	TContext any,
 ](
 	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
-	grammarTokens map[TToken]bool,
+	grammarTokens map[lexarch.TokenKind]bool,
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
-	tokenToRuleIndex map[TToken]int,
+	tokenToRuleIndex map[lexarch.TokenKind]int,
 ) []EditorTransition[TObservation, TContext] {
 
 	candidates := getSortedAmbientCandidates(lexingRuleset, grammarTokens, tokenToRuleIndex)
@@ -493,7 +495,7 @@ func buildAmbientFromStateGraph[
 
 func buildAmbientTransitionsForToken[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 	TLexerState comparable,
 	TNodeKind comparable,
@@ -563,12 +565,12 @@ func buildAmbientTransitionsForToken[
 
 func getSortedAmbientCandidates[
 	TObservation cmp.Ordered,
-	TToken comparable,
+	TToken ~uint32,
 	TTokenRole comparable,
 ](
 	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
-	grammarTokens map[TToken]bool,
-	tokenToRuleIndex map[TToken]int,
+	grammarTokens map[lexarch.TokenKind]bool,
+	tokenToRuleIndex map[lexarch.TokenKind]int,
 ) []struct {
 	rule     LexingRule[TObservation, TToken, TTokenRole]
 	priority int
@@ -579,7 +581,7 @@ func getSortedAmbientCandidates[
 	}
 
 	for _, rule := range LexingRuleSetGetRules(lexingRuleset) {
-		if !grammarTokens[rule.Token] {
+		if !grammarTokens[lexarch.TokenKind(rule.Token)] {
 			candidates = append(candidates, struct {
 				rule     LexingRule[TObservation, TToken, TTokenRole]
 				priority int
@@ -591,7 +593,7 @@ func getSortedAmbientCandidates[
 		if candidates[i].priority != candidates[j].priority {
 			return candidates[i].priority > candidates[j].priority
 		}
-		return tokenToRuleIndex[candidates[i].rule.Token] < tokenToRuleIndex[candidates[j].rule.Token]
+		return tokenToRuleIndex[lexarch.TokenKind(candidates[i].rule.Token)] < tokenToRuleIndex[lexarch.TokenKind(candidates[j].rule.Token)]
 	})
 
 	return candidates

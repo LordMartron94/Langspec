@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"lexarch"
 	"fmt"
 	"langspec/dsl"
 	"langspec/dsl/semantics"
@@ -52,26 +53,26 @@ func setupTestCompiler() (
 func debugParseResult(
 	enable bool,
 	sink *dsl.LangSpecDiagnosticSink,
-	trace *syntaxa.ParseTrace[uint32],
-	rootNode *syntaxa.SyntaxaLSTNode[rune, uint32, uint32, uint32],
+	trace *syntaxa.ParseTrace,
+	rootNode *syntaxa.SyntaxaLSTNode[uint32],
 	sym *semantics.CompiledSymbolTable,
 ) {
 	if !enable {
 		return
 	}
 
-	dsl.RenderParseTrace(sink.Writer, trace, func(t uint32) string { return strconv.FormatUint(uint64(t), 10) })
+	dsl.RenderParseTrace(sink.Writer, trace, func(t lexarch.TokenKind) string { return strconv.FormatUint(uint64(t), 10) })
 
 	if rootNode != nil {
 		lstDump := rootNode.DebugDump(
-			syntaxa.LSTDebugFormatter[rune, uint32, uint32, uint32]{
+			syntaxa.LSTDebugFormatter[uint32]{
 				FormatKind: func(k uint32) string {
 					if sym != nil {
 						return sym.NodeKindName(k)
 					}
 					return strconv.FormatUint(uint64(k), 10)
 				},
-				FormatToken:     func(l syntaxa.Lexeme[rune, uint32, uint32]) string { return string(l.Raw) },
+				FormatToken:     func(l syntaxa.Lexeme) string { return string(l.Raw) },
 				FormatAttribute: func(k string, v any) string { return fmt.Sprintf("%s=%v", k, v) },
 				ShowTokens:      true,
 				ShowAttributes:  true,
