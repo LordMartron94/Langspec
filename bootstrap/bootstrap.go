@@ -19,9 +19,9 @@ type SublimeOverrideFactory func(
 ) func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
 
 type ParserCompiler struct {
-	specFile       string
-	allocFn        memarch.AllocationFn
-	diagnosticSink *dsl.LangSpecDiagnosticSink
+	specFile                string
+	allocFn                 memarch.AllocationFn
+	diagnosticSink          *dsl.LangSpecDiagnosticSink
 	lexerPatternCompilerSet bool
 	lexerPatternCompiler    lexarch.PatternCompilerMode
 
@@ -155,7 +155,7 @@ func CompileParserFromSpec(
 	specFile string,
 	alloc memarch.AllocationFn,
 	opts ...Option,
-) (*langspec.LangParser[rune, string, uint32, uint32, uint32], error) {
+) (*LangParser, error) {
 	p, _, err := CompileParserFromSpecWithCompiledSymbols(specFile, alloc, opts...)
 	return p, err
 }
@@ -169,7 +169,7 @@ func CompileParserFromSpecWithCompiledSymbols(
 	specFile string,
 	alloc memarch.AllocationFn,
 	opts ...Option,
-) (*langspec.LangParser[rune, string, uint32, uint32, uint32], *semantics.CompiledSymbolTable, error) {
+) (*LangParser, *semantics.CompiledSymbolTable, error) {
 	cfg := buildConfig(specFile, alloc, opts...)
 
 	compileResult, err := compileDSL(cfg)
@@ -265,7 +265,7 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	return result, nil
 }
 
-func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) *langspec.LangParser[rune, string, uint32, uint32, uint32] {
+func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) *LangParser {
 	langSpec := langspec.LangSpecCreate(
 		compileResult.CompiledLexerSpec,
 		compileResult.CompiledParserSpec,
