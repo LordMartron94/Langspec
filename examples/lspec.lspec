@@ -3,7 +3,7 @@
 PRAGMA {
 	tool.sublime {
 		enable = true;
-		output-path = ["/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax", "libs/langspec/examples/lspec.sublime-syntax"];
+		output-path = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax";
 	}
 	
 	tool.go_bindings {
