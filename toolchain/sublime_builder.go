@@ -374,6 +374,7 @@ func RunSublimeGenerator[TObservation cmp.Ordered, TToken ~uint32, TTokenRole, T
 					return applyScopeSuffix(ctx.MetaScope, cfg.ScopeSuffix)
 				},
 			},
+			os.Stderr,
 		)
 		if genErr != nil {
 			errs = append(errs, fmt.Errorf("output path %s: %w", outputPath, genErr))

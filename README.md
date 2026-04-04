@@ -9,6 +9,7 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
 ## Table of Contents
 
 - [Getting started (walkthrough)](docs/WALKTHROUGH.md)
+- [Sublime syntax generation algorithm](docs/sublime-syntax-generation.md)
 - [LangSpec core vs. the LangSpec DSL](#langspec-core-vs-the-langspec-dsl)
 - [Architecture & Pipeline](#architecture--pipeline)
 - [Design Philosophy](#design-philosophy)
@@ -213,6 +214,8 @@ Relative `output-path` values are resolved from the current working directory an
 ![Theme with automatically generated syntax highlighting](examples/lspec_syntax_highlighting.png)
 
 LangSpec builds a Push-Down Automaton IR to generate `.sublime-syntax` YAML files. This can be driven via JSON or in-memory Go configurations.
+
+For the full pipeline (state graph, lexer stack reachability, IR binding, YAML emission, pruning, and failure modes), see **[docs/sublime-syntax-generation.md](docs/sublime-syntax-generation.md)**.
 
 **Path 1: Using a JSON Manifest**
 Add `tool.sublime` to your `PRAGMA` block with `configuration-path` pointing at a JSON manifest. Run `RunToolchainsFromSpecFile` or `langspec-toolchain` so the toolchain reads the JSON and generates the YAML.

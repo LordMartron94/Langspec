@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"foundation/system"
 	"foundation/text"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -51,6 +52,7 @@ type contextsSection struct {
 
 /*
 GenerateSyntaxFile serializes editor IR to a Sublime Text .sublime-syntax YAML file at outputFile.
+If pruneWarnings is non-nil, each unreachable context removed after reachability analysis is reported there (one line per context).
 */
 func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
 	ir *editor.EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
@@ -58,6 +60,7 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 	baseScope string,
 	outputFile string,
 	config ExtractionConfig[TContext],
+	pruneWarnings io.Writer,
 ) error {
 	sb := &strings.Builder{}
 
@@ -67,7 +70,7 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 		return err
 	}
 
-	if err := writeContexts(sb, ir.LanguageMachine, config); err != nil {
+	if err := writeContexts(sb, ir.LanguageMachine, config, pruneWarnings); err != nil {
 		return err
 	}
 
@@ -110,9 +113,10 @@ func writeContexts[TObservation cmp.Ordered, TContext any](
 	sb *strings.Builder,
 	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
+	pruneWarnings io.Writer,
 ) error {
 	writeSectionHeader(sb, "Contexts & Rules")
-	contextsMap := buildContextsMap(machine, config)
+	contextsMap := buildContextsMap(machine, config, pruneWarnings)
 	section := contextsSection{Contexts: contextsMap}
 	return encodeAndWriteYAML(sb, section)
 }
@@ -120,6 +124,7 @@ func writeContexts[TObservation cmp.Ordered, TContext any](
 func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
+	pruneWarnings io.Writer,
 ) map[string][]contextEntry {
 	representatives, labelToRepresentative := minimizeStatesForEmission(machine, config)
 
@@ -234,12 +239,91 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 		contextsMap["prototype"] = buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
 	}
 
-	for _, lm := range machine.LexerModeStates {
-		label := determineContextLabel(lm.Label)
-		contextsMap[label] = buildTransitionsRemapped(lm.Transitions, config, labelToRepresentative)
-	}
+	pruneUnreachableContexts(contextsMap, pruneWarnings)
 
 	return contextsMap
+}
+
+const sublimeReservedContextMain = "main"
+const sublimeReservedContextPrototype = "prototype"
+
+func pruneUnreachableContexts(contextsMap map[string][]contextEntry, pruneWarnings io.Writer) {
+	reachable := make(map[string]bool)
+	var queue []string
+	enqueue := func(name string) {
+		if reachable[name] {
+			return
+		}
+		if _, ok := contextsMap[name]; !ok {
+			return
+		}
+		reachable[name] = true
+		queue = append(queue, name)
+	}
+
+	enqueue(sublimeReservedContextMain)
+	enqueue(sublimeReservedContextPrototype)
+
+	for head := 0; head < len(queue); head++ {
+		ctxName := queue[head]
+		for _, ent := range contextsMap[ctxName] {
+			for _, ref := range contextEntryReferencedContexts(ent) {
+				enqueue(ref)
+			}
+		}
+	}
+
+	reserved := map[string]bool{
+		sublimeReservedContextMain:      true,
+		sublimeReservedContextPrototype: true,
+	}
+
+	var pruned []string
+	for name := range contextsMap {
+		if reserved[name] {
+			continue
+		}
+		if !reachable[name] {
+			pruned = append(pruned, name)
+		}
+	}
+	if len(pruned) == 0 {
+		return
+	}
+	sort.Strings(pruned)
+	for _, name := range pruned {
+		delete(contextsMap, name)
+		if pruneWarnings != nil {
+			fmt.Fprintf(pruneWarnings, "langspec sublime: pruning unreachable context %q\n", name)
+		}
+	}
+}
+
+func contextEntryReferencedContexts(ent contextEntry) []string {
+	var out []string
+	out = append(out, stringOrStringSliceToNames(ent.Push)...)
+	out = append(out, stringOrStringSliceToNames(ent.Set)...)
+	if ent.Include != nil && *ent.Include != "" {
+		out = append(out, *ent.Include)
+	}
+	return out
+}
+
+func stringOrStringSliceToNames(v any) []string {
+	if v == nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case []string:
+		return x
+	case string:
+		if x == "" {
+			return nil
+		}
+		return []string{x}
+	default:
+		return nil
+	}
 }
 
 func minimizeStatesForEmission[TObservation cmp.Ordered, TContext any](

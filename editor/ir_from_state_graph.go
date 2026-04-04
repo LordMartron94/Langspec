@@ -65,20 +65,24 @@ func EditorIRFromStateGraph[
 
 	sanitizer := text.NewIdentifierSanitizer()
 
-	tokenToRule := make(map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole])
+	rulesByState, _ := editorLexRulesGroupedByState(lexingRuleset)
+	lexerReach, err := editorComputeLexerStackReachability(sg, rulesByState)
+	if err != nil {
+		return nil, err
+	}
+
 	tokenToPriority := make(map[lexarch.TokenKind]int)
 	tokenToRuleIndex := make(map[lexarch.TokenKind]int)
 
 	for i, rule := range LexingRuleSetGetRules(lexingRuleset) {
-		if rule.LexerState != "INITIAL" {
-			continue
+		tok := lexarch.TokenKind(rule.Token)
+		if p, ok := tokenToPriority[tok]; !ok || rule.Priority > p {
+			tokenToPriority[tok] = rule.Priority
 		}
-		tokenToRule[lexarch.TokenKind(rule.Token)] = rule
-		tokenToPriority[lexarch.TokenKind(rule.Token)] = rule.Priority
-		tokenToRuleIndex[lexarch.TokenKind(rule.Token)] = i
+		if prev, ok := tokenToRuleIndex[tok]; !ok || i < prev {
+			tokenToRuleIndex[tok] = i
+		}
 	}
-
-	lexerModeStates := buildLexerModeStates(lexingRuleset, config, sanitizer)
 
 	stateByID := make(map[string]*EditorState[TObservation, TContext])
 	for _, c := range sg.Contexts {
@@ -164,8 +168,14 @@ func EditorIRFromStateGraph[
 		})
 
 		for _, p := range pairs {
+			lexRule, lexOK, err := editorResolveLexingRuleForParseTransition(
+				ctxID, p.tr.Token, lexerReach, rulesByState,
+			)
+			if err != nil {
+				return nil, err
+			}
 			edTrs := buildEditorTransitionsFromGeneric(
-				p.tr, stateByID, tokenToRule, config, delimitedStates, sanitizer,
+				p.tr, stateByID, lexRule, lexOK, config, delimitedStates, sanitizer,
 			)
 			if len(edTrs) > 0 {
 				s.Transitions = append(s.Transitions, edTrs...)
@@ -224,7 +234,7 @@ func EditorIRFromStateGraph[
 			EditorStates:       allStates,
 			RootState:          rootOut,
 			AmbientTransitions: ambientTransitions,
-			LexerModeStates:    lexerModeStates,
+			LexerModeStates:    nil,
 		},
 	}, nil
 }
@@ -239,7 +249,8 @@ func buildEditorTransitionsFromGeneric[
 ](
 	tr lowering.Transition[TNodeKind],
 	stateByID map[string]*EditorState[TObservation, TContext],
-	tokenToRule map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole],
+	lexRule LexingRule[TObservation, TToken, TTokenRole],
+	lexOK bool,
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
 	sanitizer *text.Sanitizer,
@@ -254,7 +265,7 @@ func buildEditorTransitionsFromGeneric[
 
 	// Fallback to the default single transition if no overrides exist
 	if len(overrides) == 0 {
-		if defaultTr, ok := buildDefaultTransition(tr, edCtx, tokenToRule, config, stateByID); ok {
+		if defaultTr, ok := buildDefaultTransition(tr, edCtx, lexRule, lexOK, config, stateByID); ok {
 			return []EditorTransition[TObservation, TContext]{defaultTr}
 		}
 		return nil
@@ -263,7 +274,7 @@ func buildEditorTransitionsFromGeneric[
 	// Expand 1-to-N overrides
 	var out []EditorTransition[TObservation, TContext]
 	for _, override := range overrides {
-		if ovrTr, ok := buildOverrideTransition(tr, edCtx, *override, tokenToRule, config, stateByID, delimitedStates, sanitizer); ok {
+		if ovrTr, ok := buildOverrideTransition(tr, edCtx, *override, lexRule, lexOK, config, stateByID, delimitedStates, sanitizer); ok {
 			out = append(out, ovrTr)
 		}
 	}
@@ -280,25 +291,25 @@ func buildDefaultTransition[
 ](
 	tr lowering.Transition[TNodeKind],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
-	tokenToRule map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole],
+	lexRule LexingRule[TObservation, TToken, TTokenRole],
+	lexOK bool,
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	stateByID map[string]*EditorState[TObservation, TContext],
 ) (EditorTransition[TObservation, TContext], bool) {
 
-	rule, ok := tokenToRule[tr.Token]
-	if !ok {
+	if !lexOK {
 		return EditorTransition[TObservation, TContext]{}, false
 	}
 
 	out := EditorTransition[TObservation, TContext]{
-		OnPattern:    rule.Pattern,
+		OnPattern:    lexRule.Pattern,
 		MatchContext: config.contextProducer(edCtx),
 		Operation:    stackOpFromLowering(tr.Operation),
 		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
 		PopAmount:    determinePopAmount(tr),
 		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
 	}
-	copyLexStackFromLexingRule(&out, rule)
+	copyLexStackFromLexingRule(&out, lexRule)
 	return out, true
 }
 
@@ -313,7 +324,8 @@ func buildOverrideTransition[
 	tr lowering.Transition[TNodeKind],
 	edCtx *EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	override EditorOverride[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-	tokenToRule map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole],
+	lexRule LexingRule[TObservation, TToken, TTokenRole],
+	lexOK bool,
 	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	stateByID map[string]*EditorState[TObservation, TContext],
 	delimitedStates map[string]*EditorState[TObservation, TContext],
@@ -327,8 +339,8 @@ func buildOverrideTransition[
 		regexPat = override.PatternRegex
 	} else if override.Pattern != nil {
 		pat = *override.Pattern
-	} else if rule, ok := tokenToRule[tr.Token]; ok {
-		pat = rule.Pattern
+	} else if lexOK {
+		pat = lexRule.Pattern
 	} else {
 		return EditorTransition[TObservation, TContext]{}, false
 	}
@@ -347,8 +359,8 @@ func buildOverrideTransition[
 			Operation:      STACK_EMBED,
 			ForeignPayload: override.ForeignPayload,
 		}
-		if rule, ok := tokenToRule[tr.Token]; ok {
-			copyLexStackFromLexingRule(&out, rule)
+		if lexOK {
+			copyLexStackFromLexingRule(&out, lexRule)
 		}
 		return out, true
 	}
@@ -363,8 +375,8 @@ func buildOverrideTransition[
 			Operation:    STACK_PUSH,
 			Targets:      []*EditorState[TObservation, TContext]{bodyState},
 		}
-		if rule, ok := tokenToRule[tr.Token]; ok {
-			copyLexStackFromLexingRule(&out, rule)
+		if lexOK {
+			copyLexStackFromLexingRule(&out, lexRule)
 		}
 		return out, true
 	}
@@ -379,8 +391,8 @@ func buildOverrideTransition[
 		PopAmount:    determinePopAmount(tr),
 		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
 	}
-	if rule, ok := tokenToRule[tr.Token]; ok {
-		copyLexStackFromLexingRule(&out, rule)
+	if lexOK {
+		copyLexStackFromLexingRule(&out, lexRule)
 	}
 	return out, true
 }
@@ -609,23 +621,37 @@ func getSortedAmbientCandidates[
 		priority int
 	}
 
-	for _, rule := range LexingRuleSetGetRules(lexingRuleset) {
-		if rule.LexerState != "INITIAL" {
+	bestAmbient := make(map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole])
+	bestAmbientIdx := make(map[lexarch.TokenKind]int)
+	for i, rule := range LexingRuleSetGetRules(lexingRuleset) {
+		tok := lexarch.TokenKind(rule.Token)
+		if grammarTokens[tok] {
 			continue
 		}
-		if !grammarTokens[lexarch.TokenKind(rule.Token)] {
-			candidates = append(candidates, struct {
-				rule     LexingRule[TObservation, TToken, TTokenRole]
-				priority int
-			}{rule: rule, priority: rule.Priority})
+		prev, ok := bestAmbient[tok]
+		if !ok || rule.Priority > prev.Priority ||
+			(rule.Priority == prev.Priority && i < bestAmbientIdx[tok]) {
+			bestAmbient[tok] = rule
+			bestAmbientIdx[tok] = i
 		}
+	}
+	for _, rule := range bestAmbient {
+		candidates = append(candidates, struct {
+			rule     LexingRule[TObservation, TToken, TTokenRole]
+			priority int
+		}{rule: rule, priority: rule.Priority})
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].priority != candidates[j].priority {
 			return candidates[i].priority > candidates[j].priority
 		}
-		return tokenToRuleIndex[lexarch.TokenKind(candidates[i].rule.Token)] < tokenToRuleIndex[lexarch.TokenKind(candidates[j].rule.Token)]
+		ti := lexarch.TokenKind(candidates[i].rule.Token)
+		tj := lexarch.TokenKind(candidates[j].rule.Token)
+		if tokenToRuleIndex[ti] != tokenToRuleIndex[tj] {
+			return tokenToRuleIndex[ti] < tokenToRuleIndex[tj]
+		}
+		return ti < tj
 	})
 
 	return candidates
@@ -653,58 +679,4 @@ func copyLexStackFromLexingRule[
 		tr.LexSetStates = append([]string(nil), rule.StackTargets...)
 	case langspec.LexerStackOpNone:
 	}
-}
-
-func buildLexerModeStates[
-	TObservation cmp.Ordered,
-	TToken ~uint32,
-	TTokenRole comparable,
-	TLexerState comparable,
-	TNodeKind comparable,
-	TContext any,
-](
-	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
-	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
-	sanitizer *text.Sanitizer,
-) []EditorState[TObservation, TContext] {
-	byState := make(map[string][]LexingRule[TObservation, TToken, TTokenRole])
-	for _, r := range LexingRuleSetGetRules(lexingRuleset) {
-		byState[r.LexerState] = append(byState[r.LexerState], r)
-	}
-	keys := make([]string, 0, len(byState))
-	for k := range byState {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	out := make([]EditorState[TObservation, TContext], 0, len(keys))
-	for _, st := range keys {
-		list := byState[st]
-		sort.SliceStable(list, func(i, j int) bool {
-			if list[i].Priority != list[j].Priority {
-				return list[i].Priority > list[j].Priority
-			}
-			return uint32(list[i].Token) < uint32(list[j].Token)
-		})
-
-		label := "lex__" + sanitizer.Sanitize(st)
-		es := EditorState[TObservation, TContext]{
-			ID:      label,
-			Label:   label,
-			Context: config.contextProducer(&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{}),
-		}
-		for _, lr := range list {
-			tok := lr.Token
-			edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{Token: &tok}
-			tr := EditorTransition[TObservation, TContext]{
-				OnPattern:    lr.Pattern,
-				MatchContext: config.contextProducer(edCtx),
-				Operation:    STACK_NONE,
-			}
-			copyLexStackFromLexingRule(&tr, lr)
-			es.Transitions = append(es.Transitions, tr)
-		}
-		out = append(out, es)
-	}
-	return out
 }

@@ -1,0 +1,32 @@
+--- "MultistateLexTest" v1.0.0 | lspec v1.0.0 ---
+
+PATTERN {
+	pat_ws : `[\t\n\r ]+`;
+	pat_open : "`";
+	pat_close : "`";
+	pat_inner : (['0'..'9', 'A'..'Z', 'a'..'z'])+;
+	pat_eof : [];
+}
+
+LEX {
+	state INITIAL {
+		1 TokOpen -> structural : pat_open [push(INNER)];
+		0 TokWS -> whitespace : pat_ws;
+		0 TokEOF -> structural : pat_eof %% EOF=true %% ;
+	}
+	state INNER {
+		1 TokClose -> structural : pat_close [pop(1)];
+		1 TokInner -> structural : pat_inner;
+	}
+}
+
+PARSE {
+	IGNORE { whitespace };
+
+	rule PROGRAM -> NodeProgram {
+		virtual TokOpen
+		(virtual TokInner)*
+		virtual TokClose
+		virtual TokEOF
+	};
+}
