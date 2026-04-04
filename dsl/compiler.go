@@ -1111,6 +1111,10 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 }
 
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
+	if semantics.SegmentHasExplicitTemplateInvocation(node) {
+		return compileTemplateCallSegment(ctx, node)
+	}
+
 	nameNode := node.FindFirstKind(dslspec.NodeParseSymbolReference)
 	if nameNode == nil {
 		nameNode = node.FindFirstKind(dslspec.NodeParseNodeName)

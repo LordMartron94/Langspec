@@ -737,6 +737,17 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 		)
 	}
 
+	fpPlan := buildGenTemplatePlan(g.grammarPackage)
+	if fpPlan.templatesBlock != nil {
+		sectionDocs = append(sectionDocs,
+			doctext("// Fingerprinted templates (repeated grammar structure)"),
+			line(),
+			fpPlan.templatesBlock,
+			line(),
+			line(),
+		)
+	}
+
 	// Build standard rules
 	labels := g.grammarPackage.SortedGrammarLabels
 	for i, label := range labels {
@@ -744,7 +755,7 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 		if i > 0 {
 			sectionDocs = append(sectionDocs, line(), line())
 		}
-		sectionDocs = append(sectionDocs, g.buildParseRuleDoc(labelStr, rules[label], nestPairNames))
+		sectionDocs = append(sectionDocs, g.buildParseRuleDoc(labelStr, rules[label], nestPairNames, fpPlan))
 	}
 
 	return concat(
@@ -759,9 +770,10 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDo
 	labelStr string,
 	ruleNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 	nestPairNames map[nestPairKey]string,
+	fpPlan *genTemplatePlan[TNodeKind],
 ) Doc {
 	parseTokenFormatter := g.tokenFormatter
-	decompiler := newParseDecompiler(parseTokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold, nestPairNames)
+	decompiler := newParseDecompiler(parseTokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold, nestPairNames, fpPlan)
 	return decompiler.BuildRuleDoc(labelStr, ruleNode)
 }
 
@@ -778,6 +790,7 @@ type parseDecompiler[TNodeKind comparable] struct {
 	sanitizer         func(string) string
 	columnThreshold   int
 	nestPairNames     map[nestPairKey]string
+	fingerprintPlan   *genTemplatePlan[TNodeKind]
 	currentRuleLabel  string
 }
 
@@ -787,6 +800,7 @@ func newParseDecompiler[TNodeKind comparable](
 	sanitizer func(string) string,
 	columnThreshold int,
 	nestPairNames map[nestPairKey]string,
+	fpPlan *genTemplatePlan[TNodeKind],
 ) *parseDecompiler[TNodeKind] {
 	if nestPairNames == nil {
 		nestPairNames = make(map[nestPairKey]string)
@@ -797,6 +811,7 @@ func newParseDecompiler[TNodeKind comparable](
 		sanitizer:         sanitizer,
 		columnThreshold:   columnThreshold,
 		nestPairNames:     nestPairNames,
+		fingerprintPlan:   fpPlan,
 	}
 }
 
@@ -830,7 +845,7 @@ func (d *parseDecompiler[TNodeKind]) buildHeaderDoc(labelStr string, ruleNode *s
 		nodeName = "gr_" + nodeName
 	}
 
-	base := fmt.Sprintf("%s -> %s%s", d.sanitizer(labelStr), transparencyMod, d.sanitizer(nodeName))
+	base := fmt.Sprintf("rule %s -> %s%s", d.sanitizer(labelStr), transparencyMod, d.sanitizer(nodeName))
 
 	if len(ruleNode.RecoveryTokens) == 0 {
 		return doctext(base)
@@ -854,6 +869,12 @@ func (d *parseDecompiler[TNodeKind]) buildSyncDoc(tokens []lexarch.TokenKind) Do
 func (d *parseDecompiler[TNodeKind]) walk(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
 	if g == nil {
 		return doctext("")
+	}
+
+	if d.fingerprintPlan != nil {
+		if site, ok := d.fingerprintPlan.replaceRoot[g]; ok {
+			return d.emitFingerprintTemplateCall(site)
+		}
 	}
 
 	if g.IsContextBoundary && string(g.GrammarLabel) != "" && string(g.GrammarLabel) != d.currentRuleLabel {

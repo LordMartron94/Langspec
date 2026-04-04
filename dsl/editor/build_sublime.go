@@ -122,7 +122,7 @@ func identifierRefOverrides(
 	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
 ) []*EditorOverride {
 	identRegex := getTokenRegex(ruleset, dslspec.TokIdentifier)
-	assignRegex := getTokenRegex(ruleset, dslspec.TokAssignment)
+	assignRegex := getTokenRegex(ruleset, dslspec.TokColon)
 
 	mappingRegex := fmt.Sprintf(`%s(?=\s*%s)`, identRegex, assignRegex)
 	refRegex := fmt.Sprintf(`%s(?!\s*%s)`, identRegex, assignRegex)
@@ -244,19 +244,22 @@ var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 				dslspec.TokKWFalse:       {"entity.other.attribute-value", "constant.language.bool"},
 			},
 		},
-		dslspec.NodeParseRuleName:            {Scopes: []string{"entity.name.function.parser-expression"}},
-		dslspec.NodeParseNodeName:            {Scopes: []string{"entity.name.type.parser-node"}},
-		dslspec.NodeParseSymbolReference:     {Scopes: []string{"constant.language.symbol-reference"}},
-		dslspec.NodeParseExpressionReference: {Scopes: []string{"entity.name.function.expression-reference"}},
-		dslspec.NodeParseTokenReference:      {Scopes: []string{"constant.language.token-reference"}},
-		dslspec.NodeParseNestOpenToken:       {Scopes: []string{"constant.language.token-reference"}},
-		dslspec.NodeParseNestCloseToken:      {Scopes: []string{"constant.language.token-reference"}},
-		dslspec.NodePrattExprName:            {Scopes: []string{"entity.name.function.parser-rule"}},
-		dslspec.NodeParseIgnoreRole:          {Scopes: []string{"constant.language.token-role-reference"}},
-		dslspec.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
-		dslspec.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
-		dslspec.NodeStateDefinition:          {Scopes: []string{"entity.name.label.state"}},
-		dslspec.NodeStateReference:           {Scopes: []string{"constant.language.state-reference"}},
-		dslspec.NodeParsePairIdentifier:      {Scopes: []string{"entity.name.token-pair"}},
+		dslspec.NodeParseRuleName:                   {Scopes: []string{"entity.name.function.parser-expression"}},
+		dslspec.NodeParseNodeName:                   {Scopes: []string{"entity.name.type.parser-node"}},
+		dslspec.NodeParseSymbolReference:            {Scopes: []string{"constant.language.symbol-reference"}},
+		dslspec.NodeParseExpressionReference:        {Scopes: []string{"entity.name.function.expression-reference"}},
+		dslspec.NodeParseTokenReference:             {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeParseNestOpenToken:              {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeParseNestCloseToken:             {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodePrattExprName:                   {Scopes: []string{"entity.name.function.parser-rule"}},
+		dslspec.NodeParseIgnoreRole:                 {Scopes: []string{"constant.language.token-role-reference"}},
+		dslspec.NodePredictToken:                    {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeSyncToken:                       {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeStateDefinition:                 {Scopes: []string{"entity.name.label.state"}},
+		dslspec.NodeStateReference:                  {Scopes: []string{"constant.language.state-reference"}},
+		dslspec.NodeParsePairIdentifier:             {Scopes: []string{"entity.name.token-pair"}},
+		dslspec.NodeParseTemplateIdentifier:         {Scopes: []string{"entity.name.template"}},
+		dslspec.NodeParseTemplateCallKeyword:        {Scopes: []string{"keyword.operator.call"}},
+		dslspec.NodeParseTemplateParameterReference: {Scopes: []string{"variable.other.parameter-reference"}},
 	},
 }

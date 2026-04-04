@@ -233,10 +233,10 @@ PRATT {
 
 ## 7. PARSE
 
-The `PARSE` section defines the core syntactic grammar rules. 
+The `PARSE` section defines the core syntactic grammar rules. Use the `rule` keyword for each production (see the full example at the end of this section).
 
 **Syntax:**
-`<RuleName> -> [transparent] <NodeKind> [sync(Tokens)] { <Expressions> };`
+`rule <RuleName> -> [transparent] <NodeKind> [sync(Tokens)] { <Expressions> };`
 
 ### Rule Modifiers
 * **transparent:** Prevents the rule from generating its own wrapper node in the LST.
@@ -284,23 +284,89 @@ nest @P {
 
 The lexer must produce your `TokPairReference` (or equivalent) for `@P`; the name after `@` must match **PairName** exactly. The parser lowers this to the same nested structure as `nest TokOpen TokClose { … }`.
 
-**Example:**
+### 7.4 Parse templates (parameterized fragments)
+
+A **template** is a named, parameterized parse fragment. It does not become its own parse rule in the lowered grammar; **call sites are expanded by substitution** (the body is cloned, and each `$parameter` is replaced by the corresponding argument) before compilation.
+
+**Declaration**
+
+```
+template <TemplateName> ( <param> : <Type> [, <param> : <Type> ...] ) {
+  <parse expression>
+}
+```
+
+* **TemplateName:** Identifier; must not collide with a lexer token, pattern, parse rule, pair, or Pratt name (same global symbol rules as pairs and rules).
+* **Parameters:** Each formal is a lexer `TokParameter` name (e.g. `$element`) followed by `:` and a type keyword.
+
+**Parameter types** (argument at each position must match):
+
+| Type keyword   | Argument at call site |
+|----------------|------------------------|
+| `Token`        | Lexer token identifier (declared in `LEX`). |
+| `Node`         | Output node kind string (same namespace as rule headers / mapping LHS names). |
+| `Rule`         | Parse rule name. |
+| `Pair`         | Pair reference `@PairName`. |
+| `PrattExpr`    | Pratt expression name. |
+
+**Call syntax**
+
+Inside a parse expression, a template is invoked only with the **`call`** keyword (so it cannot be confused with a bare rule reference followed by grouping):
+
+```
+call TemplateName(Arg1, Arg2, …)
+```
+
+Arguments are comma-separated. Types must match the template signature in order; arity must match.
+
+**Why `call` is required:** A bare identifier followed by parentheses is still ordinary parse syntax (e.g. grouping, optional `( … )?`, or concatenation with a nested group). The language does **not** treat `SomeName(Arg1, Arg2)` as a template call. Only the `call` form is a template invocation, so the parser and validator need no ambiguity rules between “rule reference + grouping” and “template call.”
+
+**Scoping**
+
+* `$parameter` references are **only** valid inside the template body (between `{` and `}`).
+* Template bodies may call other templates using `call OtherTemplate(...)`, but the **template call graph must be acyclic** (no cycles, including a template calling itself). The validator reports a clear path on violation.
+
+**Example**
+
+```
+template TEMPLATE_LIST($elementTk : Token, $elementNode : Node, $separator : Token) {
+	$elementNode : $elementTk
+	(
+		virtual $separator
+		$elementNode : $elementTk
+	)*
+}
+
+rule LIST_TEST -> NodeList {
+	call TEMPLATE_LIST(TokStringLiteral, NodeListElement, TokComma)
+}
+```
+
+**Example failures**
+
+* Wrong arity or wrong argument type → validation error at the call.
+* Using a template name without `call …(...)` where a rule reference is expected → error (use `call` with arguments or use a parse rule).
+* Template A calls B calls A → cycle error.
+
+The maintainer **generator** may emit synthetic `GenTempl_*` templates when fingerprinting finds repeated structure in the lowered grammar, to shrink generated `.lspec` text; call sites are emitted as `call GenTempl_*(...)` and must still parse and validate like hand-written ones.
+
+**Full PARSE example (rules, pairs, nest):**
 
 ```
 PARSE {
   IGNORE { whitespace };
 
   // The entry point must be named PROGRAM
-  PROGRAM -> NodeProgram {
+  rule PROGRAM -> NodeProgram {
     ( Statement )*
     virtual EOF
   };
 
-  Statement -> NodeStatement {
+  rule Statement -> NodeStatement {
     IfStatement | ExpressionStatement
   };
 
-  IfStatement -> NodeIf sync ( TokSemicolon ) {
+  rule IfStatement -> NodeIf sync ( TokSemicolon ) {
     virtual TokIf
     virtual TokOpenParen
     NodeCondition : expr  // References the PRATT block
@@ -308,14 +374,14 @@ PARSE {
     Body : Block
   };
 
-  Block -> NodeBlock {
+  rule Block -> NodeBlock {
     nest TokOpenBrace TokCloseBrace {
       ( Statement )*
     };
   };
 
   pair Braces TokOpenBrace TokCloseBrace;
-  ParenBlock -> NodeParenBlock {
+  rule ParenBlock -> NodeParenBlock {
     nest @Braces {
       Expression
     };

@@ -175,6 +175,9 @@ type LangSpecCompileResult struct {
 
 	TargetLangspecVersion string
 
+	// CompiledGrammarPackage and the other Compiled* fields are set as soon as lowering
+	// (compileTree) succeeds, even when compilation later returns an error (e.g. grammar
+	// safety validation). They stay zero until that point.
 	CompiledGrammarPackage GrammarPackage
 
 	CompiledToolPragmas []ToolPragma
@@ -319,6 +322,19 @@ func LangSpecCompilerCompile(
 	// 4. Compilation & Post-Validation
 	compiled := compileTree(compiler, result.RootNode)
 
+	// Attach lowered artifacts as soon as compileTree succeeds so callers (e.g. tests) can
+	// inspect lexer/parser/grammar even when stage-4+ validation or bootstrap fails later.
+	result.LanguageName = compiled.dslName
+	result.LanguageVersion = compiled.dslVersion
+	result.CompiledLexerSpec = compiled.lexerSpec
+	result.CompiledParserSpec = compiled.parserSpec
+	result.CompiledGrammarPackage = compiled.grammarPackage
+	result.CompiledToolPragmas = compiled.toolPragmas
+	result.TargetLangspecVersion = compiled.targetLangspecVersion
+	result.CompiledSymbols = compiled.symbols
+	result.EOFToken = compiled.eofToken
+	result.SourceMap = compiled.sourceMap
+
 	valState := &semantics.GrammarValidationState{
 		Package:   &compiled.grammarPackage,
 		SourceMap: compiled.sourceMap,
@@ -348,18 +364,6 @@ func LangSpecCompilerCompile(
 		renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("compilation failed with grammar safety errors")
 	}
-
-	// 5. Finalize Result
-	result.LanguageName = compiled.dslName
-	result.LanguageVersion = compiled.dslVersion
-	result.CompiledLexerSpec = compiled.lexerSpec
-	result.CompiledParserSpec = compiled.parserSpec
-	result.CompiledGrammarPackage = compiled.grammarPackage
-	result.CompiledToolPragmas = compiled.toolPragmas
-	result.TargetLangspecVersion = compiled.targetLangspecVersion
-	result.CompiledSymbols = compiled.symbols
-	result.EOFToken = compiled.eofToken
-	result.SourceMap = compiled.sourceMap
 
 	return result, nil
 }
@@ -407,7 +411,7 @@ func LangSpecCompilerDebugGrammar(compiler *LangSpecCompiler) {
 	grammarDump := compiler.programRule.GetGrammar().DebugDump(
 		syntaxa.GrammarDebugFormatter[lexarch.TokenKind, LangSpecParserNodeKind]{
 			FormatKind:           syntaxa.GrammarKind.String,
-			FormatToken: func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() },
+			FormatToken:          func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() },
 			FormatOutputNodeKind: LangSpecParserNodeKind.String,
 			FormatRange: func(min int, max *int) string {
 				if max == nil {

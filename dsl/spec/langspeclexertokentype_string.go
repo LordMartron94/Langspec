@@ -22,7 +22,7 @@ func _() {
 	_ = x[TokSemicolon-12]
 	_ = x[TokDot-13]
 	_ = x[TokChainSeparator-14]
-	_ = x[TokAssignment-15]
+	_ = x[TokColon-15]
 	_ = x[TokEqualsOperator-16]
 	_ = x[TokMetaSection-17]
 	_ = x[TokComma-18]
@@ -67,11 +67,20 @@ func _() {
 	_ = x[TokKWSet-57]
 	_ = x[TokKWPair-58]
 	_ = x[TokPairReference-59]
+	_ = x[TokParameter-60]
+	_ = x[TokKWRule-61]
+	_ = x[TokKWTemplate-62]
+	_ = x[TokKWCall-63]
+	_ = x[TokTypeToken-64]
+	_ = x[TokTypeRule-65]
+	_ = x[TokTypePrattExpr-66]
+	_ = x[TokTypePair-67]
+	_ = x[TokTypeNode-68]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokBracketOpenTokBracketCloseTokSemicolonTokDotTokChainSeparatorTokAssignmentTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWTrueTokKWFalseTokKWLocalTokKWVirtualTokKWNestTokKWPrattTokKWPrimaryTokKWPrefixTokKWPostfixTokKWInfixTokKWImplicitTokKWPrecedenceTokKWTransparentTokKWSyncTokKWPredictTokKWIgnoreTokKWStateTokKWPushTokKWPopTokKWSetTokKWPairTokPairReference"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokBracketOpenTokBracketCloseTokSemicolonTokDotTokChainSeparatorTokColonTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWTrueTokKWFalseTokKWLocalTokKWVirtualTokKWNestTokKWPrattTokKWPrimaryTokKWPrefixTokKWPostfixTokKWInfixTokKWImplicitTokKWPrecedenceTokKWTransparentTokKWSyncTokKWPredictTokKWIgnoreTokKWStateTokKWPushTokKWPopTokKWSetTokKWPairTokPairReferenceTokParameterTokKWRuleTokKWTemplateTokKWCallTokTypeTokenTokTypeRuleTokTypePrattExprTokTypePairTokTypeNode"
 
-var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 69, 82, 94, 107, 121, 136, 148, 154, 171, 184, 201, 215, 223, 230, 238, 245, 257, 268, 275, 286, 302, 317, 331, 341, 351, 364, 374, 382, 394, 405, 414, 424, 433, 443, 453, 465, 474, 484, 496, 507, 519, 529, 542, 557, 573, 582, 594, 605, 615, 624, 632, 640, 649, 665}
+var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 69, 82, 94, 107, 121, 136, 148, 154, 171, 179, 196, 210, 218, 225, 233, 240, 252, 263, 270, 281, 297, 312, 326, 336, 346, 359, 369, 377, 389, 400, 409, 419, 428, 438, 448, 460, 469, 479, 491, 502, 514, 524, 537, 552, 568, 577, 589, 600, 610, 619, 627, 635, 644, 660, 672, 681, 694, 703, 715, 726, 742, 753, 764}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1

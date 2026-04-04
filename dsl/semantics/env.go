@@ -10,6 +10,7 @@ const (
 	SymbolKindPattern
 	SymbolKindRule
 	SymbolKindPair
+	SymbolKindTemplate
 	SymbolKindPratt
 )
 
@@ -18,11 +19,12 @@ SemanticEnv holds the resolved symbol tables for tokens, patterns, parse rules, 
 Built from the LST by BuildSemanticEnv and used by validation and compilation for reference resolution.
 */
 type SemanticEnv struct {
-	Tokens   map[string]*Node
-	Patterns map[string]*Node
-	Rules    map[string]*Node
-	Pairs    map[string]*PairDecl
-	Pratt    map[string]*Node
+	Tokens    map[string]*Node
+	Patterns  map[string]*Node
+	Rules     map[string]*Node
+	Pairs     map[string]*PairDecl
+	Templates map[string]*TemplateDecl
+	Pratt     map[string]*Node
 
 	LocalPatterns map[string]bool
 	LocalPratt    map[string]bool
@@ -42,6 +44,7 @@ func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 		Patterns:      make(map[string]*Node),
 		Rules:         make(map[string]*Node),
 		Pairs:         make(map[string]*PairDecl),
+		Templates:     make(map[string]*TemplateDecl),
 		Pratt:         make(map[string]*Node),
 		LocalPatterns: make(map[string]bool),
 		LocalPratt:    make(map[string]bool),
@@ -51,6 +54,7 @@ func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 	buildEnvPatterns(root, env, onDuplicate)
 	buildEnvRules(root, env, onDuplicate)
 	buildEnvPairs(root, env, onDuplicate)
+	buildEnvTemplates(root, env, onDuplicate)
 	buildEnvPratt(root, env, onDuplicate)
 
 	return env
@@ -134,6 +138,27 @@ func buildEnvPairs(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 			OpenToken:  openTok,
 			CloseToken: closeTok,
 		}
+	}
+}
+
+func buildEnvTemplates(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
+	parse := root.FindFirstKind(NodeParseSection)
+	if parse == nil {
+		return
+	}
+	for _, tplNode := range parse.FindAllKind(NodeParseTemplate) {
+		decl, ok := ExtractTemplateDeclaration(tplNode)
+		if !ok || decl.Name == "" {
+			continue
+		}
+		if _, exists := env.Templates[decl.Name]; exists {
+			if onDuplicate != nil {
+				idNode := tplNode.FindFirstKind(NodeParseTemplateIdentifier)
+				onDuplicate(SymbolKindTemplate, decl.Name, idNode)
+			}
+			continue
+		}
+		env.Templates[decl.Name] = &decl
 	}
 }
 

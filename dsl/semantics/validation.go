@@ -79,6 +79,16 @@ const (
 	VALIDATION_PRATT_LOCAL_LEAK                 ValidationCode = "V_PRA005"
 	VALIDATION_PRATT_UNRESOLVED_OPERATOR_TARGET ValidationCode = "V_PRA006"
 
+	VALIDATION_DUPLICATE_TEMPLATE_NAME    ValidationCode = "V_TPL001"
+	VALIDATION_TEMPLATE_BARE_REFERENCE    ValidationCode = "V_TPL002"
+	VALIDATION_TEMPLATE_PARAM_OUTSIDE     ValidationCode = "V_TPL003"
+	VALIDATION_TEMPLATE_UNKNOWN_PARAM     ValidationCode = "V_TPL004"
+	VALIDATION_TEMPLATE_UNRESOLVED_CALLEE ValidationCode = "V_TPL005"
+	VALIDATION_TEMPLATE_CALL_ARITY        ValidationCode = "V_TPL006"
+	VALIDATION_TEMPLATE_CALL_ARG_TYPE     ValidationCode = "V_TPL007"
+	VALIDATION_TEMPLATE_CYCLE             ValidationCode = "V_TPL008"
+	VALIDATION_TEMPLATE_CALLEE_NOT_IDENT  ValidationCode = "V_TPL009"
+
 	VALIDATION_SYMBOL_NAME_COLLISION ValidationCode = "V_SYM001"
 )
 
@@ -150,6 +160,9 @@ func processSymbolBinding(ctx *ValidationCtx) {
 		case SymbolKindPair:
 			code = VALIDATION_DUPLICATE_PAIR_NAME
 			msg = fmt.Sprintf("pair '%s' already declared", name)
+		case SymbolKindTemplate:
+			code = VALIDATION_DUPLICATE_TEMPLATE_NAME
+			msg = fmt.Sprintf("template '%s' already declared", name)
 		case SymbolKindPratt:
 			code = VALIDATION_DUPLICATE_PRATT_EXPR
 			msg = fmt.Sprintf("pratt expression '%s' already declared", name)
@@ -161,6 +174,9 @@ func processSymbolBinding(ctx *ValidationCtx) {
 	})
 
 	validateSymbolNameCollisions(ctx, env)
+	validateTemplateParameterScoping(ctx, env)
+	nodeKinds := collectDeclaredParseOutputNodeKinds(ctx.RootNode)
+	validateTemplateCallSites(ctx, env, nodeKinds)
 	validateTokenReferences(ctx, env)
 	validatePatternReferences(ctx, env)
 	validateRuleReferences(ctx, env)
@@ -179,6 +195,8 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 			return "parse rule"
 		case SymbolKindPair:
 			return "pair"
+		case SymbolKindTemplate:
+			return "template"
 		case SymbolKindPratt:
 			return "pratt expression"
 		default:
@@ -197,6 +215,9 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 		allNames[name] = struct{}{}
 	}
 	for name := range env.Pairs {
+		allNames[name] = struct{}{}
+	}
+	for name := range env.Templates {
 		allNames[name] = struct{}{}
 	}
 	for name := range env.Pratt {
@@ -223,6 +244,11 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 				firstKind = SymbolKindPair
 			}
 		}
+		if _, ok := env.Templates[name]; ok {
+			if firstKind > SymbolKindTemplate {
+				firstKind = SymbolKindTemplate
+			}
+		}
 		if _, ok := env.Pratt[name]; ok {
 			if firstKind > SymbolKindPratt {
 				firstKind = SymbolKindPratt
@@ -242,6 +268,9 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 		if decl := env.Pairs[name]; decl != nil {
 			reportOn(SymbolKindPair, decl.Node)
 		}
+		if decl := env.Templates[name]; decl != nil {
+			reportOn(SymbolKindTemplate, decl.Node)
+		}
 		reportOn(SymbolKindPratt, env.Pratt[name])
 	}
 }
@@ -257,24 +286,39 @@ func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 }
 
 func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
-	ctx.RootNode.FindFirstKind(NodeParseSection).WalkPre(func(node *Node) (bool, bool) {
-		if node.Kind() == NodeParseTokenReference || node.Kind() == NodeParseNestOpenToken || node.Kind() == NodeParseNestCloseToken {
-			name := IdentifierValue(node)
-			if name == "" {
-				return false, false
-			}
-
-			kind := resolveParseRefSymbolKind(env, name)
-			if kind == parseRefSymbolToken {
-				used[name] = true
-			} else {
-				msg := fmt.Sprintf("cannot map expression '%s' here; a token is required", name)
-				ctx.ReportError(VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT.String(), msg, node)
-			}
+	parseSec := ctx.RootNode.FindFirstKind(NodeParseSection)
+	if parseSec == nil {
+		return
+	}
+	markTokensUnder := func(root *Node) {
+		if root == nil {
+			return
 		}
+		root.WalkPre(func(node *Node) (bool, bool) {
+			if node.Kind() == NodeParseTokenReference || node.Kind() == NodeParseNestOpenToken || node.Kind() == NodeParseNestCloseToken {
+				name := IdentifierValue(node)
+				if name == "" {
+					return false, false
+				}
 
-		return false, false
-	})
+				kind := resolveParseRefSymbolKind(env, name)
+				if kind == parseRefSymbolToken {
+					used[name] = true
+				} else {
+					msg := fmt.Sprintf("cannot map expression '%s' here; a token is required", name)
+					ctx.ReportError(VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT.String(), msg, node)
+				}
+			}
+
+			return false, false
+		})
+	}
+	markTokensUnder(parseSec)
+	for _, tpl := range parseSec.FindAllKind(NodeParseTemplate) {
+		if body := tpl.FindFirstKind(NodeParseTemplateBody); body != nil {
+			markTokensUnder(body)
+		}
+	}
 }
 
 func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
@@ -448,6 +492,9 @@ func validateParseExpressionReference(ctx *ValidationCtx, env *SemanticEnv, ref 
 		if kind == parseRefSymbolPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
 			ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
 		}
+	case parseRefSymbolTemplate:
+		ctx.ReportError(VALIDATION_TEMPLATE_BARE_REFERENCE.String(),
+			fmt.Sprintf("template '%s' must be invoked as call %s(...)", name, name), ref)
 	case parseRefSymbolToken:
 		ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), messageTokenNotAllowedBareInParse(name), ref)
 	default:
@@ -471,6 +518,9 @@ func validateBareParseSegmentSymbolReference(ctx *ValidationCtx, env *SemanticEn
 		if kind == parseRefSymbolPratt && env.LocalPratt[name] && enclosingPrattDef(ref) == nil {
 			ctx.ReportError(VALIDATION_PRATT_LOCAL_LEAK.String(), fmt.Sprintf("local pratt expression '%s' referenced outside pratt section", name), ref)
 		}
+	case parseRefSymbolTemplate:
+		ctx.ReportError(VALIDATION_TEMPLATE_BARE_REFERENCE.String(),
+			fmt.Sprintf("template '%s' must be invoked as call %s(...)", name, name), ref)
 	case parseRefSymbolToken:
 		ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), messageTokenNotAllowedBareInParse(name), ref)
 	default:
@@ -487,14 +537,7 @@ func symbolReferenceIsBareParseSegmentGrammarRef(ref *Node) bool {
 	if ref == nil || ref.Kind() != NodeParseSymbolReference {
 		return false
 	}
-	parent := ref.Parent()
-	if parent == nil || parent.Kind() != NodeParseSegment {
-		return false
-	}
-	if parent.FindFirstKind(NodeParseTokenReference) != nil || parent.FindFirstKind(NodeParseGroup) != nil {
-		return false
-	}
-	return true
+	return ParseSegmentLeadingSymbolRefIsBareGrammarSite(ref.Parent())
 }
 
 // ------------------------------------------------------------- REACHABILITY (STAGE 1)
@@ -1170,6 +1213,7 @@ const (
 	parseRefSymbolNone parseRefSymbolKind = iota
 	parseRefSymbolToken
 	parseRefSymbolRule
+	parseRefSymbolTemplate
 	parseRefSymbolPratt
 )
 
@@ -1182,6 +1226,9 @@ func resolveParseRefSymbolKind(env *SemanticEnv, name string) parseRefSymbolKind
 	}
 	if _, ok := env.Rules[name]; ok {
 		return parseRefSymbolRule
+	}
+	if _, ok := env.Templates[name]; ok {
+		return parseRefSymbolTemplate
 	}
 	if _, ok := env.Pratt[name]; ok {
 		return parseRefSymbolPratt
@@ -1285,6 +1332,16 @@ func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	var refs []string
 
 	container.WalkPre(func(node *Node) (bool, bool) {
+		if node != nil && node.Kind() == NodeParseSegment {
+			if inner, _, ok := ExpandedTemplateBodyRootForCallSegment(node, env); ok {
+				refs = append(refs, staticRuleAndPrattRefsFromTemplateBody(inner, env, make(map[string]bool))...)
+				return false, false
+			}
+			if SegmentHasExplicitTemplateInvocation(node) {
+				return false, false
+			}
+		}
+
 		name := RefName(node)
 		if name == "" {
 			return false, false

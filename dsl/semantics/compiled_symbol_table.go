@@ -155,6 +155,11 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 				walkParseTreeForSymbols(body, env, ts, nk)
 			}
 		}
+		for _, tpl := range parse.FindAllKind(NodeParseTemplate) {
+			if body := tpl.FindFirstKind(NodeParseTemplateBody); body != nil {
+				walkParseTreeForSymbols(body, env, ts, nk)
+			}
+		}
 	}
 
 	if pratt := root.FindFirstKind(NodePrattSection); pratt != nil {
