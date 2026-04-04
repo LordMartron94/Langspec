@@ -189,10 +189,10 @@ PARSE {
 	rule DUMMY_CHOICE_FOR_PRAGMA_VALUES -> transparent gr_DUMMY_CHOICE_FOR_PRAGMA_VALUES {
 		PRAGMA_VALUE
 		| NodePragmaValue : (
-			virtual TokIdentifier
-			| virtual TokStringLiteral
-			| virtual TokKWTrue
-			| virtual TokKWFalse
+			NodePragmaValue : TokIdentifier
+			| NodePragmaValue : TokStringLiteral
+			| NodePragmaValue : TokKWTrue
+			| NodePragmaValue : TokKWFalse
 		)
 	};
 	
@@ -296,7 +296,9 @@ PARSE {
 		virtual TokEqualsOperator
 		(
 			NodeMetaValue : (
-				virtual TokStringLiteral | virtual TokKWFalse | virtual TokKWTrue
+				NodeMetaValue : TokStringLiteral
+				| NodeMetaValue : TokKWFalse
+				| NodeMetaValue : TokKWTrue
 			)
 		)
 	};
@@ -473,7 +475,7 @@ PARSE {
 	
 	rule PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT -> NodeParseSegment {
 		NodeParseTemplateCallKeyword : TokKWCall
-		NodeParseSymbolReference : TokIdentifier
+		NodeParseTemplateReference : TokIdentifier
 		PARSE_TEMPLATE_CALL_ARGS
 	};
 	
@@ -499,11 +501,11 @@ PARSE {
 		virtual TokColon
 		(
 			NodeParseTemplateParameterType : (
-				virtual TokTypeToken
-				| virtual TokTypeNode
-				| virtual TokTypeRule
-				| virtual TokTypePair
-				| virtual TokTypePrattExpr
+				NodeParseTemplateParameterType : TokTypeToken
+				| NodeParseTemplateParameterType : TokTypeNode
+				| NodeParseTemplateParameterType : TokTypeRule
+				| NodeParseTemplateParameterType : TokTypePair
+				| NodeParseTemplateParameterType : TokTypePrattExpr
 			)
 		)
 	};
@@ -1047,7 +1049,9 @@ PARSE {
 	rule TEMPLATE_CALL_ARGUMENT_LIST_DUMMY -> transparent gr_TEMPLATE_CALL_ARGUMENT_LIST_DUMMY {
 		(
 			NodeParseTemplateCallArgument : (
-				virtual TokIdentifier | virtual TokParameter | virtual TokPairReference
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
 			)
 		)
 		TEMPLATE_CALL_ARGUMENT_LIST_TAIL
@@ -1063,7 +1067,9 @@ PARSE {
 		virtual TokComma
 		(
 			NodeParseTemplateCallArgument : (
-				virtual TokIdentifier | virtual TokParameter | virtual TokPairReference
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
 			)
 		)
 	};

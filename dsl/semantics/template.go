@@ -123,8 +123,9 @@ func TemplateCallArgsNode(segment *Node) *Node {
 }
 
 /*
-TemplateCallCalleeRef returns the first symbol or parameter reference child after the call keyword
-(meta-grammar order: call keyword, callee, args). Nil if the segment is not an explicit template call
+TemplateCallCalleeRef returns the first template or parameter reference child after the call keyword
+(meta-grammar order: call keyword, callee, args). Callee is NodeParseTemplateReference; a parameter
+placeholder is NodeParseTemplateParameterReference. Nil if the segment is not an explicit template call
 or has no such child.
 */
 func TemplateCallCalleeRef(segment *Node) *Node {
@@ -139,23 +140,23 @@ func TemplateCallCalleeRef(segment *Node) *Node {
 		if k == NodeParseTemplateCallKeyword {
 			continue
 		}
-		if k == NodeParseSymbolReference || k == NodeParseTemplateParameterReference {
+		if k == NodeParseTemplateReference || k == NodeParseTemplateParameterReference {
 			return ch
 		}
 	}
 	return nil
 }
 
-// SymbolReferenceIsExplicitTemplateCallCallee is true when ref is the callee identifier of call Name(…).
-func SymbolReferenceIsExplicitTemplateCallCallee(ref *Node) bool {
-	if ref == nil || ref.Kind() != NodeParseSymbolReference {
+// TemplateReferenceIsExplicitTemplateCallCallee is true when n is the callee of call Name(…).
+func TemplateReferenceIsExplicitTemplateCallCallee(n *Node) bool {
+	if n == nil || n.Kind() != NodeParseTemplateReference {
 		return false
 	}
-	parent := ref.Parent()
+	parent := n.Parent()
 	if parent == nil || parent.Kind() != NodeParseSegment {
 		return false
 	}
-	return ref == TemplateCallCalleeRef(parent)
+	return n == TemplateCallCalleeRef(parent)
 }
 
 /*

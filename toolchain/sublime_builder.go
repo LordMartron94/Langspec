@@ -11,6 +11,7 @@ import (
 	"langspec/editor"
 	"langspec/editor/sublime"
 	"lexarch"
+	"os"
 	"strings"
 	"syntaxa"
 )
@@ -110,7 +111,7 @@ func RunSublimeToolchain(
 		return executeSublimeToolchain(
 			compileResult,
 			sublimeCfg.Manifest,
-			overrideProducer,
+			sublimeOverrideFactoryFromProducer(overrideProducer),
 			outputPaths,
 			sublimeCfg.FileExtensions,
 			sublimeCfg.ScopeExtension,
@@ -144,6 +145,39 @@ func ExtractOutputPathsFromSublimePragma(pragma dsl.ToolPragma) ([]string, error
 }
 
 /*
+sublimeOverrideFactoryFromProducer adapts the legacy RunSublimeToolchain override producer
+to SublimeInMemoryOverrideFactory. The returned inner producer ignores the lexing ruleset
+and coverage ctxProducer (callers that need accurate unused-manifest coverage should pass
+a real factory to RunSublimeToolchainFromMemory instead).
+*/
+func sublimeOverrideFactoryFromProducer(
+	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
+) SublimeInMemoryOverrideFactory {
+	return func(
+		lexing *editor.LexingRuleSet[rune, uint32, uint32],
+		ctxProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) SublimeContext,
+	) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+		_ = lexing
+		_ = ctxProducer
+		if overrideProducer == nil {
+			return func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+				return nil
+			}
+		}
+		return overrideProducer
+	}
+}
+
+// SublimeInMemoryOverrideFactory builds Sublime override rules from the flattened lexer
+// ruleset and the same manifest context producer wired into editor IR. Using this factory
+// (instead of a pre-built override producer) keeps override-driven scope lookups on the
+// coverage-enabled producer used for unused-manifest warnings.
+type SublimeInMemoryOverrideFactory func(
+	lexing *editor.LexingRuleSet[rune, uint32, uint32],
+	ctxProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) SublimeContext,
+) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext]
+
+/*
 RunSublimeToolchainFromMemory is the in-memory entry point for the Sublime
 toolchain. It runs the pipeline using the provided SemanticManifest,
 outputPath, fileExtensions, and scopeExtension without reading any
@@ -159,13 +193,13 @@ Prerequisites:
 - outputPath, fileExtensions, and scopeExtension must be set as desired for the generated syntax file.
 
 Edge cases:
-- overrideProducer may be nil; a no-op producer is used internally.
+- overrideFactory may be nil; a no-op inner producer is used.
 - Does not read or validate PRAGMA; the caller (e.g. bootstrap) is responsible for enable and output-path.
 */
 func RunSublimeToolchainFromMemory(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
-	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
+	overrideFactory SublimeInMemoryOverrideFactory,
 	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
@@ -173,7 +207,7 @@ func RunSublimeToolchainFromMemory(
 	return executeSublimeToolchain(
 		compileResult,
 		manifest,
-		overrideProducer,
+		overrideFactory,
 		outputPaths,
 		fileExtensions,
 		scopeExtension,
@@ -182,13 +216,13 @@ func RunSublimeToolchainFromMemory(
 
 /*
 executeSublimeToolchain is the shared implementation for both manifest sources.
-It builds the editor IR (context producer from manifest, optional override producer),
+It builds the editor IR (manifest context producer with coverage, then overrideFactory(lexing, ctxProducer)),
 then runs the Sublime generator. Called by RunSublimeToolchain and RunSublimeToolchainFromMemory.
 */
 func executeSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	manifest SemanticManifest[string, string],
-	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
+	overrideFactory SublimeInMemoryOverrideFactory,
 	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
@@ -197,14 +231,28 @@ func executeSublimeToolchain(
 		return fmt.Errorf("sublime toolchain: compiled symbols missing on compile result")
 	}
 
+	if overrideFactory == nil {
+		overrideFactory = func(
+			*editor.LexingRuleSet[rune, uint32, uint32],
+			func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) SublimeContext,
+		) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+			return func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+				return nil
+			}
+		}
+	}
+
+	editorRuleset := LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
+
+	manifestUint := SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, manifest)
+	ctxProducer, scopeCov := BuildContextProducerFromManifestWithCoverage[rune, uint32, uint32, string, uint32](manifestUint)
+
+	overrideProducer := overrideFactory(editorRuleset, ctxProducer)
 	if overrideProducer == nil {
 		overrideProducer = func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
 			return nil
 		}
 	}
-
-	manifestUint := SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, manifest)
-	ctxProducer := BuildContextProducerFromManifest[rune, uint32, uint32, string, uint32](manifestUint)
 
 	irConfig := editor.EditorIRConfigurationCreate(
 		hasher,
@@ -221,8 +269,6 @@ func executeSublimeToolchain(
 		},
 	)
 
-	editorRuleset := LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
-
 	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, uint32]{
 		LexerRuleset:   editorRuleset,
 		GrammarPackage: &compileResult.CompiledGrammarPackage,
@@ -233,7 +279,11 @@ func executeSublimeToolchain(
 		ScopeSuffix:    scopeExtension,
 	}
 
-	return RunSublimeGenerator(runnerCfg)
+	err := RunSublimeGenerator(runnerCfg)
+	for _, w := range UnusedManifestScopeWarningsFromStringManifest(compileResult.CompiledSymbols, manifest, scopeCov, UnusedManifestScopeOpts{}) {
+		fmt.Fprintln(os.Stderr, "langspec sublime:", w)
+	}
+	return err
 }
 
 /* LexerSpecToEditorLexingRuleSet flattens all lexer states into one editor ruleset (LexerState + stack metadata preserved). */

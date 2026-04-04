@@ -12,6 +12,7 @@ import (
 	langspeceditor "langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
+	"os"
 )
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
@@ -32,7 +33,7 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 	manifest := LangSpecEditorManifest
 	manifest.BaseTokenScopes = dsl.LangSpecCompilerScopeMap(compiler)
 
-	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](manifest)
+	ctxProducer, scopeCov := toolchain.BuildContextProducerFromManifestWithCoverage[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecLexerState](manifest)
 
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	editorRuleset := convertRulesetToEditor(ruleset)
@@ -63,7 +64,14 @@ func BuildSublimeSyntaxForDSL(compiler *dsl.LangSpecCompiler, syntaxFile string)
 		ScopeSuffix:    ".lspec",
 	}
 
-	return toolchain.RunSublimeGenerator(runnerCfg)
+	err := toolchain.RunSublimeGenerator(runnerCfg)
+	for _, w := range toolchain.UnusedManifestScopeWarnings(manifest, scopeCov,
+		func(nk dsl.LangSpecParserNodeKind) string { return nk.String() },
+		func(t dsl.LangSpecLexerTokenType) string { return t.String() },
+		toolchain.UnusedManifestScopeOpts{}) {
+		fmt.Fprintln(os.Stderr, "langspec sublime:", w)
+	}
+	return err
 }
 
 func convertRulesetToEditor(
@@ -99,9 +107,11 @@ func BuildEditorOverrideProducer(
 			return nil
 		}
 
-		// Route to the dynamic identifier ref override
-		if *editorCtx.Token == dslspec.TokIdentifier && editorCtx.NodeKind != nil && *editorCtx.NodeKind == dslspec.NodeParseSymbolReference {
-			return identifierRefOverrides(ruleset, ctxProducer)
+		// Route to the dynamic identifier ref override (mapping vs ref), using the real LST kind
+		// for the non-colon branch so template callees are not scoped as expression references.
+		if *editorCtx.Token == dslspec.TokIdentifier && editorCtx.NodeKind != nil &&
+			(*editorCtx.NodeKind == dslspec.NodeParseSymbolReference || *editorCtx.NodeKind == dslspec.NodeParseTemplateReference) {
+			return identifierRefOverrides(ruleset, ctxProducer, *editorCtx.NodeKind)
 		}
 
 		switch *editorCtx.Token {
@@ -120,6 +130,7 @@ func BuildEditorOverrideProducer(
 func identifierRefOverrides(
 	ruleset *langspeceditor.LexingRuleSet[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole],
 	ctxProducer func(ctx *EditorCtx) toolchain.SublimeContext,
+	identifierLSTKind dsl.LangSpecParserNodeKind,
 ) []*EditorOverride {
 	identRegex := getTokenRegex(ruleset, dslspec.TokIdentifier)
 	assignRegex := getTokenRegex(ruleset, dslspec.TokColon)
@@ -131,7 +142,10 @@ func identifierRefOverrides(
 	mappingNode := dslspec.NodeParseNodeName
 	mappingCtx := ctxProducer(&EditorCtx{NodeKind: &mappingNode})
 
-	refNode := dslspec.NodeParseExpressionReference
+	refNode := identifierLSTKind
+	if refNode == dslspec.NodeParseSymbolReference {
+		refNode = dslspec.NodeParseExpressionReference
+	}
 	refCtx := ctxProducer(&EditorCtx{NodeKind: &refNode})
 
 	return []*EditorOverride{
@@ -247,6 +261,7 @@ var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 		dslspec.NodeParseRuleName:                   {Scopes: []string{"entity.name.function.parser-expression"}},
 		dslspec.NodeParseNodeName:                   {Scopes: []string{"entity.name.type.parser-node"}},
 		dslspec.NodeParseSymbolReference:            {Scopes: []string{"constant.language.symbol-reference"}},
+		dslspec.NodeParseTemplateReference:          {Scopes: []string{"entity.name.template-reference"}},
 		dslspec.NodeParseExpressionReference:        {Scopes: []string{"entity.name.function.expression-reference"}},
 		dslspec.NodeParseTokenReference:             {Scopes: []string{"constant.language.token-reference"}},
 		dslspec.NodeParseNestOpenToken:              {Scopes: []string{"constant.language.token-reference"}},
@@ -261,5 +276,12 @@ var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 		dslspec.NodeParseTemplateIdentifier:         {Scopes: []string{"entity.name.template"}},
 		dslspec.NodeParseTemplateCallKeyword:        {Scopes: []string{"keyword.operator.call"}},
 		dslspec.NodeParseTemplateParameterReference: {Scopes: []string{"variable.other.parameter-reference"}},
+		dslspec.NodeParseTemplateCallArgument: {
+			TokenScopes: map[dsl.LangSpecLexerTokenType][]string{
+				dslspec.TokParameter:     {"variable.other.parameter-reference"},
+				dslspec.TokIdentifier:    {"constant.language.symbol-reference"},
+				dslspec.TokPairReference: {"constant.language.token-pair-reference"},
+			},
+		},
 	},
 }

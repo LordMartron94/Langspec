@@ -111,7 +111,8 @@ func adaptGoOverrideProducer(
 	}
 
 	nodeMap := map[string]dsl.LangSpecParserNodeKind{
-		dslspec.NodeParseSymbolReference.String(): dslspec.NodeParseSymbolReference,
+		dslspec.NodeParseSymbolReference.String():   dslspec.NodeParseSymbolReference,
+		dslspec.NodeParseTemplateReference.String(): dslspec.NodeParseTemplateReference,
 	}
 
 	sym := compileResult.CompiledSymbols

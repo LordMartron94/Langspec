@@ -261,6 +261,8 @@ const (
 	NodeParseTemplateCallArgs
 	NodeParseTemplateCallArgument
 
+	NodeParseTemplateReference
+
 	// -- Pratt Section --
 
 	NodePrattSection
@@ -1225,7 +1227,7 @@ func (b *dslGrammarBuilder) parseSegment() Rule {
 func (b *dslGrammarBuilder) segmentExplicitTemplateCall() Rule {
 	return b.g.sequence(NodeParseSegment, "TEMPLATE_CALL_SEGMENT").
 		rule(b.g.expectToken(NodeParseTemplateCallKeyword, TokKWCall)).
-		rule(b.g.expectToken(NodeParseSymbolReference, TokIdentifier)).
+		rule(b.g.expectToken(NodeParseTemplateReference, TokIdentifier)).
 		rule(b.segmentTemplateCallTail()).
 		build()
 }

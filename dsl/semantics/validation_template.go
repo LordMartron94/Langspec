@@ -369,10 +369,12 @@ func staticRuleAndPrattRefsFromTemplateBody(bodyRoot *Node, env *SemanticEnv, vi
 				return false, false
 			}
 		}
-		if n.Kind() == NodeParseSymbolReference {
-			if SymbolReferenceIsExplicitTemplateCallCallee(n) {
+		if n.Kind() == NodeParseTemplateReference {
+			if TemplateReferenceIsExplicitTemplateCallCallee(n) {
 				return false, false
 			}
+		}
+		if n.Kind() == NodeParseSymbolReference {
 			name := RefName(n)
 			if name == "" {
 				return false, false

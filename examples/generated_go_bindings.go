@@ -181,70 +181,70 @@ const (
 	DUMMY_CHOICE_VIRTUAL_MAPPING Node = 7
 	DUMMY_LOCAL_VAR_FOR_PATTERNS Node = 8
 	ERROR_NODE Node = 9
-	GenTempl_0 Node = 10
-	HEADER Node = 11
-	HEADER_CONTENT Node = 12
-	LEX_RULE Node = 13
-	LEX_RULE_LIST Node = 14
-	LEX_RULE_PATTERN Node = 15
-	LEX_RULE_STATE_MUTATION Node = 16
-	LEX_RULE_STATE_MUTATION_KIND Node = 17
-	LEX_SECTION Node = 18
-	LEX_SECTION_BLOCK_NEST Node = 19
-	META_KEY_VALUE_PAIR Node = 20
-	META_KEY_VALUE_SEQUENCE Node = 21
-	META_SECTION Node = 22
-	NodeCharLiteral Node = 23
-	NodeDSLName Node = 24
-	NodeHeader Node = 25
-	NodeLSPECName Node = 26
-	NodeLexKeyword Node = 27
-	NodeLexRule Node = 28
-	NodeLexRulePattern Node = 29
-	NodeLexRulePriority Node = 30
-	NodeLexRuleRole Node = 31
-	NodeLexRuleStateMutation Node = 32
-	NodeLexRuleTokenName Node = 33
-	NodeLexSection Node = 34
-	NodeLocalVariable Node = 35
-	NodeMetaKey Node = 36
-	NodeMetaKeyValuePair Node = 37
-	NodeMetaSection Node = 38
-	NodeMetaValue Node = 39
-	NodeParseExpressionReference Node = 40
-	NodeParseGroup Node = 41
-	NodeParseIgnoreKeyword Node = 42
-	NodeParseIgnoreRole Node = 43
-	NodeParseIgnoreSection Node = 44
-	NodeParseKeyword Node = 45
-	NodeParseModifierPredict Node = 46
-	NodeParseNestBody Node = 47
-	NodeParseNestCloseToken Node = 48
-	NodeParseNestOpenToken Node = 49
-	NodeParseNestPairRef Node = 50
-	NodeParseNodeName Node = 51
-	NodeParseOpNest Node = 52
-	NodeParseOpSuppress Node = 53
-	NodeParsePair Node = 54
-	NodeParsePairIdentifier Node = 55
-	NodeParseRule Node = 56
-	NodeParseRuleBody Node = 57
-	NodeParseRuleName Node = 58
-	NodeParseSection Node = 59
-	NodeParseSectionBody Node = 60
-	NodeParseSegment Node = 61
-	NodeParseSymbolReference Node = 62
-	NodeParseTemplate Node = 63
-	NodeParseTemplateBody Node = 64
-	NodeParseTemplateCallArgs Node = 65
-	NodeParseTemplateCallArgument Node = 66
-	NodeParseTemplateCallKeyword Node = 67
-	NodeParseTemplateIdentifier Node = 68
-	NodeParseTemplateParameter Node = 69
-	NodeParseTemplateParameterIdentifier Node = 70
-	NodeParseTemplateParameterList Node = 71
-	NodeParseTemplateParameterReference Node = 72
-	NodeParseTemplateParameterType Node = 73
+	HEADER Node = 10
+	HEADER_CONTENT Node = 11
+	LEX_RULE Node = 12
+	LEX_RULE_LIST Node = 13
+	LEX_RULE_PATTERN Node = 14
+	LEX_RULE_STATE_MUTATION Node = 15
+	LEX_RULE_STATE_MUTATION_KIND Node = 16
+	LEX_SECTION Node = 17
+	LEX_SECTION_BLOCK_NEST Node = 18
+	META_KEY_VALUE_PAIR Node = 19
+	META_KEY_VALUE_SEQUENCE Node = 20
+	META_SECTION Node = 21
+	NodeCharLiteral Node = 22
+	NodeDSLName Node = 23
+	NodeHeader Node = 24
+	NodeLSPECName Node = 25
+	NodeLexKeyword Node = 26
+	NodeLexRule Node = 27
+	NodeLexRulePattern Node = 28
+	NodeLexRulePriority Node = 29
+	NodeLexRuleRole Node = 30
+	NodeLexRuleStateMutation Node = 31
+	NodeLexRuleTokenName Node = 32
+	NodeLexSection Node = 33
+	NodeLocalVariable Node = 34
+	NodeMetaKey Node = 35
+	NodeMetaKeyValuePair Node = 36
+	NodeMetaSection Node = 37
+	NodeMetaValue Node = 38
+	NodeParseExpressionReference Node = 39
+	NodeParseGroup Node = 40
+	NodeParseIgnoreKeyword Node = 41
+	NodeParseIgnoreRole Node = 42
+	NodeParseIgnoreSection Node = 43
+	NodeParseKeyword Node = 44
+	NodeParseModifierPredict Node = 45
+	NodeParseNestBody Node = 46
+	NodeParseNestCloseToken Node = 47
+	NodeParseNestOpenToken Node = 48
+	NodeParseNestPairRef Node = 49
+	NodeParseNodeName Node = 50
+	NodeParseOpNest Node = 51
+	NodeParseOpSuppress Node = 52
+	NodeParsePair Node = 53
+	NodeParsePairIdentifier Node = 54
+	NodeParseRule Node = 55
+	NodeParseRuleBody Node = 56
+	NodeParseRuleName Node = 57
+	NodeParseSection Node = 58
+	NodeParseSectionBody Node = 59
+	NodeParseSegment Node = 60
+	NodeParseSymbolReference Node = 61
+	NodeParseTemplate Node = 62
+	NodeParseTemplateBody Node = 63
+	NodeParseTemplateCallArgs Node = 64
+	NodeParseTemplateCallArgument Node = 65
+	NodeParseTemplateCallKeyword Node = 66
+	NodeParseTemplateIdentifier Node = 67
+	NodeParseTemplateParameter Node = 68
+	NodeParseTemplateParameterIdentifier Node = 69
+	NodeParseTemplateParameterList Node = 70
+	NodeParseTemplateParameterReference Node = 71
+	NodeParseTemplateParameterType Node = 72
+	NodeParseTemplateReference Node = 73
 	NodeParseTokenReference Node = 74
 	NodePatternAny Node = 75
 	NodePatternClass Node = 76
@@ -512,7 +512,6 @@ var NodeNames = [...]string{
 	"DUMMY_CHOICE_VIRTUAL_MAPPING",
 	"DUMMY_LOCAL_VAR_FOR_PATTERNS",
 	"ERROR_NODE",
-	"GenTempl_0",
 	"HEADER",
 	"HEADER_CONTENT",
 	"LEX_RULE",
@@ -576,6 +575,7 @@ var NodeNames = [...]string{
 	"NodeParseTemplateParameterList",
 	"NodeParseTemplateParameterReference",
 	"NodeParseTemplateParameterType",
+	"NodeParseTemplateReference",
 	"NodeParseTokenReference",
 	"NodePatternAny",
 	"NodePatternClass",

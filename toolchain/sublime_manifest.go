@@ -120,6 +120,23 @@ func resolveManifestNodeID(sym *semantics.CompiledSymbolTable, key string) uint3
 
 // ----------------------------------------------------------------- CONTEXT PRODUCER
 
+// NodeBindingUsage records how often manifest node bindings were exercised while
+// building editor IR (context producer calls during Sublime generation).
+type NodeBindingUsage struct {
+	ResolveHit      bool
+	NestMetaHit     bool
+	ScopesPath      bool
+	TokenScopesPath bool
+}
+
+// ManifestScopeCoverage accumulates manifest lookups during context production.
+// Used to emit unused-manifest warnings after RunSublimeGenerator.
+type ManifestScopeCoverage[TToken, TNodeKind comparable] struct {
+	NodeBinding map[TNodeKind]*NodeBindingUsage
+	BaseToken   map[TToken]struct{}
+	InvalidHit  bool
+}
+
 /*
 BuildContextProducerFromManifest creates a context producer that maps editor
 context (token, node kind, invalid/nest state) to SublimeContext using the
@@ -148,22 +165,240 @@ func BuildContextProducerFromManifest[
 ](
 	manifest SemanticManifest[TToken, TNodeKind],
 ) func(ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) SublimeContext {
+	return buildContextProducerFromManifest[TObservation, TToken, TTokenRole, TLexerState, TNodeKind](manifest, nil)
+}
+
+/*
+BuildContextProducerFromManifestWithCoverage is like BuildContextProducerFromManifest but
+records which manifest entries were used. After Sublime generation, pass the coverage
+and manifest to UnusedManifestScopeWarnings (or UnusedManifestScopeWarningsFromStringManifest
+for JSON manifests) to print diagnostics for unused scopes.
+*/
+func BuildContextProducerFromManifestWithCoverage[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+](
+	manifest SemanticManifest[TToken, TNodeKind],
+) (
+	func(ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) SublimeContext,
+	*ManifestScopeCoverage[TToken, TNodeKind],
+) {
+	cov := &ManifestScopeCoverage[TToken, TNodeKind]{}
+	return buildContextProducerFromManifest[TObservation, TToken, TTokenRole, TLexerState, TNodeKind](manifest, cov), cov
+}
+
+func buildContextProducerFromManifest[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+](
+	manifest SemanticManifest[TToken, TNodeKind],
+	cov *ManifestScopeCoverage[TToken, TNodeKind],
+) func(ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) SublimeContext {
 	return func(ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]) SublimeContext {
 		if ctx.IsInvalidContext {
+			if cov != nil && strings.TrimSpace(manifest.InvalidScope) != "" {
+				cov.InvalidHit = true
+			}
 			return SublimeContext{Scope: manifest.InvalidScope}
 		}
 
 		if ctx.IsNest {
 			if ctx.NodeKind != nil {
 				if ms, ok := manifestNestMetaOverride(manifest, *ctx.NodeKind); ok {
+					manifestScopeCoverageRecordNestMeta(cov, *ctx.NodeKind)
 					return SublimeContext{MetaScope: ms}
 				}
 			}
 			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
 		}
 
-		return resolveManifestContext(ctx, manifest)
+		return resolveManifestContext(ctx, manifest, cov)
 	}
+}
+
+// UnusedManifestScopeOpts configures unused-manifest diagnostics.
+type UnusedManifestScopeOpts struct {
+	// WarnUnusedBaseTokenScopes reports base_token_scopes keys that never matched a
+	// transition without a stronger node binding (can be noisy for large manifests).
+	WarnUnusedBaseTokenScopes bool
+}
+
+/*
+UnusedManifestScopeWarnings compares manifest entries to coverage from
+BuildContextProducerFromManifestWithCoverage and returns human-readable issues.
+nameNodeKind / nameToken should return stable display names (e.g. sym.NodeKindName).
+*/
+func UnusedManifestScopeWarnings[
+	TToken, TNodeKind comparable,
+](
+	manifest SemanticManifest[TToken, TNodeKind],
+	cov *ManifestScopeCoverage[TToken, TNodeKind],
+	nameNodeKind func(TNodeKind) string,
+	nameToken func(TToken) string,
+	opts UnusedManifestScopeOpts,
+) []string {
+	if cov == nil {
+		return nil
+	}
+	var out []string
+
+	if strings.TrimSpace(manifest.InvalidScope) != "" && !cov.InvalidHit {
+		out = append(out, fmt.Sprintf(
+			"invalid_scope %q is never used: no invalid editor context was produced while building IR",
+			strings.TrimSpace(manifest.InvalidScope),
+		))
+	}
+
+	for nk, binding := range manifest.NodeBindings {
+		label := nameNodeKind(nk)
+		u := manifestScopeCoverageNodeGet(cov, nk)
+		used := u != nil && (u.ResolveHit || u.NestMetaHit)
+		if !used {
+			out = append(out, fmt.Sprintf(
+				"node_bindings[%q]: unused — no transition resolved to this output node kind (or nest meta) while building IR",
+				label,
+			))
+			continue
+		}
+		if len(binding.Scopes) > 0 && u.ResolveHit && !u.ScopesPath && u.TokenScopesPath {
+			out = append(out, fmt.Sprintf(
+				"node_bindings[%q]: scopes [...] never applied — token_scopes always matched instead",
+				label,
+			))
+		}
+		if len(binding.TokenScopes) > 0 && u.ResolveHit && !u.TokenScopesPath {
+			out = append(out, fmt.Sprintf(
+				"node_bindings[%q]: token_scopes never matched — transitions used scopes/meta_scope only (check token kinds vs manifest keys)",
+				label,
+			))
+		}
+	}
+
+	if opts.WarnUnusedBaseTokenScopes {
+		for tok, scope := range manifest.BaseTokenScopes {
+			if strings.TrimSpace(scope) == "" {
+				continue
+			}
+			if !manifestScopeCoverageBaseTokenHit(cov, tok) {
+				out = append(out, fmt.Sprintf(
+					"base_token_scopes[%q]: unused — no transition fell back to this base scope (node_bindings may cover these tokens)",
+					nameToken(tok),
+				))
+			}
+		}
+	}
+
+	return out
+}
+
+/*
+UnusedManifestScopeWarningsFromStringManifest is like UnusedManifestScopeWarnings for the
+JSON toolchain: manifest keys are strings; cov uses uint32 IDs from SemanticManifestRemapFromStrings.
+*/
+func UnusedManifestScopeWarningsFromStringManifest(
+	sym *semantics.CompiledSymbolTable,
+	manifest SemanticManifest[string, string],
+	cov *ManifestScopeCoverage[uint32, uint32],
+	opts UnusedManifestScopeOpts,
+) []string {
+	if sym == nil || cov == nil {
+		return nil
+	}
+	idToNodeName := make(map[uint32]string, len(manifest.NodeBindings))
+	for k := range manifest.NodeBindings {
+		id := resolveManifestNodeID(sym, k)
+		if _, ok := idToNodeName[id]; !ok {
+			idToNodeName[id] = k
+		}
+	}
+	nameNode := func(id uint32) string {
+		if s, ok := idToNodeName[id]; ok {
+			return s
+		}
+		return sym.NodeKindName(id)
+	}
+	idToTokName := make(map[uint32]string, len(manifest.BaseTokenScopes))
+	for k := range manifest.BaseTokenScopes {
+		id := resolveManifestTokenID(sym, k)
+		if _, ok := idToTokName[id]; !ok {
+			idToTokName[id] = k
+		}
+	}
+	nameTok := func(id uint32) string {
+		if s, ok := idToTokName[id]; ok {
+			return s
+		}
+		return sym.TokenName(id)
+	}
+	remapped := SemanticManifestRemapFromStrings(sym, manifest)
+	return UnusedManifestScopeWarnings(remapped, cov, nameNode, nameTok, opts)
+}
+
+func manifestScopeCoverageNodeGet[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], nk TNodeKind) *NodeBindingUsage {
+	if cov == nil || cov.NodeBinding == nil {
+		return nil
+	}
+	return cov.NodeBinding[nk]
+}
+
+func manifestScopeCoverageRecordNestMeta[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], nk TNodeKind) {
+	if cov == nil {
+		return
+	}
+	if cov.NodeBinding == nil {
+		cov.NodeBinding = make(map[TNodeKind]*NodeBindingUsage)
+	}
+	u := cov.NodeBinding[nk]
+	if u == nil {
+		u = &NodeBindingUsage{}
+		cov.NodeBinding[nk] = u
+	}
+	u.NestMetaHit = true
+}
+
+func manifestScopeCoverageRecordResolve[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], nk TNodeKind, scopesPath, tokenScopesPath bool) {
+	if cov == nil {
+		return
+	}
+	if cov.NodeBinding == nil {
+		cov.NodeBinding = make(map[TNodeKind]*NodeBindingUsage)
+	}
+	u := cov.NodeBinding[nk]
+	if u == nil {
+		u = &NodeBindingUsage{}
+		cov.NodeBinding[nk] = u
+	}
+	u.ResolveHit = true
+	if scopesPath {
+		u.ScopesPath = true
+	}
+	if tokenScopesPath {
+		u.TokenScopesPath = true
+	}
+}
+
+func manifestScopeCoverageRecordBaseToken[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], tok TToken) {
+	if cov == nil {
+		return
+	}
+	if cov.BaseToken == nil {
+		cov.BaseToken = make(map[TToken]struct{})
+	}
+	cov.BaseToken[tok] = struct{}{}
+}
+
+func manifestScopeCoverageBaseTokenHit[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], tok TToken) bool {
+	if cov == nil || cov.BaseToken == nil {
+		return false
+	}
+	_, ok := cov.BaseToken[tok]
+	return ok
 }
 
 func resolveManifestContext[
@@ -175,15 +410,17 @@ func resolveManifestContext[
 ](
 	ctx *editor.EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind],
 	manifest SemanticManifest[TToken, TNodeKind],
+	cov *ManifestScopeCoverage[TToken, TNodeKind],
 ) SublimeContext {
 	if ctx.NodeKind != nil {
-		if resolvedCtx, ok := resolveNodeBinding(*ctx.NodeKind, ctx.Token, manifest); ok {
+		if resolvedCtx, ok := resolveNodeBinding(*ctx.NodeKind, ctx.Token, manifest, cov); ok {
 			return resolvedCtx
 		}
 	}
 
 	if ctx.Token != nil {
 		if scope, ok := manifest.BaseTokenScopes[*ctx.Token]; ok && scope != "" {
+			manifestScopeCoverageRecordBaseToken(cov, *ctx.Token)
 			return SublimeContext{Scope: scope}
 		}
 	}
@@ -195,6 +432,7 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 	nodeKind TNodeKind,
 	token *TToken,
 	manifest SemanticManifest[TToken, TNodeKind],
+	cov *ManifestScopeCoverage[TToken, TNodeKind],
 ) (SublimeContext, bool) {
 	binding, exists := manifest.NodeBindings[nodeKind]
 	if !exists {
@@ -206,16 +444,23 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 	if token != nil && len(binding.TokenScopes) > 0 {
 		if ts, match := binding.TokenScopes[*token]; match && len(ts) > 0 {
 			ctx.Scope = joinSublimeScopes(ts)
+			manifestScopeCoverageRecordResolve(cov, nodeKind, false, true)
 			return ctx, true
 		}
 	}
 
 	if len(binding.Scopes) > 0 {
 		ctx.Scope = joinSublimeScopes(binding.Scopes)
+		manifestScopeCoverageRecordResolve(cov, nodeKind, true, false)
 		return ctx, true
 	}
 
-	return ctx, ctx.MetaScope != ""
+	if ctx.MetaScope != "" {
+		manifestScopeCoverageRecordResolve(cov, nodeKind, false, false)
+		return ctx, true
+	}
+
+	return SublimeContext{}, false
 }
 
 func manifestNestMetaOverride[TToken, TNodeKind comparable](

@@ -346,22 +346,17 @@ func dispatchInMemorySublimeGeneration(
 	compileResult *dsl.LangSpecCompileResult,
 	outputPaths []string,
 ) error {
-	editorLexing := toolchain.LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
 	if compileResult.CompiledSymbols == nil {
 		return fmt.Errorf("bootstrap sublime: compiled symbols missing")
 	}
-	manifestUint := toolchain.SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, *cfg.sublimeManifest)
-	ctxProducer := toolchain.BuildContextProducerFromManifest[rune, uint32, uint32, string, uint32](manifestUint)
-
-	var overrideProducer func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
+	var factory toolchain.SublimeInMemoryOverrideFactory
 	if cfg.sublimeFactory != nil {
-		overrideProducer = cfg.sublimeFactory(editorLexing, ctxProducer)
+		factory = toolchain.SublimeInMemoryOverrideFactory(cfg.sublimeFactory)
 	}
-
 	return toolchain.RunSublimeToolchainFromMemory(
 		compileResult,
 		*cfg.sublimeManifest,
-		overrideProducer,
+		factory,
 		outputPaths,
 		cfg.fileExtensions,
 		cfg.scopeExtension,

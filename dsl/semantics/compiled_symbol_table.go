@@ -208,6 +208,8 @@ func walkParseTreeForSymbols(node *Node, env *SemanticEnv, ts, nk map[string]str
 		nk[dslspec.NodeSingleTokenContent(node)] = struct{}{}
 	case NodeParseSymbolReference:
 		nk[dslspec.IdentifierValue(node)] = struct{}{}
+	case NodeParseTemplateReference:
+		// Callee of call Name(…); template name is not a parse output node kind.
 	}
 	for _, ch := range node.ChildrenUnsafe() {
 		walkParseTreeForSymbols(ch, env, ts, nk)

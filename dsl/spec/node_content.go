@@ -47,7 +47,8 @@ func RefName(node *Node) string {
 	}
 
 	kind := node.Kind()
-	if kind == NodeParseExpressionReference || kind == NodeParseTokenReference || kind == NodeParseSymbolReference {
+	if kind == NodeParseExpressionReference || kind == NodeParseTokenReference || kind == NodeParseSymbolReference ||
+		kind == NodeParseTemplateReference {
 		return strings.TrimSpace(IdentifierValue(node))
 	}
 
