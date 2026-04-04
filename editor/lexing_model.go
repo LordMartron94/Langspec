@@ -3,6 +3,7 @@ package editor
 import (
 	"autarch/pattern"
 	"cmp"
+	"langspec"
 )
 
 /*
@@ -16,6 +17,12 @@ type LexingRule[TObservation cmp.Ordered, TToken, TTokenRole comparable] struct 
 	Role     TTokenRole
 	Pattern  pattern.RegulaAST[TObservation]
 	Priority int
+
+	LexerState string
+
+	StackKind      langspec.LexerStackOpKind
+	StackTargets   []string
+	StackPopAmount int
 }
 
 /* LexingRuleSet is an ordered collection of LexingRule entries. */

@@ -136,6 +136,11 @@ func (g *GrammarDefiner) RootByNode(node LangSpecParserNodeKind, transparent boo
 
 /*
 TransparentZeroOrMoreByNode builds zero-or-more repetition with grammar ID derived from (node, suffix).
+
+The element rule is evaluated before this call returns, including when the repetition is already memoized.
+If the element builds context-boundary grammars (e.g. TransparentSequence with a GrammarLabel), wrap that
+element in g.memoize(...) or pass a shared Rule variable so the same production is not constructed twice
+with the same label (syntaxa.ProducePackage rejects duplicate context-boundary labels).
 */
 func (g *GrammarDefiner) TransparentZeroOrMoreByNode(node LangSpecParserNodeKind, suffix string, rule Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
@@ -149,6 +154,18 @@ NestByNode builds a nest (open ... close) with grammar ID derived from node (suf
 */
 func (g *GrammarDefiner) NestByNode(node LangSpecParserNodeKind, open, close LangSpecLexerTokenType, body Rule) Rule {
 	grammarID := LangSpecGrammarIDFromNode(node)
+	return g.memoize(grammarID, func() Rule {
+		return g.rb.Rule.Nest(grammarID, node, lexarch.TokenKind(open), lexarch.TokenKind(close), body)
+	})
+}
+
+/*
+NestByNodeWithSuffix is like NestByNode but uses LangSpecGrammarIDFromNodeWithSuffix(node, suffix) as the
+grammar label and memo key. Use when the same LST node kind appears in multiple productions with different
+inner bodies (e.g. push/set vs pop argument parentheses); sharing NestByNode would memoize the wrong body.
+*/
+func (g *GrammarDefiner) NestByNodeWithSuffix(node LangSpecParserNodeKind, suffix string, open, close LangSpecLexerTokenType, body Rule) Rule {
+	grammarID := LangSpecGrammarIDFromNodeWithSuffix(node, suffix)
 	return g.memoize(grammarID, func() Rule {
 		return g.rb.Rule.Nest(grammarID, node, lexarch.TokenKind(open), lexarch.TokenKind(close), body)
 	})

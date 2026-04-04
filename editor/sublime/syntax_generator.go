@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"foundation/system"
+	"foundation/text"
 	"sort"
 	"strings"
 	"time"
@@ -231,6 +232,11 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 
 	if len(machine.AmbientTransitions) > 0 {
 		contextsMap["prototype"] = buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
+	}
+
+	for _, lm := range machine.LexerModeStates {
+		label := determineContextLabel(lm.Label)
+		contextsMap[label] = buildTransitionsRemapped(lm.Transitions, config, labelToRepresentative)
 	}
 
 	return contextsMap
@@ -535,7 +541,57 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
 	}
 
 	applyStackOperationRemapped(&entry, t, config, labelToRepresentative)
+	applyLexModeStack(&entry, t, labelToRepresentative)
 	return entry
+}
+
+func lexModeSublimeLabel(stateName string) string {
+	s := text.NewIdentifierSanitizer()
+	return "lex__" + s.Sanitize(stateName)
+}
+
+func applyLexModeStack[TObservation cmp.Ordered, TContext any](
+	entry *contextEntry,
+	t editor.EditorTransition[TObservation, TContext],
+	labelToRepresentative map[string]string,
+) {
+	if t.LexPopAmount > 0 {
+		if cur, ok := entry.Pop.(int); ok {
+			entry.Pop = cur + t.LexPopAmount
+		} else if entry.Pop == nil {
+			entry.Pop = t.LexPopAmount
+		} else {
+			entry.Pop = t.LexPopAmount
+		}
+	}
+
+	var curPush []string
+	switch v := entry.Push.(type) {
+	case []string:
+		curPush = append([]string(nil), v...)
+	}
+	for _, s := range t.LexPushStates {
+		lab := lexModeSublimeLabel(s)
+		if rep, ok := labelToRepresentative[lab]; ok {
+			lab = rep
+		}
+		curPush = append(curPush, lab)
+	}
+	if len(curPush) > 0 {
+		entry.Push = curPush
+	}
+
+	if len(t.LexSetStates) > 0 {
+		set := make([]string, 0, len(t.LexSetStates))
+		for _, s := range t.LexSetStates {
+			lab := lexModeSublimeLabel(s)
+			if rep, ok := labelToRepresentative[lab]; ok {
+				lab = rep
+			}
+			set = append(set, lab)
+		}
+		entry.Set = set
+	}
 }
 
 func applyStackOperationRemapped[TObservation cmp.Ordered, TContext any](

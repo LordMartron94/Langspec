@@ -74,8 +74,6 @@ PRAGMA {
 
 The `PATTERN` section defines reusable lexical building blocks to keep the `LEX` section clean. Patterns are purely textual substitutions and do not produce tokens themselves.
 
-## 4. PATTERN
-
 **Expressions:**
 * **String Literal:** `"if"`
 * **Regex Literal:** `` `[0-9]+` ``
@@ -109,24 +107,84 @@ PATTERN {
 
 ## 5. LEX
 
-The `LEX` section dictates how the raw character stream is tokenized. 
+The `LEX` section describes how the raw character stream is tokenized. Rules are grouped into **lexer states** (modes). The lexer may maintain a **stack** of active states; some rules can **push**, **pop**, or **set** that stack when they match.
 
-**Syntax:**
-`<Priority> <TokenName> -> <Role> : <PatternRef_or_Regex> ; [%% MetaTags %%]`
+### 5.1 State blocks
 
-* **Priority:** Optional Integer (defaults to 0). Higher numbers are attempted first.
-* **TokenName:** The identifier used in the `PARSE` and `PRATT` sections.
-* **Role:** A string identifier classifying the token (useful for the `IGNORE` directive).
-* **Pattern / Regex:** Must be a reference to a `PATTERN` identifier or an inline regex literal (`` `...` ``). **Inline string literals are not permitted.**
-
-**Example:**
+**Structure:**
 
 ```
 LEX {
-  // Must use pattern references or regex, NEVER raw strings like "if"
-  10 TokIf    -> keyword : pat_IfKeyword;
-  5 TokIdent  -> identifier : identifier; 
-  5 TokNumber -> numeric    : `[0-9]+`;   
+  state <StateName> [, <StateName> ...] {
+    <lex rules>
+  }
+  // additional state … { … } blocks allowed
+}
+```
+
+* **`INITIAL`:** At least one state block must include the state name `INITIAL`. That block is the lexer’s entry state. The compiler treats it as the start ruleset.
+* **Comma-separated names:** A single block may list several states (`state A, B, C { … }`). Every rule in the body is registered for **each** of those states with the same pattern, priority, role, and stack operation.
+* **Multiple blocks:** You may declare additional `state … { … }` groups for other modes. States referenced by `push` or `set` must be declared somewhere in `LEX`.
+
+### 5.2 Rule line
+
+**Syntax:**
+
+```
+[<Priority>] <TokenName> -> <Role> : <PatternRef_or_Regex> [<stack-mutation>] [%% <MetaTags> %%] ;
+```
+
+* **Priority:** Optional integer (defaults to 0). Higher numbers are tried first within a state.
+* **TokenName:** Identifier used from `PARSE` and `PRATT` (and tooling). Lexer token names are identifiers, not quoted strings.
+* **Role:** Identifier classifying the token (for example for `IGNORE` in `PARSE`).
+* **Pattern / regex:** A name defined in `PATTERN`, or an inline regex literal (`` `...` ``). Inline string literals are not allowed here.
+* **Meta tags:** Optional `%% key=value … %%` after the rule (for example `EOF=true` on the end-of-file token).
+
+### 5.3 Stack mutations (optional)
+
+After the pattern (and before `%%` meta, if any), you may append **one** mutation wrapped in **square brackets** `[` … `]`. Inside the brackets, `push`, `pop`, and `set` must be followed by a **parenthesized** argument list (parentheses are not optional).
+
+| Form | Meaning |
+|------|---------|
+| `[push(State1, State2, …)]` | Push the listed states onto the lexer stack (order is significant for the engine). At least one state name is required inside `()`. |
+| `[pop(N)]` | Pop `N` frames (`N` is a decimal integer; use `1` for a single pop). |
+| `[set(State1, State2, …)]` | Replace the stack with the given states. At least one state name is required inside `()`. |
+
+Omit the entire `[` … `]` mutation when the match should not change the stack.
+
+### 5.4 Parse, Pratt, and lexer tokens
+
+`PARSE` and `PRATT` refer to tokens by the same identifiers used in `LEX`. A reference is valid whenever that token name is declared by **some** lex rule in **any** state. There is no requirement that the token be defined in `INITIAL`; a token may be produced only after a `push` / `set` (or other mode change) moves the lexer into another state.
+
+At **run time**, the parser can only consume a token if the lexer’s current state (and stack) actually allows that token to match. That is a behavioral contract between your lex table and your grammar, not something the language restricts by limiting parse references to `INITIAL`.
+
+Where the same token name appears in more than one state, pattern and stack metadata must stay consistent across those rules (see lexer validation).
+
+**Example (single state):**
+
+```
+LEX {
+  state INITIAL {
+    10 TokIf     -> keyword    : pat_IfKeyword;
+    5  TokIdent  -> identifier : identifier;
+    5  TokNumber -> numeric    : `[0-9]+`;
+    0  TokWS     -> whitespace : pat_ws;
+  }
+}
+```
+
+**Example (modes + stack):**
+
+```
+LEX {
+  state INITIAL {
+    1 TokStringStart -> string : pat_quote [push(STRING)];
+    0 TokWS          -> ws     : pat_ws;
+  }
+  state STRING {
+    1 TokStringEnd   -> string : pat_quote [pop(1)];
+    1 TokChar        -> string : pat_string_char;
+  }
 }
 ```
 

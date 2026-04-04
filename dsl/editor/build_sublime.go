@@ -1,7 +1,6 @@
 package editor
 
 import (
-	"lexarch"
 	"autarch/pattern"
 	"fmt"
 	"foundation/bytes"
@@ -12,6 +11,7 @@ import (
 	dslspec "langspec/dsl/spec"
 	langspeceditor "langspec/editor"
 	"langspec/toolchain"
+	"lexarch"
 )
 
 var hasher = hash.XXH3HasherCreateWithSeed(6789)
@@ -73,10 +73,14 @@ func convertRulesetToEditor(
 	out := make([]langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole], 0, len(sourceRules))
 	for _, rule := range sourceRules {
 		out = append(out, langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole]{
-			Token:    rule.Token,
-			Role:     rule.Role,
-			Pattern:  rule.Pattern,
-			Priority: rule.Priority,
+			Token:          rule.Token,
+			Role:           rule.Role,
+			Pattern:        rule.Pattern,
+			Priority:       rule.Priority,
+			LexerState:     dsl.LangSpecLexerStateInitial,
+			StackKind:      rule.StackKind,
+			StackTargets:   append([]string(nil), rule.StackStates...),
+			StackPopAmount: rule.StackPopAmount,
 		})
 	}
 	return langspeceditor.LexingRuleSetCreate(out...)
@@ -251,5 +255,7 @@ var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 		dslspec.NodeParseIgnoreRole:          {Scopes: []string{"constant.language.token-role-reference"}},
 		dslspec.NodePredictToken:             {Scopes: []string{"constant.language.token-reference"}},
 		dslspec.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
+		dslspec.NodeStateDefinition:          {Scopes: []string{"entity.name.label.state"}},
+		dslspec.NodeStateReference:           {Scopes: []string{"constant.language.state-reference"}},
 	},
 }

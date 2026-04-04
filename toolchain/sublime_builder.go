@@ -1,7 +1,6 @@
 package toolchain
 
 import (
-	"lexarch"
 	"cmp"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"langspec/dsl"
 	"langspec/editor"
 	"langspec/editor/sublime"
+	"lexarch"
 	"strings"
 	"syntaxa"
 )
@@ -221,8 +221,7 @@ func executeSublimeToolchain(
 		},
 	)
 
-	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
-	editorRuleset := convertRulesetToEditor(ruleset)
+	editorRuleset := LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
 
 	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, uint32]{
 		LexerRuleset:   editorRuleset,
@@ -237,6 +236,32 @@ func executeSublimeToolchain(
 	return RunSublimeGenerator(runnerCfg)
 }
 
+/* LexerSpecToEditorLexingRuleSet flattens all lexer states into one editor ruleset (LexerState + stack metadata preserved). */
+func LexerSpecToEditorLexingRuleSet(
+	spec *langspec.LexerSpec[rune, uint32, uint32, string],
+) *editor.LexingRuleSet[rune, uint32, uint32] {
+	if spec == nil {
+		return editor.LexingRuleSetCreate[rune, uint32, uint32]()
+	}
+	var out []editor.LexingRule[rune, uint32, uint32]
+	for _, st := range spec.SortedStateKeys() {
+		rs := spec.Ruleset(st)
+		for _, ro := range langspec.LexerRulesetGetRules(rs) {
+			out = append(out, editor.LexingRule[rune, uint32, uint32]{
+				Token:          ro.Token,
+				Role:           ro.Role,
+				Pattern:        ro.Pattern,
+				Priority:       ro.Priority,
+				LexerState:     st,
+				StackKind:      ro.StackKind,
+				StackTargets:   append([]string(nil), ro.StackStates...),
+				StackPopAmount: ro.StackPopAmount,
+			})
+		}
+	}
+	return editor.LexingRuleSetCreate(out...)
+}
+
 func convertRulesetToEditor(
 	ruleset langspec.LexerRuleset[uint32, uint32],
 ) *editor.LexingRuleSet[rune, uint32, uint32] {
@@ -244,10 +269,14 @@ func convertRulesetToEditor(
 	out := make([]editor.LexingRule[rune, uint32, uint32], 0, len(sourceRules))
 	for _, rule := range sourceRules {
 		out = append(out, editor.LexingRule[rune, uint32, uint32]{
-			Token:    rule.Token,
-			Role:     rule.Role,
-			Pattern:  rule.Pattern,
-			Priority: rule.Priority,
+			Token:          rule.Token,
+			Role:           rule.Role,
+			Pattern:        rule.Pattern,
+			Priority:       rule.Priority,
+			LexerState:     "INITIAL",
+			StackKind:      rule.StackKind,
+			StackTargets:   append([]string(nil), rule.StackStates...),
+			StackPopAmount: rule.StackPopAmount,
 		})
 	}
 	return editor.LexingRuleSetCreate(out...)

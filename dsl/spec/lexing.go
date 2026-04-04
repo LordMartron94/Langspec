@@ -17,10 +17,9 @@ func BuildLexerSpec(spec LanguageSpec) (
 		LangSpecLexerTokenType,
 		LangSpecLexerTokenRole](
 		TokEOF,
-		LANG_SPEC_LEXER_STATE_DEFAULT,
-		func(r rune) string { return string(r) },
-		nil,
+		LangSpecLexerStateInitial,
 		func(t LangSpecLexerTokenType) string { return t.String() },
+		true, // The parser is not mutating lexer spec.
 	)
 
 	rs := langspec.LexerRulesetCreate[
@@ -37,7 +36,7 @@ func BuildLexerSpec(spec LanguageSpec) (
 		}
 	}
 
-	lexerSpec.WithRuleset(LANG_SPEC_LEXER_STATE_DEFAULT, *rs)
+	lexerSpec.WithRuleset(LangSpecLexerStateInitial, *rs)
 	return lexerSpec, rs
 }
 

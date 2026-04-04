@@ -53,9 +53,13 @@ PATTERN {
 	pat_TokKWImplicit : "implicit";
 	pat_TokKWPrecedence : "precedence";
 	pat_TokKWIgnore : "IGNORE";
+	pat_TokKWState : "state";
 	pat_TokKWTransparent : "transparent";
 	pat_TokKWSync : "sync";
 	pat_TokKWPredict : "predict";
+	pat_TokKWPush : "push";
+	pat_TokKWPop : "pop";
+	pat_TokKWSet : "set";
 	pat_TokEOF : [];
 	pat_TokWhitespace : (['\t', '\n', '\r', ' '])+;
 	pat_TokLineComment : "/" "/" (!['\n', '\r'])*;
@@ -69,60 +73,66 @@ PATTERN {
 }
 
 LEX {
-	2 TokKWFalse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWFalse       ;
-	2 TokKWIgnore       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWIgnore      ;
-	2 TokKWImplicit     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWImplicit    ;
-	2 TokKWInfix        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWInfix       ;
-	2 TokKWLSpec        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLSpec       ;
-	2 TokKWLex          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLex         ;
-	2 TokKWLocal        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLocal       ;
-	2 TokKWNest         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWNest        ;
-	2 TokKWParse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWParse       ;
-	2 TokKWPattern      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPattern     ;
-	2 TokKWPostfix      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPostfix     ;
-	2 TokKWPragma       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPragma      ;
-	2 TokKWPratt        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPratt       ;
-	2 TokKWPrecedence   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPrecedence  ;
-	2 TokKWPredict      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPredict     ;
-	2 TokKWPrefix       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPrefix      ;
-	2 TokKWPrimary      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPrimary     ;
-	2 TokKWSync         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWSync        ;
-	2 TokKWTool         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTool        ;
-	2 TokKWTransparent  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTransparent ;
-	2 TokKWTrue         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTrue        ;
-	2 TokKWVirtual      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWVirtual     ;
-	
-	1 TokCharLiteral    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokCharLiteral   ;
-	1 TokIdentifier     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokIdentifier    ;
-	1 TokRegexLiteral   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokRegexLiteral  ;
-	1 TokStringLiteral  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokStringLiteral ;
-	1 TokVersion        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokVersion       ;
-	
-	0 TokAssignment     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokAssignment    ;
-	0 TokBlockComment   -> LANG_SPEC_COMMENT_ROLE    : pat_TokBlockComment  ;
-	0 TokBraceClose     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBraceClose    ;
-	0 TokBraceOpen      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBraceOpen     ;
-	0 TokBracketClose   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBracketClose  ;
-	0 TokBracketOpen    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBracketOpen   ;
-	0 TokChainSeparator -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokChainSeparator;
-	0 TokComma          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokComma         ;
-	0 TokDashes         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokDashes        ;
-	0 TokDot            -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokDot           ;
-	0 TokEOF            -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokEOF            %% EOF=true %%;
-	0 TokEqualsOperator -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokEqualsOperator;
-	0 TokInteger        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokInteger       ;
-	0 TokLineComment    -> LANG_SPEC_COMMENT_ROLE    : pat_TokLineComment   ;
-	0 TokMetaSection    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokMetaSection   ;
-	0 TokNegation       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokNegation      ;
-	0 TokOptional       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokOptional      ;
-	0 TokParenClose     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokParenClose    ;
-	0 TokParenOpen      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokParenOpen     ;
-	0 TokPipe           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokPipe          ;
-	0 TokPlus           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokPlus          ;
-	0 TokRange          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokRange         ;
-	0 TokSemicolon      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokSemicolon     ;
-	0 TokStar           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokStar          ;
-	0 TokWhitespace     -> LANG_SPEC_WHITESPACE_ROLE : pat_TokWhitespace    ;
+	state INITIAL {
+		2 TokKWFalse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWFalse     	;
+		2 TokKWIgnore       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWIgnore      ;
+		2 TokKWImplicit     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWImplicit    ;
+		2 TokKWInfix        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWInfix       ;
+		2 TokKWLSpec        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLSpec       ;
+		2 TokKWLex          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLex         ;
+		2 TokKWLocal        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLocal       ;
+		2 TokKWNest         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWNest        ;
+		2 TokKWParse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWParse       ;
+		2 TokKWPattern      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPattern     ;
+		2 TokKWPop          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPop         ;
+		2 TokKWPostfix      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPostfix     ;
+		2 TokKWPragma       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPragma      ;
+		2 TokKWPratt        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPratt       ;
+		2 TokKWPrecedence   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPrecedence  ;
+		2 TokKWPredict      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPredict     ;
+		2 TokKWPrefix       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPrefix      ;
+		2 TokKWPrimary      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPrimary     ;
+		2 TokKWPush         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPush        ;
+		2 TokKWSet          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWSet         ;
+		2 TokKWState        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWState       ;
+		2 TokKWSync         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWSync        ;
+		2 TokKWTool         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTool        ;
+		2 TokKWTransparent  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTransparent ;
+		2 TokKWTrue         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTrue        ;
+		2 TokKWVirtual      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWVirtual     ;
+		
+		1 TokCharLiteral    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokCharLiteral   ;
+		1 TokIdentifier     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokIdentifier    ;
+		1 TokRegexLiteral   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokRegexLiteral  ;
+		1 TokStringLiteral  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokStringLiteral ;
+		1 TokVersion        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokVersion       ;
+		
+		0 TokAssignment     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokAssignment    ;
+		0 TokBlockComment   -> LANG_SPEC_COMMENT_ROLE    : pat_TokBlockComment  ;
+		0 TokBraceClose     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBraceClose    ;
+		0 TokBraceOpen      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBraceOpen     ;
+		0 TokBracketClose   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBracketClose  ;
+		0 TokBracketOpen    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokBracketOpen   ;
+		0 TokChainSeparator -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokChainSeparator;
+		0 TokComma          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokComma         ;
+		0 TokDashes         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokDashes        ;
+		0 TokDot            -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokDot           ;
+		0 TokEOF            -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokEOF            %% EOF=true %%;
+		0 TokEqualsOperator -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokEqualsOperator;
+		0 TokInteger        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokInteger       ;
+		0 TokLineComment    -> LANG_SPEC_COMMENT_ROLE    : pat_TokLineComment   ;
+		0 TokMetaSection    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokMetaSection   ;
+		0 TokNegation       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokNegation      ;
+		0 TokOptional       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokOptional      ;
+		0 TokParenClose     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokParenClose    ;
+		0 TokParenOpen      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokParenOpen     ;
+		0 TokPipe           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokPipe          ;
+		0 TokPlus           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokPlus          ;
+		0 TokRange          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokRange         ;
+		0 TokSemicolon      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokSemicolon     ;
+		0 TokStar           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokStar          ;
+		0 TokWhitespace     -> LANG_SPEC_WHITESPACE_ROLE : pat_TokWhitespace    ;
+	}
 }
 
 PRATT {
@@ -181,6 +191,7 @@ PARSE {
 		(
 			LEX_RULE_PATTERN
 		)
+		LEX_RULE_STATE_MUTATION?
 		META_SECTION?
 		virtual TokSemicolon
 	};
@@ -195,6 +206,16 @@ PARSE {
 		PATTERN_REF | NodeLexRulePattern : TokRegexLiteral
 	};
 	
+	LEX_RULE_STATE_MUTATION -> NodeLexRuleStateMutation sync (TokBracketClose) {
+		nest TokBracketOpen TokBracketClose {
+			LEX_RULE_STATE_MUTATION_KIND
+		}
+	};
+	
+	LEX_RULE_STATE_MUTATION_KIND -> transparent gr_LEX_RULE_STATE_MUTATION_KIND {
+		STATE_MUTATION_PUSH | STATE_MUTATION_POP | STATE_MUTATION_SET
+	};
+	
 	LEX_SECTION -> NodeLexSection {
 		NodeLexKeyword : TokKWLex
 		LEX_SECTION_BLOCK_NEST
@@ -203,7 +224,7 @@ PARSE {
 	
 	LEX_SECTION_BLOCK_NEST -> transparent gr_LEX_SECTION_BLOCK_NEST sync (TokBraceClose) {
 		nest TokBraceOpen TokBraceClose {
-			LEX_RULE_LIST
+			STATE_LIST_BLOCKS
 		}
 	};
 	
@@ -778,6 +799,83 @@ PARSE {
 	RULE_MODIFIER_SYNC -> NodeRuleModifierSync {
 		virtual TokKWSync
 		SYNC_BLOCK
+	};
+	
+	STATE_DEFINITION_BODY -> NodeStateDefinitionBody sync (TokBraceClose) {
+		nest TokBraceOpen TokBraceClose {
+			LEX_RULE_LIST
+		}
+	};
+	
+	STATE_DEFINITION_LIST -> NodeStateDefinitionList {
+		NodeStateDefinition : TokIdentifier
+		STATE_DEFINITION_TAIL
+	};
+	
+	STATE_DEFINITION_TAIL -> transparent gr_STATE_DEFINITION_TAIL {
+		(
+			STATE_DEFINITION_TAIL_CONTENT
+		)*
+	};
+	
+	STATE_DEFINITION_TAIL_CONTENT -> transparent gr_STATE_DEFINITION_TAIL_CONTENT {
+		virtual TokComma
+		NodeStateDefinition : TokIdentifier
+	};
+	
+	STATE_LIST -> NodeStateList {
+		NodeStateKeyword : TokKWState
+		STATE_DEFINITION_LIST
+		STATE_DEFINITION_BODY
+	};
+	
+	STATE_LIST_BLOCKS -> transparent gr_STATE_LIST_BLOCKS {
+		(
+			STATE_LIST
+		)*
+	};
+	
+	STATE_MUTATION_ARGUMENT_LIST_ARGS -> NodeStateMutationArgumentList sync (TokParenClose) {
+		nest TokParenOpen TokParenClose {
+			STATE_MUTATION_ARGUMENT_LIST_LIST
+		}
+	};
+	
+	STATE_MUTATION_ARGUMENT_LIST_LIST -> NodeStateMutationArgumentList {
+		NodeStateReference : TokIdentifier
+		STATE_MUTATION_ARGUMENT_LIST_TAIL
+	};
+	
+	STATE_MUTATION_ARGUMENT_LIST_POP -> NodeStateMutationArgumentList sync (TokParenClose) {
+		nest TokParenOpen TokParenClose {
+			NodeStateMutationPopAmount : TokInteger
+		}
+	};
+	
+	STATE_MUTATION_ARGUMENT_LIST_TAIL -> transparent gr_STATE_MUTATION_ARGUMENT_LIST_TAIL {
+		(
+			STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT
+		)*
+	};
+	
+	STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT -> transparent gr_STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT {
+		virtual TokComma
+		NodeStateReference : TokIdentifier
+	};
+	
+	STATE_MUTATION_POP -> NodeStateMutationPop {
+		NodeLexRuleStateMutation : TokKWPop
+		STATE_MUTATION_ARGUMENT_LIST_POP
+	};
+	
+	STATE_MUTATION_PUSH -> NodeStateMutationPush {
+		NodeLexRuleStateMutation : TokKWPush
+		STATE_MUTATION_ARGUMENT_LIST_ARGS
+	};
+	
+	STATE_MUTATION_SET -> NodeStateMutationSet {
+		NodeLexRuleStateMutation : TokKWSet
+		STATE_MUTATION_ARGUMENT_LIST_ARGS
 	};
 	
 	STRING_ARRAY -> NodeStringArray sync (TokBracketClose) {

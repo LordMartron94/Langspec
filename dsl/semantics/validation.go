@@ -42,6 +42,13 @@ const (
 	VALIDATION_TOKEN_UNREFERENCED_IN_PARSE ValidationCode = "V_LEX005"
 	VALIDATION_UNRESOLVED_TOKEN_REF        ValidationCode = "V_LEX006"
 
+	VALIDATION_LEX_INITIAL_STATE_MISSING      ValidationCode = "V_LEX007"
+	VALIDATION_LEX_UNDEFINED_STATE_REF        ValidationCode = "V_LEX008"
+	VALIDATION_LEX_UNREFERENCED_STATE         ValidationCode = "V_LEX009"
+	VALIDATION_LEX_PUSH_SET_EMPTY_ARGS        ValidationCode = "V_LEX010"
+	VALIDATION_LEX_TOKEN_MULTI_STATE_CONFLICT ValidationCode = "V_LEX011"
+	VALIDATION_LEX_DUPLICATE_STATE_NAME       ValidationCode = "V_LEX013"
+
 	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
 
 	// Repetition bounds ({n,m}) apply to both pattern expressions and parse NodeRepetition; codes use V_REP (not V_PAT).
@@ -488,7 +495,119 @@ func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[strin
 
 // ------------------------------------------------------------- LEX SEMANTICS (STAGE 2)
 
+func processLexerStateSemantics(ctx *ValidationCtx) {
+	lex := ctx.RootNode.FindFirstKind(NodeLexSection)
+	if lex == nil {
+		return
+	}
+
+	defined := make(map[string]struct{})
+	firstDefNode := make(map[string]*Node)
+
+	for _, sl := range lex.FindAllKind(NodeStateList) {
+		list := sl.FindFirstKind(NodeStateDefinitionList)
+		if list == nil {
+			continue
+		}
+		for _, def := range list.FindAllKind(NodeStateDefinition) {
+			n := NodeSingleTokenContent(def)
+			if _, dup := defined[n]; dup {
+				ctx.ReportError(VALIDATION_LEX_DUPLICATE_STATE_NAME.String(), fmt.Sprintf("duplicate lexer state '%s'", n), def)
+				continue
+			}
+			defined[n] = struct{}{}
+			firstDefNode[n] = def
+		}
+	}
+
+	if _, hasInitial := defined["INITIAL"]; !hasInitial {
+		ctx.ReportError(VALIDATION_LEX_INITIAL_STATE_MISSING.String(), "lexer must declare state INITIAL", lex)
+	}
+
+	referenced := make(map[string]bool)
+	for _, sl := range lex.FindAllKind(NodeStateList) {
+		body := sl.FindFirstKind(NodeStateDefinitionBody)
+		if body == nil {
+			continue
+		}
+		for _, rule := range body.FindAllKind(NodeLexRule) {
+			validateLexerMutations(ctx, rule, defined)
+			markReferencedLexerStates(rule, referenced)
+		}
+	}
+
+	for name := range defined {
+		if name == "INITIAL" {
+			continue
+		}
+		if !referenced[name] {
+			ctx.ReportWarning(VALIDATION_LEX_UNREFERENCED_STATE.String(), fmt.Sprintf("lexer state '%s' is never a target of push or set", name), firstDefNode[name])
+		}
+	}
+
+	checkLexTokenConsistencyAcrossStates(ctx)
+}
+
+func validateLexerMutations(ctx *ValidationCtx, rule *Node, defined map[string]struct{}) {
+	mutRoot := rule.FindFirstKind(NodeLexRuleStateMutation)
+	if mutRoot == nil {
+		return
+	}
+	if mutRoot.FindFirstKind(NodeStateMutationPush) != nil || mutRoot.FindFirstKind(NodeStateMutationSet) != nil {
+		refs := mutRoot.FindAllKind(NodeStateReference)
+		if len(refs) == 0 {
+			ctx.ReportError(VALIDATION_LEX_PUSH_SET_EMPTY_ARGS.String(), "push/set requires at least one state name", mutRoot)
+			return
+		}
+		for _, ref := range refs {
+			name := NodeSingleTokenContent(ref)
+			if _, ok := defined[name]; !ok {
+				ctx.ReportError(VALIDATION_LEX_UNDEFINED_STATE_REF.String(), fmt.Sprintf("undefined lexer state '%s'", name), ref)
+			}
+		}
+	}
+}
+
+func markReferencedLexerStates(rule *Node, referenced map[string]bool) {
+	mutRoot := rule.FindFirstKind(NodeLexRuleStateMutation)
+	if mutRoot == nil {
+		return
+	}
+	for _, ref := range mutRoot.FindAllKind(NodeStateReference) {
+		referenced[NodeSingleTokenContent(ref)] = true
+	}
+}
+
+func checkLexTokenConsistencyAcrossStates(ctx *ValidationCtx) {
+	byToken := make(map[string]string)
+	for _, info := range collectLexRules(ctx.RootNode) {
+		sig := info.patternKey + "|" + info.stackSig
+		if prev, ok := byToken[info.tokenName]; ok {
+			if prev != sig {
+				ctx.ReportError(VALIDATION_LEX_TOKEN_MULTI_STATE_CONFLICT.String(),
+					fmt.Sprintf("token '%s' must use the same pattern and [push/pop/set] in every lexer state", info.tokenName),
+					info.tokenNameNode)
+			}
+			continue
+		}
+		byToken[info.tokenName] = sig
+	}
+}
+
+func lexerStateDefinitionNames(stateList *Node) []string {
+	list := stateList.FindFirstKind(NodeStateDefinitionList)
+	if list == nil {
+		return nil
+	}
+	var out []string
+	for _, def := range list.FindAllKind(NodeStateDefinition) {
+		out = append(out, NodeSingleTokenContent(def))
+	}
+	return out
+}
+
 func processLexSemantics(ctx *ValidationCtx) {
+	processLexerStateSemantics(ctx)
 	lexRules := collectLexRules(ctx.RootNode)
 	patternKeyToRules := groupLexRulesByPattern(lexRules)
 
@@ -1048,11 +1167,13 @@ func formatCycle(cycle []string) string {
 }
 
 type lexRuleInfo struct {
-	tokenName     string
-	patternKey    string
-	priority      int
-	tokenNameNode *Node
-	patternNode   *Node
+	tokenName       string
+	patternKey      string
+	priority        int
+	tokenNameNode   *Node
+	patternNode     *Node
+	lexerStateGroup string
+	stackSig        string
 }
 
 func collectLexRules(root *Node) []lexRuleInfo {
@@ -1062,36 +1183,78 @@ func collectLexRules(root *Node) []lexRuleInfo {
 		return out
 	}
 
-	for _, ruleNode := range lexSection.FindAllKind(NodeLexRule) {
-		tokenNameNode := ruleNode.FindFirstKind(NodeLexRuleTokenName)
-		if tokenNameNode == nil {
-			continue
-		}
-		tokenName, ok := attributeAs[string](tokenNameNode, ATTRIBUTE_LITERAL_STRING_VALUE)
-		if !ok {
+	for _, stateList := range lexSection.FindAllKind(NodeStateList) {
+		groupKey := strings.Join(lexerStateDefinitionNames(stateList), ",")
+		body := stateList.FindFirstKind(NodeStateDefinitionBody)
+		if body == nil {
 			continue
 		}
 
-		priority := parsePriority(ruleNode.FindFirstKind(NodeLexRulePriority))
-		patternKey, patternNode := extractLexPattern(ruleNode)
+		for _, ruleNode := range body.FindAllKind(NodeLexRule) {
+			tokenNameNode := ruleNode.FindFirstKind(NodeLexRuleTokenName)
+			if tokenNameNode == nil {
+				continue
+			}
+			tokenName := strings.TrimSpace(IdentifierValue(tokenNameNode))
+			if tokenName == "" {
+				continue
+			}
 
-		if patternKey != "" && patternNode != nil {
-			out = append(out, lexRuleInfo{
-				tokenName:     tokenName,
-				patternKey:    patternKey,
-				priority:      priority,
-				tokenNameNode: tokenNameNode,
-				patternNode:   patternNode,
-			})
+			priority := parsePriority(ruleNode.FindFirstKind(NodeLexRulePriority))
+			patternKey, patternNode := extractLexPattern(ruleNode)
+
+			if patternKey != "" && patternNode != nil {
+				out = append(out, lexRuleInfo{
+					tokenName:       tokenName,
+					patternKey:      patternKey,
+					priority:        priority,
+					tokenNameNode:   tokenNameNode,
+					patternNode:     patternNode,
+					lexerStateGroup: groupKey,
+					stackSig:        lexerRuleStackSignature(ruleNode),
+				})
+			}
 		}
 	}
 	return out
 }
 
+func lexerRuleStackSignature(ruleNode *Node) string {
+	mutRoot := ruleNode.FindFirstKind(NodeLexRuleStateMutation)
+	if mutRoot == nil {
+		return "none"
+	}
+	if mutRoot.FindFirstKind(NodeStateMutationPush) != nil {
+		return "push:" + strings.Join(lexerStateRefNames(mutRoot), ",")
+	}
+	if mutRoot.FindFirstKind(NodeStateMutationSet) != nil {
+		return "set:" + strings.Join(lexerStateRefNames(mutRoot), ",")
+	}
+	if mutRoot.FindFirstKind(NodeStateMutationPop) != nil {
+		amt := 1
+		if an := mutRoot.FindFirstKind(NodeStateMutationPopAmount); an != nil {
+			if v, ok := parseIntFromNode(an); ok {
+				amt = v
+			}
+		}
+		return fmt.Sprintf("pop:%d", amt)
+	}
+	return "none"
+}
+
+func lexerStateRefNames(mutRoot *Node) []string {
+	var s []string
+	for _, ref := range mutRoot.FindAllKind(NodeStateReference) {
+		s = append(s, NodeSingleTokenContent(ref))
+	}
+	return s
+}
+
 func groupLexRulesByPattern(rules []lexRuleInfo) map[string][]lexRuleInfo {
 	grouped := make(map[string][]lexRuleInfo)
 	for _, r := range rules {
-		grouped[r.patternKey] = append(grouped[r.patternKey], r)
+		key := r.lexerStateGroup + "|" + r.patternKey
+		grouped[key] = append(grouped[key], r)
 	}
 	return grouped
 }

@@ -5,6 +5,8 @@ import (
 	"langspec/dsl/spec"
 )
 
+const LangSpecLexerStateInitial = spec.LangSpecLexerStateInitial
+
 /*
 Re-exports spec token/node kind aliases and Node for the dsl package API.
 */
@@ -22,5 +24,6 @@ type (
 
 /* GrammarPackage is the lowered grammar package type (see semantics.GrammarPackage). */
 type GrammarPackage = semantics.GrammarPackage
+
 /* SemanticEnv is the symbol environment built from the LST (see semantics.SemanticEnv). */
 type SemanticEnv = semantics.SemanticEnv

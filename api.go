@@ -4,12 +4,12 @@ import (
 	"autarch/pattern"
 	"cmp"
 	"fmt"
-	"foundation/domain"
 	"foundation/system"
 	"lexarch"
 	"memarch"
 	"memcore"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"syntaxa"
 	"time"
@@ -23,14 +23,13 @@ type LexerSpec[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState compara
 
 	initialState TLexerState
 
-	observationFormatter syntaxa.ObservationFormatter
-	observationDomain    *domain.DiscreteDomain[TObservation]
-
 	tokenFormatter func(token TToken) string
 	dfaFormatter   any
 	compilerMode   lexarch.PatternCompilerMode
 	positionMode   lexerSpecPositionMode
 	runeTabWidth   int
+
+	noClientStackMutations bool
 
 	eofToken TToken
 }
@@ -43,18 +42,34 @@ const (
 	lexerSpecPositionModeByteFast
 )
 
+/* LexerStackOpKind is the lexer stack effect attached to a single lexing rule. */
+type LexerStackOpKind uint8
+
+const (
+	LexerStackOpNone LexerStackOpKind = iota
+	LexerStackOpPush
+	LexerStackOpPop
+	LexerStackOpSet
+)
+
 type LexerRule[TToken, TTokenRole comparable] struct {
-	pattern  pattern.RegulaAST[rune]
-	token    TToken
-	role     TTokenRole
-	priority int
+	pattern     pattern.RegulaAST[rune]
+	token       TToken
+	role        TTokenRole
+	priority    int
+	stackKind   LexerStackOpKind
+	stackStates []string
+	popAmount   int
 }
 
 type LexerRuleReadOnly[TToken, TTokenRole comparable] struct {
-	Pattern  pattern.RegulaAST[rune]
-	Token    TToken
-	Role     TTokenRole
-	Priority int
+	Pattern        pattern.RegulaAST[rune]
+	Token          TToken
+	Role           TTokenRole
+	Priority       int
+	StackKind      LexerStackOpKind
+	StackStates    []string
+	StackPopAmount int
 }
 
 type LexerRuleset[TToken, TTokenRole comparable] struct {
@@ -73,11 +88,28 @@ func (r *LexerRuleset[TToken, TTokenRole]) WithRulePriority(
 	role TTokenRole,
 	priority int,
 ) *LexerRuleset[TToken, TTokenRole] {
+	return r.WithLexerRule(pat, token, role, priority, LexerStackOpNone, nil, 0)
+}
+
+/* WithLexerRule appends a rule with optional push/pop/set stack behavior (state names match LexerSpec ruleset keys). */
+func (r *LexerRuleset[TToken, TTokenRole]) WithLexerRule(
+	pat pattern.RegulaAST[rune],
+	token TToken,
+	role TTokenRole,
+	priority int,
+	stackKind LexerStackOpKind,
+	stackStates []string,
+	popAmount int,
+) *LexerRuleset[TToken, TTokenRole] {
+	statesCopy := append([]string(nil), stackStates...)
 	r.rules = append(r.rules, LexerRule[TToken, TTokenRole]{
-		pattern:  pat,
-		token:    token,
-		role:     role,
-		priority: priority,
+		pattern:     pat,
+		token:       token,
+		role:        role,
+		priority:    priority,
+		stackKind:   stackKind,
+		stackStates: statesCopy,
+		popAmount:   popAmount,
 	})
 	return r
 }
@@ -95,11 +127,15 @@ func LexerRulesetGetRules[TToken, TTokenRole comparable](
 ) []LexerRuleReadOnly[TToken, TTokenRole] {
 	out := make([]LexerRuleReadOnly[TToken, TTokenRole], len(ruleset.rules))
 	for i, rule := range ruleset.rules {
+		stCopy := append([]string(nil), rule.stackStates...)
 		out[i] = LexerRuleReadOnly[TToken, TTokenRole]{
-			Pattern:  rule.pattern,
-			Token:    rule.token,
-			Role:     rule.role,
-			Priority: rule.priority,
+			Pattern:        rule.pattern,
+			Token:          rule.token,
+			Role:           rule.role,
+			Priority:       rule.priority,
+			StackKind:      rule.stackKind,
+			StackStates:    stCopy,
+			StackPopAmount: rule.popAmount,
 		}
 	}
 	return out
@@ -109,19 +145,17 @@ func LexerRulesetGetRules[TToken, TTokenRole comparable](
 func LexerSpecCreate[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState comparable](
 	eofToken TToken,
 	initialState TLexerState,
-	observationFormatter syntaxa.ObservationFormatter,
-	observationDomain *domain.DiscreteDomain[TObservation],
 	tokenFormatter func(token TToken) string,
+	noClientStackMutations bool,
 ) *LexerSpec[TObservation, TToken, TTokenRole, TLexerState] {
 	return &LexerSpec[TObservation, TToken, TTokenRole, TLexerState]{
-		rulesets:             make(map[TLexerState]LexerRuleset[TToken, TTokenRole]),
-		initialState:         initialState,
-		eofToken:             eofToken,
-		observationFormatter: observationFormatter,
-		observationDomain:    observationDomain,
-		tokenFormatter:       tokenFormatter,
-		compilerMode:         lexarch.PATTERN_COMPILE_GLUSHKOV,
-		positionMode:         lexerSpecPositionModeGeneric,
+		rulesets:               make(map[TLexerState]LexerRuleset[TToken, TTokenRole]),
+		initialState:           initialState,
+		eofToken:               eofToken,
+		tokenFormatter:         tokenFormatter,
+		compilerMode:           lexarch.PATTERN_COMPILE_GLUSHKOV,
+		positionMode:           lexerSpecPositionModeGeneric,
+		noClientStackMutations: noClientStackMutations,
 	}
 }
 
@@ -139,6 +173,18 @@ func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) Ruleset(
 	state TLexerState,
 ) LexerRuleset[TToken, TTokenRole] {
 	return l.rulesets[state]
+}
+
+/* SortedStateKeys returns all registered lexer state keys in deterministic fmt.Sprint order. */
+func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) SortedStateKeys() []TLexerState {
+	out := make([]TLexerState, 0, len(l.rulesets))
+	for s := range l.rulesets {
+		out = append(out, s)
+	}
+	slices.SortFunc(out, func(a, b TLexerState) int {
+		return cmp.Compare(fmt.Sprint(a), fmt.Sprint(b))
+	})
+	return out
 }
 
 func (l *LexerSpec[TObservation, TToken, TTokenRole, TLexerState]) WithDFADebugFormatter(
@@ -599,12 +645,11 @@ This is useful if clients want to delegate lexing creation without relying on th
 diagnosticFn is optional (nil disables); when set it is invoked per ruleset with NFA build stats before NFA-to-DFA.
 */
 func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole comparable](
-	scratchAllocationFn memarch.AllocationFn,
+	_ memarch.AllocationFn,
 	maxLexerAutomatonMemory memcore.MemoryUnitBytes,
 	nfaToDFAPipelineMinTemp, nfaToDFAPipelineMaxTemp memcore.MemoryUnitBytes,
 	spec *LexerSpec[TObservation, TToken, TTokenRole, TLexerState],
 ) *lexarch.Lexer {
-	_ = scratchAllocationFn
 	cfg := lexarch.LexerConfigurationCreate()
 	lexarch.LexerConfigurationSetPatternCompiler(cfg, spec.compilerMode)
 	lexarch.LexerConfigurationSetMainMemory(cfg, memcore.KiloByte, maxLexerAutomatonMemory)
@@ -612,8 +657,13 @@ func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken
 	lexarch.LexerConfigurationSetTokenKindFormatter(cfg, func(kind lexarch.TokenKind) string {
 		return spec.tokenFormatter(langspecConvertUint32ToGeneric[TToken](uint32(kind), "token formatter"))
 	})
-	isStart := true
-	for state, ruleset := range spec.rulesets {
+
+	if spec.noClientStackMutations {
+		lexarch.LexerConfigurationDisableClientStackMutations(cfg)
+	}
+
+	for _, state := range spec.SortedStateKeys() {
+		ruleset := spec.rulesets[state]
 		stateRules := make([]*lexarch.LexingRule, 0, len(ruleset.rules))
 		for _, r := range ruleset.rules {
 			// EOF is a virtual parser token and must never become a concrete lexing rule.
@@ -630,16 +680,31 @@ func LangParserLexerCreateFromSpec[TObservation cmp.Ordered, TLexerState, TToken
 				))
 			}
 
-			stateRules = append(stateRules, lexarch.LexingRuleCreate(
+			lr := lexarch.LexingRuleCreate(
 				r.pattern,
 				r.priority,
 				lexarch.TokenKind(tokenKind),
 				lexarch.TokenRole(langspecConvertGenericToUint32(r.role, "token role")),
-			))
+			)
+			switch r.stackKind {
+			case LexerStackOpPush:
+				lexarch.LexingRuleSetStackPush(lr, r.stackStates...)
+			case LexerStackOpPop:
+				amt := r.popAmount
+				if amt < 1 {
+					amt = 1
+				}
+				lexarch.LexingRuleSetStackPop(lr, amt)
+			case LexerStackOpSet:
+				lexarch.LexingRuleSetStackSet(lr, r.stackStates...)
+			case LexerStackOpNone:
+			}
+			stateRules = append(stateRules, lr)
 		}
-		lexState := lexarch.LexingStateCreate(fmt.Sprintf("%v", state), stateRules)
+		descriptor := fmt.Sprintf("%v", state)
+		lexState := lexarch.LexingStateCreate(descriptor, stateRules)
+		isStart := state == spec.initialState
 		lexarch.LexerConfigurationRegisterState(cfg, lexState, isStart)
-		isStart = false
 	}
 	return lexarch.LexerCreate(cfg)
 }
@@ -683,7 +748,6 @@ func LangParserCreate[TObservation cmp.Ordered, TLexerState, TToken, TTokenRole,
 		func(token lexarch.TokenKind) string {
 			return config.spec.Lexer.tokenFormatter(langspecConvertUint32ToGeneric[TToken](uint32(token), "parser token formatter"))
 		},
-		config.spec.Lexer.observationFormatter,
 		config.spec.Parser.nodePostProcessor,
 		lexarch.TokenKind(langspecConvertGenericToUint32(config.spec.Lexer.eofToken, "parser eof token")),
 		config.spec.Parser.rootNodeKind,

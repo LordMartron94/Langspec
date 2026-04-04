@@ -181,10 +181,14 @@ func convertRulesetToEditorForToolchain(
 	out := make([]editor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole], 0, len(sourceRules))
 	for _, rule := range sourceRules {
 		out = append(out, editor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole]{
-			Token:    rule.Token,
-			Role:     rule.Role,
-			Pattern:  rule.Pattern,
-			Priority: rule.Priority,
+			Token:          rule.Token,
+			Role:           rule.Role,
+			Pattern:        rule.Pattern,
+			Priority:       rule.Priority,
+			LexerState:     dsl.LangSpecLexerStateInitial,
+			StackKind:      rule.StackKind,
+			StackTargets:   append([]string(nil), rule.StackStates...),
+			StackPopAmount: rule.StackPopAmount,
 		})
 	}
 	return editor.LexingRuleSetCreate(out...)

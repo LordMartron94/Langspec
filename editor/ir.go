@@ -182,6 +182,11 @@ type EditorTransition[TObservation cmp.Ordered, TContext any] struct {
 	ForeignPayload *ForeignMachinePayload[TObservation, TContext]
 	PopAmount      int
 	IsLookahead    bool
+
+	// Lex-mode stack (LSpec [push]/[pop]/[set]); context names are lex__<state> in Sublime output.
+	LexPushStates []string
+	LexPopAmount  int
+	LexSetStates  []string
 }
 
 /*
@@ -206,6 +211,7 @@ type LanguageMachine[TObservation cmp.Ordered, TContext any] struct {
 	EditorStates       []EditorState[TObservation, TContext]
 	RootState          EditorState[TObservation, TContext]
 	AmbientTransitions []EditorTransition[TObservation, TContext]
+	LexerModeStates    []EditorState[TObservation, TContext]
 }
 
 /*

@@ -99,12 +99,11 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 
 	lexerSpec := langspec.LexerSpecCreate[rune, uint32, uint32, string](
 		eofToken,
-		"default",
-		func(r rune) string { return string(r) },
-		nil,
+		"INITIAL",
 		func(t uint32) string {
 			return sym.TokenName(t)
 		},
+		true, // The parser is not mutating lexer spec.
 	)
 	lexerSpec.WithCompilationMode(lexarch.PATTERN_COMPILE_GLUSHKOV)
 	switch comp.config.lexerPositionTracking {
@@ -127,8 +126,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 	}
 	lspecCompiler.compilePatterns(patternCtx)
 
-	ruleset := lspecCompiler.compileRuleset(patternCtx)
-	lexerSpec.WithRuleset("default", *ruleset)
+	lspecCompiler.compileLexerSpec(patternCtx, lexerSpec)
 
 	grammarPackage, ruleRegistry, rootNodeKind, skipRoles, sourceMap := getParserSpecInfo(rootNode, env, dslName, dslVersion, sym)
 
@@ -137,7 +135,7 @@ func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
 
 	analysis := lowering.GetAnalysis(grammarPkg)
 	getAnalysis := func() *syntaxa.GrammarAnalysis { return analysis }
-	parserSpec := langspec.ParserSpecCreate[rune, uint32, uint32, string, uint32](
+	parserSpec := langspec.ParserSpecCreate[rune, uint32, uint32, string](
 		grammarPkg,
 		ruleRegistry,
 		rootNodeKind,
@@ -277,22 +275,43 @@ func extractStringArray(arrayNode *Node) []string {
 	return elements
 }
 
-func (c *compiler) compileRuleset(ctx *patternCompileCtx) *LexerRuleset {
-	ruleset := langspec.LexerRulesetCreate[uint32, uint32]()
-
+func (c *compiler) compileLexerSpec(ctx *patternCompileCtx, lexerSpec *langspec.LexerSpec[rune, uint32, uint32, string]) {
 	lexSection := ctx.rootNode.FindFirstKind(dslspec.NodeLexSection)
-	lexRules := c.gatherRules(lexSection, ctx)
-
-	for _, rule := range lexRules {
-		ruleset.WithRulePriority(
-			rule.tokenPattern,
-			ctx.sym.TokenID(rule.tokenName),
-			ctx.sym.RoleID(rule.tokenRole),
-			rule.priority,
-		)
+	for _, stateListNode := range lexSection.FindAllKind(dslspec.NodeStateList) {
+		stateNames := collectLexerStateDefinitionNames(stateListNode)
+		body := stateListNode.FindFirstKind(dslspec.NodeStateDefinitionBody)
+		if body == nil {
+			panic("compiler error: lex state block missing body")
+		}
+		lexRules := c.gatherRulesInBody(body, ctx)
+		for _, stateName := range stateNames {
+			rs := langspec.LexerRulesetCreate[uint32, uint32]()
+			for _, rule := range lexRules {
+				rs.WithLexerRule(
+					rule.tokenPattern,
+					ctx.sym.TokenID(rule.tokenName),
+					ctx.sym.RoleID(rule.tokenRole),
+					rule.priority,
+					rule.stackKind,
+					rule.stackStates,
+					rule.popAmount,
+				)
+			}
+			lexerSpec.WithRuleset(stateName, *rs)
+		}
 	}
+}
 
-	return ruleset
+func collectLexerStateDefinitionNames(stateList *Node) []string {
+	list := stateList.FindFirstKind(dslspec.NodeStateDefinitionList)
+	if list == nil {
+		return nil
+	}
+	var out []string
+	for _, def := range list.FindAllKind(dslspec.NodeStateDefinition) {
+		out = append(out, dslspec.NodeSingleTokenContent(def))
+	}
+	return out
 }
 
 type lexRule struct {
@@ -300,10 +319,13 @@ type lexRule struct {
 	tokenName    string
 	tokenRole    string
 	tokenPattern pattern.RegulaAST[rune]
+	stackKind    langspec.LexerStackOpKind
+	stackStates  []string
+	popAmount    int
 }
 
-func (c *compiler) gatherRules(sectionNode *Node, ctx *patternCompileCtx) []lexRule {
-	rules := sectionNode.FindAllKind(dslspec.NodeLexRule)
+func (c *compiler) gatherRulesInBody(body *Node, ctx *patternCompileCtx) []lexRule {
+	rules := body.FindAllKind(dslspec.NodeLexRule)
 	out := make([]lexRule, 0, len(rules))
 
 	for _, rule := range rules {
@@ -359,12 +381,47 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 		panic(fmt.Errorf("unsupported node kind for lex rule: %s", patternNode.Kind()))
 	}
 
+	stackKind, stackStates, popAmount := extractLexStackMutation(ruleNode)
+	stCopy := append([]string(nil), stackStates...)
+
 	return lexRule{
 		priority:     priority,
 		tokenName:    tokenName,
 		tokenRole:    tokenRole,
 		tokenPattern: tokenPattern,
+		stackKind:    stackKind,
+		stackStates:  stCopy,
+		popAmount:    popAmount,
 	}
+}
+
+func extractLexStackMutation(ruleNode *Node) (langspec.LexerStackOpKind, []string, int) {
+	mutRoot := ruleNode.FindFirstKind(dslspec.NodeLexRuleStateMutation)
+	if mutRoot == nil {
+		return langspec.LexerStackOpNone, nil, 0
+	}
+	if mutRoot.FindFirstKind(dslspec.NodeStateMutationPush) != nil {
+		return langspec.LexerStackOpPush, collectLexerStateReferences(mutRoot), 0
+	}
+	if mutRoot.FindFirstKind(dslspec.NodeStateMutationSet) != nil {
+		return langspec.LexerStackOpSet, collectLexerStateReferences(mutRoot), 0
+	}
+	if mutRoot.FindFirstKind(dslspec.NodeStateMutationPop) != nil {
+		amt := 1
+		if amtNode := mutRoot.FindFirstKind(dslspec.NodeStateMutationPopAmount); amtNode != nil {
+			amt = extractIntContent(amtNode)
+		}
+		return langspec.LexerStackOpPop, nil, amt
+	}
+	return langspec.LexerStackOpNone, nil, 0
+}
+
+func collectLexerStateReferences(mutRoot *Node) []string {
+	var out []string
+	for _, ref := range mutRoot.FindAllKind(dslspec.NodeStateReference) {
+		out = append(out, dslspec.NodeSingleTokenContent(ref))
+	}
+	return out
 }
 
 func (c *compiler) compilePatterns(ctx *patternCompileCtx) {

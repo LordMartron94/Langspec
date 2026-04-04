@@ -104,13 +104,15 @@ PATTERN {
 
 ### 4. LEX (Required)
 
-Defines token types, roles, and match priorities (higher integer = higher priority).
+Defines token types, roles, and match priorities (higher integer = higher priority). Rules live inside **state** blocks; `INITIAL` is required. Optional `[push(…)]`, `[pop(N)]`, and `[set(…)]` suffixes (square brackets around the mutation; parentheses around arguments are required) change the lexer mode stack when that rule matches. See **[docs/syntax.md](docs/syntax.md)** §5.
 
 ```lspec
 LEX {
-  2 TokIdent  -> identifier : `[a-zA-Z_]+`;
-  1 TokNumber -> numeric    : number;
-  0 EOF       -> structural : eof_pattern;  %% EOF=true %%
+  state INITIAL {
+    2 TokIdent  -> identifier : `[a-zA-Z_]+`;
+    1 TokNumber -> numeric    : number;
+    0 EOF       -> structural : eof_pattern;  %% EOF=true %%
+  }
 }
 ```
 

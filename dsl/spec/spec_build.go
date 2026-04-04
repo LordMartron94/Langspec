@@ -10,12 +10,10 @@ import (
 
 // ----------------------------------------------------------- LEXER / PARSER ENUMS
 
-//go:generate stringer -type LangSpecLexerState
-type LangSpecLexerState uint8
+// LangSpecLexerState is the lexer mode key for the LangSpec meta-language (.lspec).
+type LangSpecLexerState = string
 
-const (
-	LANG_SPEC_LEXER_STATE_DEFAULT LangSpecLexerState = iota + 1
-)
+const LangSpecLexerStateInitial LangSpecLexerState = "INITIAL"
 
 //go:generate stringer -type LangSpecLexerTokenType
 type LangSpecLexerTokenType uint32
@@ -86,6 +84,12 @@ const (
 	TokKWPredict
 
 	TokKWIgnore
+
+	TokKWState
+
+	TokKWPush
+	TokKWPop
+	TokKWSet
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -142,6 +146,18 @@ const (
 	NodeLexRuleRole
 	NodeLexRulePattern
 	NodeLexRulePriority
+	NodeStateList
+	NodeStateKeyword
+	NodeStateDefinitionBody
+	NodeStateDefinitionList
+	NodeStateDefinition
+	NodeLexRuleStateMutation
+	NodeStateMutationPush
+	NodeStateMutationPop
+	NodeStateMutationSet
+	NodeStateMutationArgumentList
+	NodeStateMutationPopAmount
+	NodeStateReference
 
 	// -- Pattern Section --
 	NodePatternSection
@@ -308,9 +324,13 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWImplicit, "keyword.pratt.implicit", "implicit", 2},
 		{TokKWPrecedence, "keyword.pratt.precedence", "precedence", 2},
 		{TokKWIgnore, "keyword.declaration.ignore", "IGNORE", 2},
+		{TokKWState, "keyword.declaration.state", "state", 2},
 		{TokKWTransparent, "keyword.operator.transparent", "transparent", 2},
 		{TokKWSync, "keyword.operator.sync", "sync", 2},
 		{TokKWPredict, "keyword.operator.predict", "predict", 2},
+		{TokKWPush, "keyword.operator.push", "push", 2},
+		{TokKWPop, "keyword.operator.pop", "pop", 2},
+		{TokKWSet, "keyword.operator.set", "set", 2},
 	}
 
 	for _, st := range statics {
@@ -665,8 +685,43 @@ func (b *dslGrammarBuilder) lexSection() Rule {
 		NodeLexSection,
 		NodeLexKeyword,
 		TokKWLex,
-		b.lexRuleList(),
+		b.lexStateBlockList(),
 	)
+}
+
+func (b *dslGrammarBuilder) lexStateBlockList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodeStateList, "BLOCKS", b.stateList())
+}
+
+func (b *dslGrammarBuilder) stateList() Rule {
+	return b.g.sequence(
+		NodeStateList, "",
+	).expectToken(NodeStateKeyword, TokKWState).
+		rule(b.stateDefinitions()).
+		rule(b.g.NestByNode(
+			NodeStateDefinitionBody,
+			TokBraceOpen,
+			TokBraceClose,
+			b.lexRuleList(),
+		)).
+		build()
+}
+
+func (b *dslGrammarBuilder) stateDefinitions() Rule {
+	// IDENTIFIER (, IDENTIFIER)*
+	return b.g.sequence(NodeStateDefinitionList, "").
+		expectToken(NodeStateDefinition, TokIdentifier).
+		rule(
+			b.g.TransparentZeroOrMoreByNode(
+				NodeStateDefinition, "TAIL",
+				b.g.rb.Rule.TransparentSequence(
+					LangSpecGrammarIDFromNodeWithSuffix(NodeStateDefinition, "TAIL CONTENT"),
+					b.g.expectVirtual(VirtualComma, TokComma),
+					b.g.expectToken(NodeStateDefinition, TokIdentifier),
+				),
+			),
+		).
+		build()
 }
 
 func (b *dslGrammarBuilder) lexRuleList() Rule {
@@ -685,8 +740,88 @@ func (b *dslGrammarBuilder) lexRule() Rule {
 			b.patternRefReference(),
 			b.g.expectToken(NodeLexRulePattern, TokRegexLiteral),
 		)).
+		optionalRule(b.stateMutation()).
 		optionalRule(b.metaSection()).
 		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
+// ----------------------------------------------------------- LEX: STATE MUTATIONS
+
+func (b *dslGrammarBuilder) stateMutation() Rule {
+	// Inner choice must use ChoiceByNodeWithSuffix: NestByNode and ChoiceByNode share the same
+	// LangSpecGrammarIDFromNode(NodeLexRuleStateMutation) memo key; without a suffix the choice is
+	// memoized first and NestByNode returns it, dropping the [ ] bracket nest from the grammar IR.
+	return b.g.NestByNode(
+		NodeLexRuleStateMutation,
+		TokBracketOpen,
+		TokBracketClose,
+		b.g.ChoiceByNodeWithSuffix(NodeLexRuleStateMutation, "KIND",
+			b.stateMutationPush(),
+			b.stateMutationPop(),
+			b.stateMutationSet(),
+		),
+	)
+}
+
+func (b *dslGrammarBuilder) stateMutationPush() Rule {
+	return b.g.sequence(NodeStateMutationPush, "").
+		expectToken(NodeLexRuleStateMutation, TokKWPush).
+		requiredRule(b.g.NestByNodeWithSuffix(
+			NodeStateMutationArgumentList, "ARGS",
+			TokParenOpen,
+			TokParenClose,
+			b.stateListArgs(),
+		), "push requires (State, ...)").
+		build()
+}
+
+func (b *dslGrammarBuilder) stateMutationPop() Rule {
+	return b.g.sequence(NodeStateMutationPop, "").
+		expectToken(NodeLexRuleStateMutation, TokKWPop).
+		requiredRule(b.g.NestByNodeWithSuffix(
+			NodeStateMutationArgumentList, "POP",
+			TokParenOpen,
+			TokParenClose,
+			b.g.expectToken(NodeStateMutationPopAmount, TokInteger),
+		), "pop requires (N)").
+		build()
+}
+
+func (b *dslGrammarBuilder) stateMutationSet() Rule {
+	return b.g.sequence(NodeStateMutationSet, "").
+		expectToken(NodeLexRuleStateMutation, TokKWSet).
+		requiredRule(b.g.NestByNodeWithSuffix(
+			NodeStateMutationArgumentList, "ARGS",
+			TokParenOpen,
+			TokParenClose,
+			b.stateListArgs(),
+		), "set requires (State, ...)").
+		build()
+}
+
+func (b *dslGrammarBuilder) stateMutationArgListTailSegment() Rule {
+	// Memoized: TransparentZeroOrMoreByNode evaluates its element rule before checking its own memo cache,
+	// so a fresh TransparentSequence would register duplicate "… TAIL_CONTENT" context boundaries.
+	return b.g.memoize(LangSpecGrammarIDFromNodeWithSuffix(NodeStateMutationArgumentList, "TAIL_CONTENT"), func() Rule {
+		return b.g.rb.Rule.TransparentSequence(
+			LangSpecGrammarIDFromNodeWithSuffix(NodeStateMutationArgumentList, "TAIL_CONTENT"),
+			b.g.expectVirtual(VirtualComma, TokComma),
+			b.g.expectToken(NodeStateReference, TokIdentifier),
+		)
+	})
+}
+
+func (b *dslGrammarBuilder) stateListArgs() Rule {
+	// Parses: IDENTIFIER (, IDENTIFIER)*
+	return b.g.sequence(NodeStateMutationArgumentList, "LIST").
+		expectToken(NodeStateReference, TokIdentifier).
+		rule(
+			b.g.TransparentZeroOrMoreByNode(
+				NodeStateMutationArgumentList, "TAIL",
+				b.stateMutationArgListTailSegment(),
+			),
+		).
 		build()
 }
 

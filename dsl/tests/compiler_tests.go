@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"lexarch"
 	"foundation/system"
 	"langspec"
 	"langspec/bootstrap"
@@ -9,6 +8,7 @@ import (
 	"langspec/dsl/generator"
 	dslspec "langspec/dsl/spec"
 	langspeceditor "langspec/editor"
+	"lexarch"
 	"testing"
 )
 
@@ -111,10 +111,14 @@ func convertRulesetToEditor(
 	out := make([]langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole], 0, len(sourceRules))
 	for _, rule := range sourceRules {
 		out = append(out, langspeceditor.LexingRule[rune, dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole]{
-			Token:    rule.Token,
-			Role:     rule.Role,
-			Pattern:  rule.Pattern,
-			Priority: rule.Priority,
+			Token:          rule.Token,
+			Role:           rule.Role,
+			Pattern:        rule.Pattern,
+			Priority:       rule.Priority,
+			LexerState:     dsl.LangSpecLexerStateInitial,
+			StackKind:      rule.StackKind,
+			StackTargets:   append([]string(nil), rule.StackStates...),
+			StackPopAmount: rule.StackPopAmount,
 		})
 	}
 	return langspeceditor.LexingRuleSetCreate(out...)

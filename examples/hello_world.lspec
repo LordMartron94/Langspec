@@ -7,9 +7,11 @@ PATTERN {
 }
 
 LEX {
+	state INITIAL {
 	1 TokWord -> word_role : pat_word;
 	0 TokWS   -> ws_role : pat_ws;
 	0 TokEOF  -> structural : pat_eof %% EOF=true %%;
+	}
 }
 
 PARSE {

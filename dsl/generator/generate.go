@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"foundation/system"
 	"foundation/text"
+	"langspec"
 	"langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
@@ -452,15 +453,37 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLexSection(
 		return concat(doctext("LEX {"), line(), doctext("}"))
 	}
 
-	rows := g.buildLexRows(rules)
-	g.sortLexRows(rows)
-	maxTok, maxRole, maxPat := g.calculateLexColumnWidths(rows)
+	byState := make(map[string][]editor.LexingRule[rune, TToken, TTokenRole])
+	for _, r := range rules {
+		byState[r.LexerState] = append(byState[r.LexerState], r)
+	}
+	stateNames := make([]string, 0, len(byState))
+	for s := range byState {
+		stateNames = append(stateNames, s)
+	}
+	slices.Sort(stateNames)
 
-	bodyDoc := g.buildLexRowsBlockDoc(rows, maxTok, maxRole, maxPat)
+	var stateDocs []Doc
+	for si, st := range stateNames {
+		if si > 0 {
+			stateDocs = append(stateDocs, line(), line())
+		}
+		srules := byState[st]
+		rows := g.buildLexRows(srules)
+		g.sortLexRows(rows)
+		maxTok, maxRole, maxPat := g.calculateLexColumnWidths(rows)
+		bodyDoc := g.buildLexRowsBlockDoc(rows, maxTok, maxRole, maxPat)
+		stateDocs = append(stateDocs, concat(
+			doctext("state "+st+" {"),
+			nest(1, concat(line(), bodyDoc)),
+			line(),
+			doctext("}"),
+		))
+	}
 
 	return concat(
 		doctext("LEX {"),
-		nest(1, concat(line(), bodyDoc)),
+		nest(1, concat(line(), concat(stateDocs...))),
 		line(),
 		doctext("}"),
 	)
@@ -518,8 +541,31 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSingleLexRo
 		Priority: rule.Priority,
 		Token:    g.tokenFormatter(lexarch.TokenKind(rule.Token)),
 		Role:     g.tokenRoleFormatter(rule.Role),
-		Pattern:  g.formatPatternName(lexarch.TokenKind(rule.Token)),
+		Pattern:  g.formatPatternName(lexarch.TokenKind(rule.Token)) + formatLexStackSuffixForLSPEC(rule),
 		Meta:     meta,
+	}
+}
+
+func formatLexStackSuffixForLSPEC[TToken, TTokenRole comparable](rule editor.LexingRule[rune, TToken, TTokenRole]) string {
+	switch rule.StackKind {
+	case langspec.LexerStackOpPush:
+		if len(rule.StackTargets) == 0 {
+			return ""
+		}
+		return " [push(" + strings.Join(rule.StackTargets, ", ") + ")]"
+	case langspec.LexerStackOpSet:
+		if len(rule.StackTargets) == 0 {
+			return ""
+		}
+		return " [set(" + strings.Join(rule.StackTargets, ", ") + ")]"
+	case langspec.LexerStackOpPop:
+		n := rule.StackPopAmount
+		if n < 1 {
+			n = 1
+		}
+		return fmt.Sprintf(" [pop(%d)]", n)
+	default:
+		return ""
 	}
 }
 

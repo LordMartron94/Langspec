@@ -3,6 +3,7 @@ package editor
 import (
 	"cmp"
 	"foundation/text"
+	"langspec"
 	"lexarch"
 	"sort"
 
@@ -69,10 +70,15 @@ func EditorIRFromStateGraph[
 	tokenToRuleIndex := make(map[lexarch.TokenKind]int)
 
 	for i, rule := range LexingRuleSetGetRules(lexingRuleset) {
+		if rule.LexerState != "INITIAL" {
+			continue
+		}
 		tokenToRule[lexarch.TokenKind(rule.Token)] = rule
 		tokenToPriority[lexarch.TokenKind(rule.Token)] = rule.Priority
 		tokenToRuleIndex[lexarch.TokenKind(rule.Token)] = i
 	}
+
+	lexerModeStates := buildLexerModeStates(lexingRuleset, config, sanitizer)
 
 	stateByID := make(map[string]*EditorState[TObservation, TContext])
 	for _, c := range sg.Contexts {
@@ -218,6 +224,7 @@ func EditorIRFromStateGraph[
 			EditorStates:       allStates,
 			RootState:          rootOut,
 			AmbientTransitions: ambientTransitions,
+			LexerModeStates:    lexerModeStates,
 		},
 	}, nil
 }
@@ -283,14 +290,16 @@ func buildDefaultTransition[
 		return EditorTransition[TObservation, TContext]{}, false
 	}
 
-	return EditorTransition[TObservation, TContext]{
+	out := EditorTransition[TObservation, TContext]{
 		OnPattern:    rule.Pattern,
 		MatchContext: config.contextProducer(edCtx),
 		Operation:    stackOpFromLowering(tr.Operation),
 		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
 		PopAmount:    determinePopAmount(tr),
 		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
-	}, true
+	}
+	copyLexStackFromLexingRule(&out, rule)
+	return out, true
 }
 
 func buildOverrideTransition[
@@ -330,29 +339,37 @@ func buildOverrideTransition[
 	}
 
 	if override.ForeignPayload != nil {
-		return EditorTransition[TObservation, TContext]{
+		out := EditorTransition[TObservation, TContext]{
 			OnPattern:      pat,
 			RegexPattern:   regexPat,
 			MatchContext:   matchCtx,
 			Captures:       override.Captures,
 			Operation:      STACK_EMBED,
 			ForeignPayload: override.ForeignPayload,
-		}, true
+		}
+		if rule, ok := tokenToRule[tr.Token]; ok {
+			copyLexStackFromLexingRule(&out, rule)
+		}
+		return out, true
 	}
 
 	if override.DelimitedPayload != nil {
 		bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
-		return EditorTransition[TObservation, TContext]{
+		out := EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
 			RegexPattern: regexPat,
 			MatchContext: matchCtx,
 			Captures:     override.Captures,
 			Operation:    STACK_PUSH,
 			Targets:      []*EditorState[TObservation, TContext]{bodyState},
-		}, true
+		}
+		if rule, ok := tokenToRule[tr.Token]; ok {
+			copyLexStackFromLexingRule(&out, rule)
+		}
+		return out, true
 	}
 
-	return EditorTransition[TObservation, TContext]{
+	out := EditorTransition[TObservation, TContext]{
 		OnPattern:    pat,
 		RegexPattern: regexPat,
 		MatchContext: matchCtx,
@@ -361,7 +378,11 @@ func buildOverrideTransition[
 		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
 		PopAmount:    determinePopAmount(tr),
 		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
-	}, true
+	}
+	if rule, ok := tokenToRule[tr.Token]; ok {
+		copyLexStackFromLexingRule(&out, rule)
+	}
+	return out, true
 }
 
 func resolveTargets[TObservation cmp.Ordered, TContext any](
@@ -511,11 +532,13 @@ func buildAmbientTransitionsForToken[
 	overrides := config.overrideProducer(edCtx)
 
 	if len(overrides) == 0 {
-		return []EditorTransition[TObservation, TContext]{{
+		tr := EditorTransition[TObservation, TContext]{
 			OnPattern:    rule.Pattern,
 			MatchContext: config.contextProducer(edCtx),
 			Operation:    STACK_NONE,
-		}}
+		}
+		copyLexStackFromLexingRule(&tr, rule)
+		return []EditorTransition[TObservation, TContext]{tr}
 	}
 
 	var out []EditorTransition[TObservation, TContext]
@@ -531,34 +554,40 @@ func buildAmbientTransitionsForToken[
 		}
 
 		if override.ForeignPayload != nil {
-			out = append(out, EditorTransition[TObservation, TContext]{
+			t := EditorTransition[TObservation, TContext]{
 				OnPattern:      pat,
 				MatchContext:   matchCtx,
 				Captures:       override.Captures,
 				Operation:      STACK_EMBED,
 				ForeignPayload: override.ForeignPayload,
-			})
+			}
+			copyLexStackFromLexingRule(&t, rule)
+			out = append(out, t)
 			continue
 		}
 
 		if override.DelimitedPayload != nil {
 			bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
-			out = append(out, EditorTransition[TObservation, TContext]{
+			t := EditorTransition[TObservation, TContext]{
 				OnPattern:    pat,
 				MatchContext: matchCtx,
 				Captures:     override.Captures,
 				Operation:    STACK_PUSH,
 				Targets:      []*EditorState[TObservation, TContext]{bodyState},
-			})
+			}
+			copyLexStackFromLexingRule(&t, rule)
+			out = append(out, t)
 			continue
 		}
 
-		out = append(out, EditorTransition[TObservation, TContext]{
+		t := EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
 			MatchContext: matchCtx,
 			Captures:     override.Captures,
 			Operation:    STACK_NONE,
-		})
+		}
+		copyLexStackFromLexingRule(&t, rule)
+		out = append(out, t)
 	}
 	return out
 }
@@ -581,6 +610,9 @@ func getSortedAmbientCandidates[
 	}
 
 	for _, rule := range LexingRuleSetGetRules(lexingRuleset) {
+		if rule.LexerState != "INITIAL" {
+			continue
+		}
 		if !grammarTokens[lexarch.TokenKind(rule.Token)] {
 			candidates = append(candidates, struct {
 				rule     LexingRule[TObservation, TToken, TTokenRole]
@@ -597,4 +629,82 @@ func getSortedAmbientCandidates[
 	})
 
 	return candidates
+}
+
+func copyLexStackFromLexingRule[
+	TObservation cmp.Ordered,
+	TToken comparable,
+	TTokenRole comparable,
+	TContext any,
+](
+	tr *EditorTransition[TObservation, TContext],
+	rule LexingRule[TObservation, TToken, TTokenRole],
+) {
+	switch rule.StackKind {
+	case langspec.LexerStackOpPush:
+		tr.LexPushStates = append([]string(nil), rule.StackTargets...)
+	case langspec.LexerStackOpPop:
+		amt := rule.StackPopAmount
+		if amt < 1 {
+			amt = 1
+		}
+		tr.LexPopAmount += amt
+	case langspec.LexerStackOpSet:
+		tr.LexSetStates = append([]string(nil), rule.StackTargets...)
+	case langspec.LexerStackOpNone:
+	}
+}
+
+func buildLexerModeStates[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+	TContext any,
+](
+	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
+	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	sanitizer *text.Sanitizer,
+) []EditorState[TObservation, TContext] {
+	byState := make(map[string][]LexingRule[TObservation, TToken, TTokenRole])
+	for _, r := range LexingRuleSetGetRules(lexingRuleset) {
+		byState[r.LexerState] = append(byState[r.LexerState], r)
+	}
+	keys := make([]string, 0, len(byState))
+	for k := range byState {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]EditorState[TObservation, TContext], 0, len(keys))
+	for _, st := range keys {
+		list := byState[st]
+		sort.SliceStable(list, func(i, j int) bool {
+			if list[i].Priority != list[j].Priority {
+				return list[i].Priority > list[j].Priority
+			}
+			return uint32(list[i].Token) < uint32(list[j].Token)
+		})
+
+		label := "lex__" + sanitizer.Sanitize(st)
+		es := EditorState[TObservation, TContext]{
+			ID:      label,
+			Label:   label,
+			Context: config.contextProducer(&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{}),
+		}
+		for _, lr := range list {
+			tok := lr.Token
+			edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{Token: &tok}
+			tr := EditorTransition[TObservation, TContext]{
+				OnPattern:    lr.Pattern,
+				MatchContext: config.contextProducer(edCtx),
+				Operation:    STACK_NONE,
+			}
+			copyLexStackFromLexingRule(&tr, lr)
+			es.Transitions = append(es.Transitions, tr)
+		}
+		out = append(out, es)
+	}
+	return out
 }

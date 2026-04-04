@@ -78,6 +78,7 @@ const (
 	VirtualMetaAssignment
 	VirtualPatternExpression
 	VirtualParseExpression
+	VirtualComma
 )
 
 /*
@@ -98,6 +99,8 @@ func VirtualGrammarIDToGrammarID(v VirtualGrammarID) syntaxa.GrammarLabel {
 		return "PATTERN EXPRESSION"
 	case VirtualParseExpression:
 		return "PARSE EXPRESSION"
+	case VirtualComma:
+		return "COMMA"
 	default:
 		return syntaxa.GrammarLabel("VIRTUAL_UNKNOWN")
 	}

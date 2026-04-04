@@ -346,7 +346,7 @@ func dispatchInMemorySublimeGeneration(
 	compileResult *dsl.LangSpecCompileResult,
 	outputPaths []string,
 ) error {
-	ruleset := compileResult.CompiledLexerSpec.Ruleset("default")
+	editorLexing := toolchain.LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
 	if compileResult.CompiledSymbols == nil {
 		return fmt.Errorf("bootstrap sublime: compiled symbols missing")
 	}
@@ -355,7 +355,7 @@ func dispatchInMemorySublimeGeneration(
 
 	var overrideProducer func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
 	if cfg.sublimeFactory != nil {
-		overrideProducer = cfg.sublimeFactory(convertRulesetToEditor(ruleset), ctxProducer)
+		overrideProducer = cfg.sublimeFactory(editorLexing, ctxProducer)
 	}
 
 	return toolchain.RunSublimeToolchainFromMemory(
@@ -366,20 +366,4 @@ func dispatchInMemorySublimeGeneration(
 		cfg.fileExtensions,
 		cfg.scopeExtension,
 	)
-}
-
-func convertRulesetToEditor(
-	ruleset langspec.LexerRuleset[uint32, uint32],
-) *editor.LexingRuleSet[rune, uint32, uint32] {
-	sourceRules := langspec.LexerRulesetGetRules(ruleset)
-	out := make([]editor.LexingRule[rune, uint32, uint32], 0, len(sourceRules))
-	for _, rule := range sourceRules {
-		out = append(out, editor.LexingRule[rune, uint32, uint32]{
-			Token:    rule.Token,
-			Role:     rule.Role,
-			Pattern:  rule.Pattern,
-			Priority: rule.Priority,
-		})
-	}
-	return editor.LexingRuleSetCreate(out...)
 }
