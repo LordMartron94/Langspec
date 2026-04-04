@@ -9,6 +9,7 @@ const (
 	SymbolKindToken SemanticSymbolKind = iota
 	SymbolKindPattern
 	SymbolKindRule
+	SymbolKindPair
 	SymbolKindPratt
 )
 
@@ -20,6 +21,7 @@ type SemanticEnv struct {
 	Tokens   map[string]*Node
 	Patterns map[string]*Node
 	Rules    map[string]*Node
+	Pairs    map[string]*PairDecl
 	Pratt    map[string]*Node
 
 	LocalPatterns map[string]bool
@@ -39,6 +41,7 @@ func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 		Tokens:        make(map[string]*Node),
 		Patterns:      make(map[string]*Node),
 		Rules:         make(map[string]*Node),
+		Pairs:         make(map[string]*PairDecl),
 		Pratt:         make(map[string]*Node),
 		LocalPatterns: make(map[string]bool),
 		LocalPratt:    make(map[string]bool),
@@ -47,6 +50,7 @@ func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 	buildEnvTokens(root, env, onDuplicate)
 	buildEnvPatterns(root, env, onDuplicate)
 	buildEnvRules(root, env, onDuplicate)
+	buildEnvPairs(root, env, onDuplicate)
 	buildEnvPratt(root, env, onDuplicate)
 
 	return env
@@ -105,6 +109,30 @@ func buildEnvRules(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 			}
 		} else {
 			env.Rules[name] = rule
+		}
+	}
+}
+
+func buildEnvPairs(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
+	parse := root.FindFirstKind(NodeParseSection)
+	if parse == nil {
+		return
+	}
+	for _, pairNode := range parse.FindAllKind(NodeParsePair) {
+		name, openTok, closeTok, ok := ExtractPairDeclaration(pairNode)
+		if !ok {
+			continue
+		}
+		if _, exists := env.Pairs[name]; exists {
+			if onDuplicate != nil {
+				onDuplicate(SymbolKindPair, name, pairNode)
+			}
+			continue
+		}
+		env.Pairs[name] = &PairDecl{
+			Node:       pairNode,
+			OpenToken:  openTok,
+			CloseToken: closeTok,
 		}
 	}
 }

@@ -60,6 +60,7 @@ PATTERN {
 	pat_TokKWPush : "push";
 	pat_TokKWPop : "pop";
 	pat_TokKWSet : "set";
+	pat_TokKWPair : "pair";
 	pat_TokEOF : [];
 	pat_TokWhitespace : (['\t', '\n', '\r', ' '])+;
 	pat_TokLineComment : "/" "/" (!['\n', '\r'])*;
@@ -70,11 +71,12 @@ PATTERN {
 	pat_TokVersion : "v" ('0'..'9')+ "." ('0'..'9')+ "." ('0'..'9')+;
 	pat_TokCharLiteral : "'" (!['\n', '\r', '\'', '\\'] | ("\\" ['\'', '\\', 'n', 'r', 't'] | ("\\u" (['0'..'9', 'A'..'F', 'a'..'f']){4,4} | "\\U" (['0'..'9', 'A'..'F', 'a'..'f']){8,8}))) "'";
 	pat_TokIdentifier : ['A'..'Z', '_', 'a'..'z'] (['-', '0'..'9', 'A'..'Z', '_', 'a'..'z'])*;
+	pat_TokPairReference : "@" ['A'..'Z', '_', 'a'..'z'] (['-', '0'..'9', 'A'..'Z', '_', 'a'..'z'])*;
 }
 
 LEX {
 	state INITIAL {
-		2 TokKWFalse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWFalse     	;
+		2 TokKWFalse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWFalse       ;
 		2 TokKWIgnore       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWIgnore      ;
 		2 TokKWImplicit     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWImplicit    ;
 		2 TokKWInfix        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWInfix       ;
@@ -82,6 +84,7 @@ LEX {
 		2 TokKWLex          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLex         ;
 		2 TokKWLocal        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLocal       ;
 		2 TokKWNest         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWNest        ;
+		2 TokKWPair         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPair        ;
 		2 TokKWParse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWParse       ;
 		2 TokKWPattern      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPattern     ;
 		2 TokKWPop          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWPop         ;
@@ -103,6 +106,7 @@ LEX {
 		
 		1 TokCharLiteral    -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokCharLiteral   ;
 		1 TokIdentifier     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokIdentifier    ;
+		1 TokPairReference  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokPairReference ;
 		1 TokRegexLiteral   -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokRegexLiteral  ;
 		1 TokStringLiteral  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokStringLiteral ;
 		1 TokVersion        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokVersion       ;
@@ -145,6 +149,13 @@ PARSE {
 		LANG_SPEC_COMMENT_ROLE LANG_SPEC_WHITESPACE_ROLE
 	};
 	
+	// Generated delimiter pairs for nest @Name
+	pair GenPair_TokDashes_TokDashes TokDashes TokDashes;
+	pair GenPair_TokBraceOpen_TokBraceClose TokBraceOpen TokBraceClose;
+	pair GenPair_TokParenOpen_TokParenClose TokParenOpen TokParenClose;
+	pair GenPair_TokBracketOpen_TokBracketClose TokBracketOpen TokBracketClose;
+	pair GenPair_TokMetaSection_TokMetaSection TokMetaSection TokMetaSection;
+	
 	DUMMY_CHOICE_FOR_PATTERNS -> transparent gr_DUMMY_CHOICE_FOR_PATTERNS {
 		DUMMY_LOCAL_VAR_FOR_PATTERNS | NodePatternDefName : TokIdentifier
 	};
@@ -163,13 +174,23 @@ PARSE {
 		NodeParseExpressionReference : TokIdentifier | PARSE_NEST_BODY
 	};
 	
+	DUMMY_CHOICE_PARSE_BLOCK_CHOICE -> transparent gr_DUMMY_CHOICE_PARSE_BLOCK_CHOICE {
+		PARSE_RULE | PARSE_PAIR_DECLARATION
+	};
+	
+	DUMMY_CHOICE_PARSE_BLOCK_LIST -> transparent gr_DUMMY_CHOICE_PARSE_BLOCK_LIST {
+		(
+			DUMMY_CHOICE_PARSE_BLOCK_CHOICE
+		)*
+	};
+	
 	DUMMY_LOCAL_VAR_FOR_PATTERNS -> transparent gr_DUMMY_LOCAL_VAR_FOR_PATTERNS {
 		NodeLocalVariable : TokKWLocal
 		NodePatternDefName : TokIdentifier
 	};
 	
 	HEADER -> transparent gr_HEADER sync (TokDashes) {
-		nest TokDashes TokDashes {
+		nest @GenPair_TokDashes_TokDashes {
 			HEADER_CONTENT
 		}
 	};
@@ -207,7 +228,7 @@ PARSE {
 	};
 	
 	LEX_RULE_STATE_MUTATION -> NodeLexRuleStateMutation sync (TokBracketClose) {
-		nest TokBracketOpen TokBracketClose {
+		nest @GenPair_TokBracketOpen_TokBracketClose {
 			LEX_RULE_STATE_MUTATION_KIND
 		}
 	};
@@ -223,7 +244,7 @@ PARSE {
 	};
 	
 	LEX_SECTION_BLOCK_NEST -> transparent gr_LEX_SECTION_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			STATE_LIST_BLOCKS
 		}
 	};
@@ -245,7 +266,7 @@ PARSE {
 	};
 	
 	META_SECTION -> NodeMetaSection sync (TokMetaSection) {
-		nest TokMetaSection TokMetaSection {
+		nest @GenPair_TokMetaSection_TokMetaSection {
 			META_KEY_VALUE_PAIR
 		}
 	};
@@ -284,7 +305,7 @@ PARSE {
 	};
 	
 	PARSE_GROUP -> NodeParseGroup sync (TokParenClose) {
-		nest TokParenOpen TokParenClose PARSE_EXPRESSION
+		nest @GenPair_TokParenOpen_TokParenClose PARSE_EXPRESSION
 	};
 	
 	PARSE_IGNORE_ROLE_LIST -> transparent gr_PARSE_IGNORE_ROLE_LIST {
@@ -298,7 +319,7 @@ PARSE {
 	};
 	
 	PARSE_IGNORE_SECTION_BLOCK_NEST -> transparent gr_PARSE_IGNORE_SECTION_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PARSE_IGNORE_ROLE_LIST
 		}
 	};
@@ -309,13 +330,14 @@ PARSE {
 	};
 	
 	PARSE_NEST_BODY -> NodeParseNestBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose PARSE_EXPRESSION
+		nest @GenPair_TokBraceOpen_TokBraceClose PARSE_EXPRESSION
 	};
 	
 	PARSE_OP_NEST -> NodeParseOpNest {
 		virtual TokKWNest
-		NodeParseNestOpenToken : TokIdentifier
-		NodeParseNestCloseToken : TokIdentifier
+		(
+			PARSE_OP_NEST_CHOICE
+		)
 		(
 			RULE_MODIFIER_SYNC
 		)?
@@ -324,9 +346,26 @@ PARSE {
 		)
 	};
 	
+	PARSE_OP_NEST_CHOICE -> transparent gr_PARSE_OP_NEST_CHOICE {
+		PARSE_OP_NEST_EXPLICIT | NodeParseNestPairRef : TokPairReference
+	};
+	
+	PARSE_OP_NEST_EXPLICIT -> transparent gr_PARSE_OP_NEST_EXPLICIT {
+		NodeParseNestOpenToken : TokIdentifier
+		NodeParseNestCloseToken : TokIdentifier
+	};
+	
 	PARSE_OP_SUPPRESS -> NodeParseOpSuppress {
 		virtual TokKWVirtual
 		NodeParseTokenReference : TokIdentifier
+	};
+	
+	PARSE_PAIR_DECLARATION -> NodeParsePair sync (TokSemicolon) {
+		virtual TokKWPair
+		NodeParsePairIdentifier : TokIdentifier
+		NodeParseTokenReference : TokIdentifier
+		NodeParseTokenReference : TokIdentifier
+		virtual TokSemicolon
 	};
 	
 	PARSE_RULE -> NodeParseRule sync (TokSemicolon) {
@@ -342,13 +381,7 @@ PARSE {
 	};
 	
 	PARSE_RULE_BODY -> NodeParseRuleBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose PARSE_EXPRESSION_BP_10
-	};
-	
-	PARSE_RULE_LIST -> transparent gr_PARSE_RULE_LIST sync (TokSemicolon) {
-		(
-			PARSE_RULE
-		)*
+		nest @GenPair_TokBraceOpen_TokBraceClose PARSE_EXPRESSION_BP_10
 	};
 	
 	PARSE_SECTION -> NodeParseSection {
@@ -358,7 +391,7 @@ PARSE {
 	};
 	
 	PARSE_SECTION_BLOCK_NEST -> transparent gr_PARSE_SECTION_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PARSE_SECTION_BODY
 		}
 	};
@@ -367,7 +400,7 @@ PARSE {
 		(
 			PARSE_IGNORE_SECTION
 		)?
-		PARSE_RULE_LIST
+		DUMMY_CHOICE_PARSE_BLOCK_LIST
 	};
 	
 	PARSE_SEGMENT -> transparent gr_PARSE_SEGMENT {
@@ -396,7 +429,7 @@ PARSE {
 	};
 	
 	PATTERN_CLASS -> NodePatternClass sync (TokBracketClose) {
-		nest TokBracketOpen TokBracketClose {
+		nest @GenPair_TokBracketOpen_TokBracketClose {
 			PATTERN_CLASS_ITEM_LIST
 		}
 	};
@@ -476,7 +509,7 @@ PARSE {
 	};
 	
 	PATTERN_GROUP -> NodePatternGroup sync (TokParenClose) {
-		nest TokParenOpen TokParenClose PATTERN_EXPRESSION
+		nest @GenPair_TokParenOpen_TokParenClose PATTERN_EXPRESSION
 	};
 	
 	PATTERN_RANGE_TAIL -> NodePatternRange {
@@ -495,7 +528,7 @@ PARSE {
 	};
 	
 	PATTERN_SECTION_BLOCK_NEST -> transparent gr_PATTERN_SECTION_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PATTERN_DEFINITION_LIST
 		}
 	};
@@ -517,7 +550,7 @@ PARSE {
 	};
 	
 	PRAGMA_BLOCK_BLOCK_NEST -> transparent gr_PRAGMA_BLOCK_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRAGMA_CONFIGURATION_LIST
 		}
 	};
@@ -567,7 +600,7 @@ PARSE {
 	};
 	
 	PRAGMA_SECTION_BLOCK_NEST -> transparent gr_PRAGMA_SECTION_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRAGMA_BLOCK_LIST
 		}
 	};
@@ -587,7 +620,7 @@ PARSE {
 	};
 	
 	PRATT_EXPR_BODY -> NodePrattExprBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_CATEGORY_LIST
 		}
 	};
@@ -613,7 +646,7 @@ PARSE {
 	};
 	
 	PRATT_IMPLICIT_BODY -> NodePrattImplicitBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_IMPLICIT_DEF
 		}
 	};
@@ -633,7 +666,7 @@ PARSE {
 	};
 	
 	PRATT_INFIX_BODY -> NodePrattInfixBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_INFIX_LIST
 		}
 	};
@@ -678,7 +711,7 @@ PARSE {
 	};
 	
 	PRATT_POSTFIX_BODY -> NodePrattPostfixBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_POSTFIX_LIST
 		}
 	};
@@ -695,7 +728,7 @@ PARSE {
 	};
 	
 	PRATT_PREFIX_BODY -> NodePrattPrefixBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_PREFIX_LIST
 		}
 	};
@@ -712,7 +745,7 @@ PARSE {
 	};
 	
 	PRATT_PRIMARY_BODY -> NodePrattPrimaryBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_PRIMARY_REF
 		}
 	};
@@ -729,7 +762,7 @@ PARSE {
 	};
 	
 	PRATT_SECTION_BLOCK_NEST -> transparent gr_PRATT_SECTION_BLOCK_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			PRATT_EXPR_DEF_LIST
 		}
 	};
@@ -748,7 +781,7 @@ PARSE {
 	};
 	
 	PREDICT_LOOKAHEAD_LIST -> NodePredictLookaheadList sync (TokParenClose) {
-		nest TokParenOpen TokParenClose {
+		nest @GenPair_TokParenOpen_TokParenClose {
 			PREDICT_LOOKAHEAD_ITEMS
 		}
 	};
@@ -779,7 +812,7 @@ PARSE {
 	};
 	
 	REPETITION_BOUNDS_NEST -> transparent gr_REPETITION_BOUNDS_NEST sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			REPETITION_BOUNDS
 		}
 	};
@@ -802,7 +835,7 @@ PARSE {
 	};
 	
 	STATE_DEFINITION_BODY -> NodeStateDefinitionBody sync (TokBraceClose) {
-		nest TokBraceOpen TokBraceClose {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
 			LEX_RULE_LIST
 		}
 	};
@@ -836,7 +869,7 @@ PARSE {
 	};
 	
 	STATE_MUTATION_ARGUMENT_LIST_ARGS -> NodeStateMutationArgumentList sync (TokParenClose) {
-		nest TokParenOpen TokParenClose {
+		nest @GenPair_TokParenOpen_TokParenClose {
 			STATE_MUTATION_ARGUMENT_LIST_LIST
 		}
 	};
@@ -847,7 +880,7 @@ PARSE {
 	};
 	
 	STATE_MUTATION_ARGUMENT_LIST_POP -> NodeStateMutationArgumentList sync (TokParenClose) {
-		nest TokParenOpen TokParenClose {
+		nest @GenPair_TokParenOpen_TokParenClose {
 			NodeStateMutationPopAmount : TokInteger
 		}
 	};
@@ -879,7 +912,7 @@ PARSE {
 	};
 	
 	STRING_ARRAY -> NodeStringArray sync (TokBracketClose) {
-		nest TokBracketOpen TokBracketClose {
+		nest @GenPair_TokBracketOpen_TokBracketClose {
 			STRING_ARRAY_ELEMENT_LIST
 		}
 	};
@@ -901,7 +934,7 @@ PARSE {
 	};
 	
 	SYNC_BLOCK -> NodeSyncBlock sync (TokParenClose) {
-		nest TokParenOpen TokParenClose {
+		nest @GenPair_TokParenOpen_TokParenClose {
 			SYNC_TOKEN_LIST
 		}
 	};

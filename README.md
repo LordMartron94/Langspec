@@ -65,7 +65,7 @@ The core pipeline operates as: **raw source → lexing → parsing → Lossless 
 
 LangSpec uses a custom meta-language to define both lexing and parsing rules in a single `.lspec` file.
 
-- **[Read the full Syntax Reference](docs/syntax.md)** for detailed rules on patterns, expressions, and grammar constructs.
+- **[Read the full Syntax Reference](docs/syntax.md)** for detailed rules on patterns, expressions, and grammar constructs (including **`pair` declarations** and **`nest @PairName`** with a dedicated `TokPairReference` lexer rule).
 - **[View a real-world example](examples/lspec.lspec)** to see how LangSpec defines its own syntax.
 - **[View the collection of my own syntaxes created with LangSpec](https://github.com/LordMartron94/Lingua)** to see how my other grammars (whether DSL or real) are built using LangSpec
 

@@ -11,6 +11,7 @@ import (
 	"langspec/toolchain"
 	"lexarch"
 	"slices"
+	"strconv"
 	"strings"
 	"syntaxa"
 	"unicode"
@@ -619,11 +620,91 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPrattSectio
 
 // --- PARSE SECTION REWRITE ---
 
+// nestPairKey identifies a GNest delimiter pair for generated `pair` declarations and `nest @Name` uses.
+type nestPairKey struct {
+	open  lexarch.TokenKind
+	close lexarch.TokenKind
+}
+
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) collectNestPairKeys() []nestPairKey {
+	rules := g.grammarPackage.Grammars
+	if len(rules) == 0 {
+		return nil
+	}
+	seen := make(map[nestPairKey]struct{})
+	var walk func(*syntaxa.Grammar[lexarch.TokenKind, TNodeKind])
+	walk = func(gr *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
+		if gr == nil {
+			return
+		}
+		if gr.Kind == syntaxa.GNest && gr.OpenToken != nil && gr.CloseToken != nil {
+			k := nestPairKey{open: *gr.OpenToken, close: *gr.CloseToken}
+			seen[k] = struct{}{}
+		}
+		for _, ch := range gr.Children {
+			walk(ch)
+		}
+	}
+	for _, label := range g.grammarPackage.SortedGrammarLabels {
+		walk(rules[label])
+	}
+	keys := make([]nestPairKey, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b nestPairKey) int {
+		if c := cmp.Compare(a.open, b.open); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.close, b.close)
+	})
+	return keys
+}
+
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) assignNestPairNames(keys []nestPairKey) map[nestPairKey]string {
+	out := make(map[nestPairKey]string, len(keys))
+	used := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		base := "GenPair_" + g.sanitizeIdentifier(g.tokenFormatter(k.open)) + "_" + g.sanitizeIdentifier(g.tokenFormatter(k.close))
+		name := base
+		for s := 2; ; s++ {
+			if _, dup := used[name]; !dup {
+				break
+			}
+			name = base + "_" + strconv.Itoa(s)
+		}
+		used[name] = struct{}{}
+		out[k] = name
+	}
+	return out
+}
+
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildNestPairDeclarationDocs(keys []nestPairKey, nameByKey map[nestPairKey]string) Doc {
+	if len(keys) == 0 {
+		return doctext("")
+	}
+	var docs []Doc
+	for i, k := range keys {
+		if i > 0 {
+			docs = append(docs, line())
+		}
+		nm := nameByKey[k]
+		openStr := g.tokenFormatter(k.open)
+		closeStr := g.tokenFormatter(k.close)
+		lineText := fmt.Sprintf("pair %s %s %s;", nm, openStr, closeStr)
+		docs = append(docs, doctext(lineText))
+	}
+	return concat(docs...)
+}
+
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSection() Doc {
 	rules := g.grammarPackage.Grammars
 	if len(rules) == 0 {
 		return concat(doctext("PARSE {"), line(), doctext("}"))
 	}
+
+	nestKeys := g.collectNestPairKeys()
+	nestPairNames := g.assignNestPairNames(nestKeys)
 
 	var sectionDocs []Doc
 
@@ -646,14 +727,24 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 		sectionDocs = append(sectionDocs, ignoreDoc, line(), line())
 	}
 
-	// 2. Build Standard Rules
+	if len(nestKeys) > 0 {
+		sectionDocs = append(sectionDocs,
+			doctext("// Generated delimiter pairs for nest @Name"),
+			line(),
+			g.buildNestPairDeclarationDocs(nestKeys, nestPairNames),
+			line(),
+			line(),
+		)
+	}
+
+	// Build standard rules
 	labels := g.grammarPackage.SortedGrammarLabels
 	for i, label := range labels {
 		labelStr := string(label)
 		if i > 0 {
 			sectionDocs = append(sectionDocs, line(), line())
 		}
-		sectionDocs = append(sectionDocs, g.buildParseRuleDoc(labelStr, rules[label]))
+		sectionDocs = append(sectionDocs, g.buildParseRuleDoc(labelStr, rules[label], nestPairNames))
 	}
 
 	return concat(
@@ -664,9 +755,13 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseSectio
 	)
 }
 
-func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDoc(labelStr string, ruleNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildParseRuleDoc(
+	labelStr string,
+	ruleNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	nestPairNames map[nestPairKey]string,
+) Doc {
 	parseTokenFormatter := g.tokenFormatter
-	decompiler := newParseDecompiler(parseTokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold)
+	decompiler := newParseDecompiler(parseTokenFormatter, g.nodeKindFormatter, g.sanitizeIdentifier, g.columnThreshold, nestPairNames)
 	return decompiler.BuildRuleDoc(labelStr, ruleNode)
 }
 
@@ -682,6 +777,7 @@ type parseDecompiler[TNodeKind comparable] struct {
 	nodeKindFormatter func(TNodeKind) string
 	sanitizer         func(string) string
 	columnThreshold   int
+	nestPairNames     map[nestPairKey]string
 	currentRuleLabel  string
 }
 
@@ -690,12 +786,17 @@ func newParseDecompiler[TNodeKind comparable](
 	nodeKindFormatter func(TNodeKind) string,
 	sanitizer func(string) string,
 	columnThreshold int,
+	nestPairNames map[nestPairKey]string,
 ) *parseDecompiler[TNodeKind] {
+	if nestPairNames == nil {
+		nestPairNames = make(map[nestPairKey]string)
+	}
 	return &parseDecompiler[TNodeKind]{
 		tokenFormatter:    tokenFormatter,
 		nodeKindFormatter: nodeKindFormatter,
 		sanitizer:         sanitizer,
 		columnThreshold:   columnThreshold,
+		nestPairNames:     nestPairNames,
 	}
 }
 
@@ -875,25 +976,29 @@ func (d *parseDecompiler[TNodeKind]) choiceChildDoc(parent *syntaxa.Grammar[lexa
 }
 
 func (d *parseDecompiler[TNodeKind]) mapNest(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) Doc {
-	openTok := d.tokenFormatter(*g.OpenToken)
-	closeTok := d.tokenFormatter(*g.CloseToken)
+	if g.OpenToken == nil || g.CloseToken == nil {
+		panic("generator: GNest without OpenToken/CloseToken")
+	}
+	key := nestPairKey{open: *g.OpenToken, close: *g.CloseToken}
+	pairName := d.nestPairNames[key]
+	if pairName == "" {
+		panic(fmt.Sprintf("generator: missing GenPair name for nest %v/%v", key.open, key.close))
+	}
 
-	// --- Short form: nest OPEN CLOSE RULE
+	// --- Short form: nest @PAIR RULE
 	if refNode, ok := isReferenceBody(g); ok {
 		ref := d.sanitizer(string(refNode.ReferenceTarget))
 
 		return concat(
-			doctext("nest "),
-			doctext(openTok),
-			space(),
-			doctext(closeTok),
+			doctext("nest @"),
+			doctext(pairName),
 			space(),
 			doctext(ref),
 		)
 	}
 
-	// --- Normal inline form
-	header := fmt.Sprintf("nest %s %s {", openTok, closeTok)
+	// --- Braced form: nest @PAIR { ... }
+	header := fmt.Sprintf("nest @%s {", pairName)
 
 	var childDoc = doctext("")
 	if len(g.Children) > 0 {

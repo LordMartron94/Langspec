@@ -1,11 +1,11 @@
 package dsl
 
 import (
-	"lexarch"
 	"fmt"
 	"foundation/formatting"
 	"io"
 	"langspec/validation"
+	"lexarch"
 	"strings"
 	"syntaxa"
 	"text/tabwriter"
@@ -93,8 +93,9 @@ func renderValidationEntries(
 
 	fmt.Fprintln(w, "\n===== VALIDATION =====")
 
+	sourceText := string(source)
 	for _, stage := range entries.Results {
-		renderValidationStage(w, stage, lines, advanceFn)
+		renderValidationStage(w, stage, lines, sourceText, advanceFn)
 	}
 
 	fmt.Fprintln(w, "=======================")
@@ -104,6 +105,7 @@ func renderValidationStage(
 	w io.Writer,
 	stage validation.StageValidationResult[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	lines [][]rune,
+	sourceText string,
 	advanceFn columnAdvanceFn,
 ) {
 	fmt.Fprintf(w, "\n-- Stage: %s (order %d) --\n", stage.StageName, stage.Order)
@@ -114,7 +116,7 @@ func renderValidationStage(
 	}
 
 	for _, entry := range stage.Entries {
-		renderValidationEntry(w, entry, lines, advanceFn)
+		renderValidationEntry(w, entry, lines, sourceText, advanceFn)
 	}
 }
 
@@ -122,6 +124,7 @@ func renderValidationEntry(
 	w io.Writer,
 	entry validation.ValidationEntry[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	lines [][]rune,
+	sourceText string,
 	advanceFn columnAdvanceFn,
 ) {
 	fmt.Fprintf(w, "  [%v] %s — %s\n", entry.Severity, entry.Code, entry.Message)
@@ -131,7 +134,7 @@ func renderValidationEntry(
 		return
 	}
 
-	startLine, startCol, endLine, endCol, locOK := syntaxa.LSTNodeLineSpanForDiagnostics(entry.Node)
+	startLine, startCol, endLine, endCol, locOK := syntaxa.LSTNodeLineSpanForDiagnostics(entry.Node, sourceText, 4)
 	if !locOK {
 		fmt.Fprintf(w, "      Location: (no source span; Node Kind: %v, ID: %d)\n",
 			entry.Node.Kind(), entry.Node.ID())

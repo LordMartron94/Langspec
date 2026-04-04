@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"langspec/validation"
 	"lexarch"
+	"sort"
 	"strconv"
 	"strings"
 	"syntaxa"
@@ -66,6 +67,10 @@ const (
 	VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION        ValidationCode = "V_PAR007"
 	VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT ValidationCode = "V_PAR008"
 	VALIDATION_FIRST_SET_CONFLICT                    ValidationCode = "V_PAR009"
+
+	VALIDATION_DUPLICATE_PAIR_NAME ValidationCode = "V_PAR010"
+	VALIDATION_UNRESOLVED_PAIR_REF ValidationCode = "V_PAR012"
+	VALIDATION_PAIR_REF_MALFORMED  ValidationCode = "V_PAR013"
 
 	VALIDATION_DUPLICATE_PRATT_EXPR             ValidationCode = "V_PRA001"
 	VALIDATION_PRATT_UNRESOLVED_TOKEN           ValidationCode = "V_PRA002"
@@ -142,6 +147,9 @@ func processSymbolBinding(ctx *ValidationCtx) {
 		case SymbolKindRule:
 			code = VALIDATION_DUPLICATE_PARSE_RULE_NAME
 			msg = fmt.Sprintf("parse rule '%s' already declared", name)
+		case SymbolKindPair:
+			code = VALIDATION_DUPLICATE_PAIR_NAME
+			msg = fmt.Sprintf("pair '%s' already declared", name)
 		case SymbolKindPratt:
 			code = VALIDATION_DUPLICATE_PRATT_EXPR
 			msg = fmt.Sprintf("pratt expression '%s' already declared", name)
@@ -159,7 +167,7 @@ func processSymbolBinding(ctx *ValidationCtx) {
 }
 
 // validateSymbolNameCollisions ensures no name is declared in more than one symbol table
-// (tokens, patterns, parse rules, pratt expressions). Order for "first" declaration: token, pattern, rule, pratt.
+// (tokens, patterns, parse rules, pairs, pratt). Order for "first" declaration follows SemanticSymbolKind iota.
 func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 	kindName := func(k SemanticSymbolKind) string {
 		switch k {
@@ -169,6 +177,8 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 			return "pattern"
 		case SymbolKindRule:
 			return "parse rule"
+		case SymbolKindPair:
+			return "pair"
 		case SymbolKindPratt:
 			return "pratt expression"
 		default:
@@ -184,6 +194,9 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 		allNames[name] = struct{}{}
 	}
 	for name := range env.Rules {
+		allNames[name] = struct{}{}
+	}
+	for name := range env.Pairs {
 		allNames[name] = struct{}{}
 	}
 	for name := range env.Pratt {
@@ -205,6 +218,11 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 				firstKind = SymbolKindRule
 			}
 		}
+		if _, ok := env.Pairs[name]; ok {
+			if firstKind > SymbolKindPair {
+				firstKind = SymbolKindPair
+			}
+		}
 		if _, ok := env.Pratt[name]; ok {
 			if firstKind > SymbolKindPratt {
 				firstKind = SymbolKindPratt
@@ -221,6 +239,9 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 		reportOn(SymbolKindToken, env.Tokens[name])
 		reportOn(SymbolKindPattern, env.Patterns[name])
 		reportOn(SymbolKindRule, env.Rules[name])
+		if decl := env.Pairs[name]; decl != nil {
+			reportOn(SymbolKindPair, decl.Node)
+		}
 		reportOn(SymbolKindPratt, env.Pratt[name])
 	}
 }
@@ -258,9 +279,41 @@ func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[
 
 func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
 	for _, nestOp := range ctx.RootNode.FindAllKind(NodeParseOpNest) {
-		validateAndMarkToken(ctx, env, used, nestOp.FindFirstKind(NodeParseNestOpenToken))
-		validateAndMarkToken(ctx, env, used, nestOp.FindFirstKind(NodeParseNestCloseToken))
+		openNode := nestOp.FindFirstKind(NodeParseNestOpenToken)
+		closeNode := nestOp.FindFirstKind(NodeParseNestCloseToken)
+		if openNode != nil && closeNode != nil {
+			validateAndMarkToken(ctx, env, used, openNode)
+			validateAndMarkToken(ctx, env, used, closeNode)
+			continue
+		}
+		pairRef := nestOp.FindFirstKind(NodeParseNestPairRef)
+		if pairRef == nil {
+			continue
+		}
+		pName := PairNameFromNestPairRefNode(pairRef)
+		if pName == "" {
+			ctx.ReportError(VALIDATION_PAIR_REF_MALFORMED.String(), "malformed pair reference (expected @Name)", pairRef)
+			continue
+		}
+		decl, ok := env.Pairs[pName]
+		if !ok {
+			ctx.ReportError(VALIDATION_UNRESOLVED_PAIR_REF.String(), fmt.Sprintf("unresolved pair '%s'", pName), pairRef)
+			continue
+		}
+		markTokenNameUsed(ctx, env, used, decl.OpenToken, pairRef)
+		markTokenNameUsed(ctx, env, used, decl.CloseToken, pairRef)
 	}
+}
+
+func markTokenNameUsed(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, tokenName string, refNode *Node) {
+	if tokenName == "" {
+		return
+	}
+	if _, exists := env.Tokens[tokenName]; !exists {
+		reportUnresolvedToken(ctx, refNode, tokenName)
+		return
+	}
+	used[tokenName] = true
 }
 
 func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
@@ -827,7 +880,6 @@ func checkGrammarChoiceConflicts(
 	analysis *syntaxa.GrammarAnalysis,
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
 ) {
-	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
 	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
@@ -838,7 +890,7 @@ func checkGrammarChoiceConflicts(
 		visited[g.GrammarKey] = true
 
 		if g.Kind == syntaxa.GChoice {
-			analyzeChoiceNode(ctx, pkg, analysis, sourceMap, parseSection, g)
+			analyzeChoiceNode(ctx, pkg, analysis, sourceMap, g)
 		}
 
 		for _, child := range g.Children {
@@ -856,7 +908,6 @@ func analyzeChoiceNode(
 	pkg *GrammarPackage,
 	analysis *syntaxa.GrammarAnalysis,
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
-	parseSection *Node,
 	choiceNode *syntaxa.Grammar[lexarch.TokenKind, uint32],
 ) {
 	seenTokens := make(map[lexarch.TokenKind]int)
@@ -864,7 +915,6 @@ func analyzeChoiceNode(
 	sym := ctx.RunState.Symbols
 
 	ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*choiceNode.NodePath)]
-	fallbackRuleNode := findParseRuleByName(parseSection, string(ruleName))
 
 	for i, child := range choiceNode.Children {
 		if child == nil || child.NodePath == nil {
@@ -873,7 +923,7 @@ func analyzeChoiceNode(
 
 		childKey := syntaxa.NodeKeyFromPath(*child.NodePath)
 
-		for token := range analysis.First[childKey] {
+		for token := range firstSetForChoiceArm(analysis, childKey) {
 			prevBranch, exists := seenTokens[token]
 			if !exists {
 				seenTokens[token] = i
@@ -881,32 +931,74 @@ func analyzeChoiceNode(
 			}
 
 			prevChild := choiceNode.Children[prevBranch]
-			if lookaheadsMutuallyExclusive(prevChild.Lookaheads, child.Lookaheads) {
+			if prevChild == nil || prevChild.NodePath == nil {
+				continue
+			}
+			prevKey := syntaxa.NodeKeyFromPath(*prevChild.NodePath)
+			g1 := guardForChoiceArm(analysis, prevKey, prevChild)
+			g2 := guardForChoiceArm(analysis, childKey, child)
+			if syntaxa.GuardsMutuallyExclusive(g1, g2) {
 				continue
 			}
 
 			tokenLabel := formatCompiledToken(sym, token)
+			note := buildFirstSetConflictNote(sym, token, prevBranch, i, g1, g2)
 
 			// 1. Report the earlier branch (only once per token to avoid spam)
 			if !reportedPrev[token] {
-				prevNode := resolveConflictNode(ctx, sourceMap, prevChild, fallbackRuleNode)
+				prevNode := resolveFirstConflictAnchor(ctx, sourceMap, choiceNode, prevChild)
 				msg := fmt.Sprintf(
-					"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is also expected by a later branch (%d).",
-					ruleName, tokenLabel, i,
+					"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is also expected by a later branch (%d).%s",
+					ruleName, tokenLabel, i, note,
 				)
 				ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, prevNode)
 				reportedPrev[token] = true
 			}
 
 			// 2. Report the current branch (always)
-			currNode := resolveConflictNode(ctx, sourceMap, child, fallbackRuleNode)
+			currNode := resolveFirstConflictAnchor(ctx, sourceMap, choiceNode, child)
 			msg := fmt.Sprintf(
-				"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is already expected by an earlier branch (%d).",
-				ruleName, tokenLabel, prevBranch,
+				"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is already expected by an earlier branch (%d).%s",
+				ruleName, tokenLabel, prevBranch, note,
 			)
 			ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, currNode)
 		}
 	}
+}
+
+func firstSetForChoiceArm(analysis *syntaxa.GrammarAnalysis, childKey syntaxa.NodeKey) syntaxa.TokenSet {
+	if analysis == nil {
+		return nil
+	}
+	if analysis.ArmPredict != nil {
+		if arm, ok := analysis.ArmPredict[childKey]; ok && len(arm.First) > 0 {
+			return arm.First
+		}
+	}
+	return analysis.First[childKey]
+}
+
+func guardForChoiceArm(
+	analysis *syntaxa.GrammarAnalysis,
+	childKey syntaxa.NodeKey,
+	child *syntaxa.Grammar[lexarch.TokenKind, uint32],
+) []syntaxa.Lookahead[lexarch.TokenKind] {
+	if analysis != nil && analysis.ArmPredict != nil {
+		if arm, ok := analysis.ArmPredict[childKey]; ok && len(arm.Guard) > 0 {
+			return arm.Guard
+		}
+	}
+	if child != nil {
+		if len(child.Lookaheads) > 0 {
+			return child.Lookaheads
+		}
+		if child.Kind == syntaxa.GReference && child.ResolvedReference != nil {
+			if la := syntaxa.FirstLookaheadsInSubtreeBFS(child.ResolvedReference); len(la) > 0 {
+				return la
+			}
+		}
+	}
+	return nil
 }
 
 func formatCompiledToken(sym *CompiledSymbolTable, id lexarch.TokenKind) string {
@@ -916,21 +1008,157 @@ func formatCompiledToken(sym *CompiledSymbolTable, id lexarch.TokenKind) string 
 	return strconv.FormatUint(uint64(id), 10)
 }
 
-func resolveConflictNode(
+func formatPredictGuardList(sym *CompiledSymbolTable, g []syntaxa.Lookahead[lexarch.TokenKind]) string {
+	if len(g) == 0 {
+		return ""
+	}
+	parts := make([]string, len(g))
+	for i := range g {
+		parts[i] = fmt.Sprintf("%d:%s", g[i].Offset, formatCompiledToken(sym, g[i].Expected))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sortedPeekOffsetKeys(ma, mb map[int]lexarch.TokenKind) []int {
+	seen := make(map[int]struct{})
+	for o := range ma {
+		seen[o] = struct{}{}
+	}
+	for o := range mb {
+		seen[o] = struct{}{}
+	}
+	keys := make([]int, 0, len(seen))
+	for o := range seen {
+		keys = append(keys, o)
+	}
+	sort.Ints(keys)
+	return keys
+}
+
+/*
+buildFirstSetConflictNote explains why predict/lookahead did not clear the overlap.
+Static checking only treats alternatives as disjoint when guards contradict at some shared peek offset.
+*/
+func buildFirstSetConflictNote(
+	sym *CompiledSymbolTable,
+	conflictToken lexarch.TokenKind,
+	altA, altB int,
+	gA, gB []syntaxa.Lookahead[lexarch.TokenKind],
+) string {
+	ga := formatPredictGuardList(sym, gA)
+	gb := formatPredictGuardList(sym, gB)
+	overlapLabel := formatCompiledToken(sym, conflictToken)
+
+	var b strings.Builder
+	b.WriteString(" Static check: `predict` clears this only when two branches require different tokens at the same peek offset.")
+	b.WriteString(fmt.Sprintf(
+		" Token '%s' belongs to both FIRST sets; that overlap is tied to peek(0) for the first consumed token.",
+		overlapLabel,
+	))
+
+	ma, badA := syntaxa.GuardPeekConstraints(gA)
+	mb, badB := syntaxa.GuardPeekConstraints(gB)
+	if badA || badB {
+		b.WriteString(" At least one alternative lists two different tokens for the same peek offset (self-contradictory `predict`); exclusivity treats that guard as unusable.")
+	}
+
+	keys := sortedPeekOffsetKeys(ma, mb)
+	if len(keys) > 0 {
+		parts := make([]string, 0, len(keys))
+		for _, o := range keys {
+			ta, aOk := ma[o]
+			tb, bOk := mb[o]
+			switch {
+			case aOk && bOk && ta == tb:
+				parts = append(parts, fmt.Sprintf(
+					"peek(%d) fixes %s on both alternatives (no contradiction).",
+					o, formatCompiledToken(sym, ta),
+				))
+			case aOk && bOk && ta != tb:
+				parts = append(parts, fmt.Sprintf(
+					"peek(%d): alternative %d requires %s, alternative %d requires %s.",
+					o, altA, formatCompiledToken(sym, ta), altB, formatCompiledToken(sym, tb),
+				))
+			case aOk && !bOk:
+				parts = append(parts, fmt.Sprintf(
+					"peek(%d): only alternative %d requires %s; alternative %d does not fix this offset.",
+					o, altA, formatCompiledToken(sym, ta), altB,
+				))
+			case !aOk && bOk:
+				parts = append(parts, fmt.Sprintf(
+					"peek(%d): only alternative %d requires %s; alternative %d does not fix this offset.",
+					o, altB, formatCompiledToken(sym, tb), altA,
+				))
+			}
+		}
+		b.WriteString(" ")
+		b.WriteString(strings.Join(parts, " "))
+	}
+
+	switch {
+	case ga == "" && gb == "":
+		b.WriteString(fmt.Sprintf(
+			" Here alternative %d and %d have no `predict (...)` on this overlap; add disjoint lookaheads or refactor so leading tokens differ.",
+			altA, altB,
+		))
+	case ga != "" && gb == "":
+		b.WriteString(fmt.Sprintf(
+			" Alternative %d has `predict (%s)` but alternative %d has none, so any input starting with this token still counts as overlapping the guarded branch unless you add a contradicting `predict` on %d, reorder, or refactor.",
+			altA, ga, altB, altB,
+		))
+	case ga == "" && gb != "":
+		b.WriteString(fmt.Sprintf(
+			" Alternative %d has `predict (%s)` but alternative %d has none (same reasoning as above, roles swapped).",
+			altB, gb, altA,
+		))
+	default:
+		if len(keys) == 0 {
+			b.WriteString(fmt.Sprintf(
+				" Alternatives %d and %d use `predict (%s)` vs `predict (%s)` but they do not contradict at any single offset (same offset must force different tokens).",
+				altA, altB, ga, gb,
+			))
+		}
+	}
+	return b.String()
+}
+
+/*
+resolveFirstConflictAnchor picks an LST node for FIRST-set conflict diagnostics.
+
+The compiler records sourceMap[GChoice] = NodeParseAlternation in compileAlternation (inner
+choice before TransparentSequence) and maps each compiled arm subtree to its LST node via
+compileParseExpression.
+
+Resolution order: prefer the conflicting alternative’s arm grammar node (pinpoints the rule
+expression that overlaps), then the whole alternation if the arm has no mapped/usable span,
+then root. This avoids reporting the entire `|` twice when both branches conflict.
+*/
+func resolveFirstConflictAnchor(
 	ctx *ValidationCtx,
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
-	grammarNode *syntaxa.Grammar[lexarch.TokenKind, uint32],
-	fallbackRuleNode *Node,
+	choiceRoot *syntaxa.Grammar[lexarch.TokenKind, uint32],
+	arm *syntaxa.Grammar[lexarch.TokenKind, uint32],
 ) *Node {
-	exactNode := sourceMap[grammarNode]
-	if exactNode != nil {
-		return exactNode
+	if arm != nil {
+		if n := sourceMap[arm]; n != nil && syntaxa.LSTNodeHasMergedByteSpan(n) {
+			return n
+		}
 	}
-
-	if fallbackRuleNode != nil {
-		return fallbackRuleNode
+	if choiceRoot != nil {
+		if n := sourceMap[choiceRoot]; n != nil && syntaxa.LSTNodeHasMergedByteSpan(n) {
+			return n
+		}
 	}
-
+	if arm != nil {
+		if n := sourceMap[arm]; n != nil {
+			return n
+		}
+	}
+	if choiceRoot != nil {
+		if n := sourceMap[choiceRoot]; n != nil {
+			return n
+		}
+	}
 	return ctx.RootNode
 }
 
@@ -1328,15 +1556,4 @@ func findParseRuleByName(parseSection *Node, ruleName string) *Node {
 		}
 	}
 	return nil
-}
-
-func lookaheadsMutuallyExclusive(la1, la2 []syntaxa.Lookahead[lexarch.TokenKind]) bool {
-	for _, req1 := range la1 {
-		for _, req2 := range la2 {
-			if req1.Offset == req2.Offset && req1.Expected != req2.Expected {
-				return true
-			}
-		}
-	}
-	return false
 }

@@ -972,6 +972,11 @@ func compileAlternation(ctx *parseCompileCtx, node *Node) CompiledRule {
 	}
 
 	choiceRule := ctx.builder.Rule.Choice(parseCtxLabel(&subCtx, "CHOICE"), rules...)
+	if ctx.sourceMap != nil {
+		if g := choiceRule.GetGrammar(); g != nil {
+			ctx.sourceMap[g] = node
+		}
+	}
 
 	if ctx.rootLevel {
 		if ctx.transparent {
@@ -1181,8 +1186,27 @@ func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
-	openToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestOpenToken)))
-	closeToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(node.FindFirstKind(dslspec.NodeParseNestCloseToken)))
+	openTokNode := node.FindFirstKind(dslspec.NodeParseNestOpenToken)
+	closeTokNode := node.FindFirstKind(dslspec.NodeParseNestCloseToken)
+
+	var openToken, closeToken uint32
+	if openTokNode != nil && closeTokNode != nil {
+		openToken = ctx.sym.TokenID(dslspec.NodeSingleTokenContent(openTokNode))
+		closeToken = ctx.sym.TokenID(dslspec.NodeSingleTokenContent(closeTokNode))
+	} else if pairRef := node.FindFirstKind(dslspec.NodeParseNestPairRef); pairRef != nil {
+		pName := semantics.PairNameFromNestPairRefNode(pairRef)
+		if pName == "" {
+			panic("compiler error: nest pair reference has empty name")
+		}
+		decl, ok := ctx.env.Pairs[pName]
+		if !ok || decl == nil {
+			panic(fmt.Errorf("compiler error: unresolved pair '%s' in nest (validator should have caught this)", pName))
+		}
+		openToken = ctx.sym.TokenID(decl.OpenToken)
+		closeToken = ctx.sym.TokenID(decl.CloseToken)
+	} else {
+		panic("compiler error: nest must use explicit open/close tokens or a pair reference (@Name)")
+	}
 
 	innerRule := extractNestInnerRule(ctx, node)
 	if syncTokens := collectSyncTokens(node, ctx.sym); len(syncTokens) > 0 {

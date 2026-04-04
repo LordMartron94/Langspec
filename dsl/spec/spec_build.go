@@ -90,6 +90,9 @@ const (
 	TokKWPush
 	TokKWPop
 	TokKWSet
+
+	TokKWPair
+	TokPairReference
 )
 
 //go:generate stringer -type LangSpecLexerTokenRole
@@ -229,6 +232,10 @@ const (
 	NodePredictOffset
 	NodePredictToken
 
+	NodeParsePair
+	NodeParsePairIdentifier
+	NodeParseNestPairRef
+
 	// -- Pratt Section --
 
 	NodePrattSection
@@ -265,6 +272,9 @@ const (
 
 	NodePrattLeftPrecedenceValue
 	NodePrattRightPrecedenceValue
+
+	// Dummy
+	NodeDummyChoiceParseBlock
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -331,6 +341,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWPush, "keyword.operator.push", "push", 2},
 		{TokKWPop, "keyword.operator.pop", "pop", 2},
 		{TokKWSet, "keyword.operator.set", "set", 2},
+		{TokKWPair, "keyword.declaration.pair", "pair", 2},
 	}
 
 	for _, st := range statics {
@@ -400,6 +411,11 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 			Scope("variable.other").
 			HighPriority().
 			PatternFromRegex(`[a-zA-Z_][a-zA-Z0-9_\-]*`, f).
+			Build(),
+		DefineToken(TokPairReference).
+			Scope("constant.language.token-pair-reference").
+			HighPriority().
+			PatternFromRegex(`@[a-zA-Z_][a-zA-Z0-9_\-]*`, f).
 			Build(),
 	)
 
@@ -996,7 +1012,7 @@ func (b *dslGrammarBuilder) parseSection() Rule {
 func (b *dslGrammarBuilder) parseSectionBody() Rule {
 	return b.g.sequence(NodeParseSectionBody, "").
 		optionalRule(b.parseIgnoreSection()).
-		rule(b.parseRuleList()).
+		rule(b.parseBlock()).
 		build()
 }
 
@@ -1022,9 +1038,28 @@ func (b *dslGrammarBuilder) parseIgnoreRole() Rule {
 	return b.g.expectToken(NodeParseIgnoreRole, TokIdentifier)
 }
 
-func (b *dslGrammarBuilder) parseRuleList() Rule {
+func (b *dslGrammarBuilder) parseBlock() Rule {
 	parseRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.parseRule(), lexarch.TokenKind(TokSemicolon))
-	return b.g.TransparentZeroOrMoreByNode(NodeParseRule, "LIST", parseRuleWithRecovery)
+	pairDeclaration := b.pairDeclaration()
+
+	return b.g.TransparentZeroOrMoreByNode(
+		NodeDummyChoiceParseBlock, "LIST", b.g.rb.Rule.Choice(
+			LangSpecGrammarIDFromNodeWithSuffix(NodeDummyChoiceParseBlock, "CHOICE"),
+			parseRuleWithRecovery,
+			pairDeclaration,
+		),
+	)
+}
+
+func (b *dslGrammarBuilder) pairDeclaration() Rule {
+	declaration := b.g.sequence(NodeParsePair, "DECLARATION").
+		expectVirtualInRule(TokKWPair).
+		expectToken(NodeParsePairIdentifier, TokIdentifier).
+		expectToken(NodeParseTokenReference, TokIdentifier).
+		expectToken(NodeParseTokenReference, TokIdentifier).
+		expectVirtualInRule(TokSemicolon).
+		build()
+	return b.g.rb.Rule.RecoverSync(declaration, lexarch.TokenKind(TokSemicolon))
 }
 
 func (b *dslGrammarBuilder) parseRule() Rule {
@@ -1122,8 +1157,15 @@ func (b *dslGrammarBuilder) virtualMapping() Rule {
 func (b *dslGrammarBuilder) nestMapping() Rule {
 	return b.g.sequence(NodeParseOpNest, "").
 		expectVirtualInRule(TokKWNest).
-		expectToken(NodeParseNestOpenToken, TokIdentifier).
-		expectToken(NodeParseNestCloseToken, TokIdentifier).
+		rule(b.g.rb.Rule.Choice(
+			LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "CHOICE"),
+			b.g.rb.Rule.TransparentSequence(
+				LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "EXPLICIT"),
+				b.g.expectToken(NodeParseNestOpenToken, TokIdentifier),
+				b.g.expectToken(NodeParseNestCloseToken, TokIdentifier),
+			),
+			b.g.expectToken(NodeParseNestPairRef, TokPairReference),
+		)).
 		optionalRule(b.syncModifier()).
 		rule(b.g.rb.Rule.Choice(
 			"DUMMY CHOICE NEST",

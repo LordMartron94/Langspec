@@ -257,5 +257,6 @@ var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 		dslspec.NodeSyncToken:                {Scopes: []string{"constant.language.token-reference"}},
 		dslspec.NodeStateDefinition:          {Scopes: []string{"entity.name.label.state"}},
 		dslspec.NodeStateReference:           {Scopes: []string{"constant.language.state-reference"}},
+		dslspec.NodeParsePairIdentifier:      {Scopes: []string{"entity.name.token-pair"}},
 	},
 }

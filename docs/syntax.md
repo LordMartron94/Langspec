@@ -254,7 +254,35 @@ To map matched tokens into the syntax tree, assign an output node kind using a c
 
 ### Advanced Lookahead and Grouping
 * **Predict:** `predict ( offset = TokIf, ... )` forces lookahead disambiguation.
-* **Nest:** `nest TokOpen TokClose [sync(Tokens)] { body };` ensures proper delimited grouping, with optional internal sync recovery.
+* **Nest (explicit delimiters):** `nest TokOpen TokClose [sync(Tokens)] { body };` matches `TokOpen`, then `body`, then `TokClose`.
+* **Nest (named pair):** `nest @PairName [sync(Tokens)] { body };` uses a **`pair`** declaration (§7.2) to supply the open and close lexer tokens. `PairName` is the identifier from the `pair` line.
+
+### 7.2 Pair declarations
+
+Inside the `PARSE` section (alongside ordinary rules), you may declare **token pairs** for reuse in `nest`:
+
+**Syntax:**
+
+```
+pair <PairName> <OpenTok> <CloseTok>;
+```
+
+* **PairName:** Identifier; must be unique among pairs and must not collide with tokens, patterns, parse rules, or Pratt names.
+* **OpenTok / CloseTok:** Lexer token names (as in `LEX`) for the opening and closing delimiter.
+
+The declaration line ends with `;` (after optional layout tokens as in the meta-grammar).
+
+### 7.3 Nest with a pair reference
+
+After declaring `pair P TokOpen TokClose`, write:
+
+```
+nest @P {
+  …
+}
+```
+
+The lexer must produce your `TokPairReference` (or equivalent) for `@P`; the name after `@` must match **PairName** exactly. The parser lowers this to the same nested structure as `nest TokOpen TokClose { … }`.
 
 **Example:**
 
@@ -283,6 +311,13 @@ PARSE {
   Block -> NodeBlock {
     nest TokOpenBrace TokCloseBrace {
       ( Statement )*
+    };
+  };
+
+  pair Braces TokOpenBrace TokCloseBrace;
+  ParenBlock -> NodeParenBlock {
+    nest @Braces {
+      Expression
     };
   };
 }
