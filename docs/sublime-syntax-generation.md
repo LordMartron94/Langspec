@@ -26,6 +26,7 @@ GrammarPackage + LexingRuleSet
 
 - **`editor.EditorIRCreate(lexingRuleset, grammarPackage, config)`** — builds **`EditorIR`** when you already have compiled specs.
 - **`toolchain.RunSublimeGenerator(SublimeRunnerConfig{...})`** — creates the IR and writes one or more output paths (used by PRAGMA-driven toolchains and helpers such as `RunToolchainsFromSpecFile`).
+- **`toolchain.RunTMCommentsToolchain`** — writes `.tmPreferences` for toggle-comment variables; run from the same bootstrap pipeline when `tool.tm_comments` is enabled (see **`docs/syntax.md`** PRAGMA reference).
 - **`dsl/editor.BuildSublimeSyntaxForDSL`** — LangSpec-in-LangSpec: typed ruleset + manifest wired into the same IR + generator.
 
 The generator itself lives in **`langspec/editor/sublime`** (`GenerateSyntaxFile`, `syntax_generator.go`). The IR and lowering glue live in **`langspec/editor`** (`ir.go`, `ir_from_state_graph.go`, `ir_lexer_reachability.go`).

@@ -65,8 +65,29 @@ PRAGMA {
     enable = true;
     package-name = "parser";
   }
+  tool.tm_comments {
+    enable = true;
+    output-path = "Comments.tmPreferences";
+    scope-extension = ".mylang";
+    single-line-comment-start = "// ";
+    block-comment-start = "/*";
+    block-comment-end = "*/";
+  }
 }
 ```
+
+### tool.tm_comments
+
+Drives generation of a Sublime Text **`.tmPreferences`** file (toggle-comment shell variables) when toolchains run (`RunToolchainsFromSpecFile`, `langspec-toolchain`, etc.).
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `enable` | yes | `true` or `false` |
+| `output-path` | yes | One path string or array of paths (same as other tools) |
+| `scope` | one of `scope` / `scope-extension` | Full scope, e.g. `source.mylang` |
+| `scope-extension` | | Suffix only; combined as `source` + value (matches Sublime syntax base scope) |
+| `single-line-comment-start` | yes | Prefix for line comments (often includes a trailing space) |
+| `block-comment-start` / `block-comment-end` | both or neither | If set, block toggle comments are included in the plist |
 
 ---
 

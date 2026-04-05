@@ -4,6 +4,7 @@ import (
 	"autarch/pattern"
 	"cmp"
 	"fmt"
+	"foundation/formatting"
 	"foundation/system"
 	"foundation/text"
 	"langspec"
@@ -28,13 +29,20 @@ type GeneratorConfig[TToken ~uint32, TTokenRole, TNodeKind comparable] struct {
 	nodeKindFormatter  func(kind TNodeKind) string
 
 	// Sublime Toolchain Pragma
-	enableSublime     bool
-	sublimeOutputPath string
+	enableSublime      bool
+	sublimeOutputPaths []string
 
 	// Go Bindings Toolchain Pragma
 	enableGoBindings      bool
 	goBindingsOutputPath  string
 	goBindingsPackageName string
+
+	enableTmComments      bool
+	tmCommentsOutputPaths []string
+	tmCommentsScopeExt    string
+	tmCommentsSingleLine  string
+	tmCommentsBlockStart  string
+	tmCommentsBlockEnd    string
 
 	emitRegex bool
 
@@ -104,10 +112,36 @@ func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithEofToken(token TTok
 }
 
 func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithSublimeConfiguration(
-	outputPath string,
+	outputPaths []string,
 ) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
 	g.enableSublime = true
-	g.sublimeOutputPath = outputPath
+	g.sublimeOutputPaths = outputPaths
+	return g
+}
+
+func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithTmCommentsConfiguration(
+	outputPaths []string,
+) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
+	g.enableTmComments = true
+	g.tmCommentsOutputPaths = outputPaths
+	return g
+}
+
+/*
+WithTmCommentsLanguageSettings sets PRAGMA fields required by the tm_comments toolchain:
+scope-extension (or use empty scopeExt and set scope via PRAGMA manually), single-line-comment-start,
+and optional block comment delimiters (both must be non-empty to emit block keys).
+*/
+func (g *GeneratorConfig[TToken, TTokenRole, TNodeKind]) WithTmCommentsLanguageSettings(
+	scopeExtension string,
+	singleLineCommentStart string,
+	blockCommentStart string,
+	blockCommentEnd string,
+) *GeneratorConfig[TToken, TTokenRole, TNodeKind] {
+	g.tmCommentsScopeExt = scopeExtension
+	g.tmCommentsSingleLine = singleLineCommentStart
+	g.tmCommentsBlockStart = blockCommentStart
+	g.tmCommentsBlockEnd = blockCommentEnd
 	return g
 }
 
@@ -182,12 +216,19 @@ func createGenerator[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparab
 		ignoredTokenRoles:  configuration.ignoredRoles,
 		eofToken:           configuration.eofToken,
 
-		enableSublime:     configuration.enableSublime,
-		sublimeOutputPath: configuration.sublimeOutputPath,
+		enableSublime:      configuration.enableSublime,
+		sublimeOutputPaths: configuration.sublimeOutputPaths,
 
 		enableGoBindings:      configuration.enableGoBindings,
 		goBindingsOutputPath:  configuration.goBindingsOutputPath,
 		goBindingsPackageName: configuration.goBindingsPackageName,
+
+		enableTmComments:      configuration.enableTmComments,
+		tmCommentsOutputPaths: configuration.tmCommentsOutputPaths,
+		tmCommentsScopeExt:    configuration.tmCommentsScopeExt,
+		tmCommentsSingleLine:  configuration.tmCommentsSingleLine,
+		tmCommentsBlockStart:  configuration.tmCommentsBlockStart,
+		tmCommentsBlockEnd:    configuration.tmCommentsBlockEnd,
 	}
 }
 
@@ -204,12 +245,19 @@ type generator[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable] st
 	tokenRoleFormatter func(tokenRole TTokenRole) string
 	nodeKindFormatter  func(kind TNodeKind) string
 
-	enableSublime     bool
-	sublimeOutputPath string
+	enableSublime      bool
+	sublimeOutputPaths []string
 
 	enableGoBindings      bool
 	goBindingsOutputPath  string
 	goBindingsPackageName string
+
+	enableTmComments      bool
+	tmCommentsOutputPaths []string
+	tmCommentsScopeExt    string
+	tmCommentsSingleLine  string
+	tmCommentsBlockStart  string
+	tmCommentsBlockEnd    string
 
 	ignoredTokenRoles []TTokenRole
 	eofToken          *TToken
@@ -242,14 +290,15 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSecti
 	var bodyDocs []Doc
 
 	if g.enableSublime {
-		bodyDocs = append(bodyDocs, g.buildSublimePragma())
+		bodyDocs = g.addPragmaDoc(bodyDocs, g.buildSublimePragma())
 	}
 
 	if g.enableGoBindings {
-		if len(bodyDocs) > 0 {
-			bodyDocs = append(bodyDocs, line(), line())
-		}
-		bodyDocs = append(bodyDocs, g.buildGoBindingsPragma())
+		bodyDocs = g.addPragmaDoc(bodyDocs, g.buildGoBindingsPragma())
+	}
+
+	if g.enableTmComments {
+		bodyDocs = g.addPragmaDoc(bodyDocs, g.buildTmLanguagePragma())
 	}
 
 	if len(bodyDocs) == 0 {
@@ -264,8 +313,32 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSecti
 	)
 }
 
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) addPragmaDoc(docs []Doc, doc Doc) []Doc {
+	if len(docs) > 0 {
+		docs = append(docs, line(), line())
+
+	}
+
+	docs = append(docs, doc)
+
+	return docs
+}
+
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildSublimePragma() Doc {
-	outPath := `"` + g.sublimeOutputPath + `"`
+	lastIdx := len(g.sublimeOutputPaths) - 1
+
+	outPath := formatting.FormatStringSlice(g.sublimeOutputPaths, formatting.FormatSliceOptions[string]{
+		Separator: ",\n",
+		Prefix:    "[\n",
+		Suffix:    "\n\t\t]",
+		FormatItem: func(index int, value string) string {
+			if index == lastIdx {
+				return fmt.Sprintf("\t\t\t\"%s\" // path %d", value, index+1)
+			}
+
+			return fmt.Sprintf("\t\t\t\"%s\", // path %d", value, index+1)
+		},
+	})
 
 	return concat(
 		doctext(fmt.Sprintf("tool.%s {", toolchain.SublimeToolName)),
@@ -288,6 +361,50 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildGoBindingsP
 			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.GoBindingsOutputPathKey, outPath)),
 			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.GoBindingsPackageNameKey, pkgName)),
 		)),
+		line(), doctext("}"),
+	)
+}
+
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildTmLanguagePragma() Doc {
+	lastIdx := len(g.tmCommentsOutputPaths) - 1
+
+	outPath := formatting.FormatStringSlice(g.tmCommentsOutputPaths, formatting.FormatSliceOptions[string]{
+		Separator: ",\n",
+		Prefix:    "[\n",
+		Suffix:    "\n\t\t]",
+		FormatItem: func(index int, value string) string {
+			if index == lastIdx {
+				return fmt.Sprintf("\t\t\t\"%s\" // path %d", value, index+1)
+			}
+
+			return fmt.Sprintf("\t\t\t\"%s\", // path %d", value, index+1)
+		},
+	})
+
+	inner := concat(
+		line(), doctext(fmt.Sprintf("%s = true;", toolchain.TmCommentsEnabledKey)),
+		line(), doctext(fmt.Sprintf("%s = %s;", toolchain.TmCommentsOutputPathKey, outPath)),
+	)
+	if g.tmCommentsScopeExt != "" {
+		inner = concat(inner,
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.TmCommentsScopeExtensionKey, strconv.Quote(g.tmCommentsScopeExt))),
+		)
+	}
+	if g.tmCommentsSingleLine != "" {
+		inner = concat(inner,
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.TmCommentsSingleLineKey, strconv.Quote(g.tmCommentsSingleLine))),
+		)
+	}
+	if g.tmCommentsBlockStart != "" && g.tmCommentsBlockEnd != "" {
+		inner = concat(inner,
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.TmCommentsBlockStartKey, strconv.Quote(g.tmCommentsBlockStart))),
+			line(), doctext(fmt.Sprintf("%s = %s;", toolchain.TmCommentsBlockEndKey, strconv.Quote(g.tmCommentsBlockEnd))),
+		)
+	}
+
+	return concat(
+		doctext(fmt.Sprintf("tool.%s {", toolchain.TmCommentsToolName)),
+		nest(1, inner),
 		line(), doctext("}"),
 	)
 }

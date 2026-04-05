@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"foundation/hash"
-	"foundation/system"
 	"langspec"
 	"langspec/dsl"
 	"langspec/editor"
@@ -16,7 +15,6 @@ import (
 	"syntaxa"
 )
 
-/* PRAGMA keys for the Sublime toolchain (tool.sublime { ... } in .lspec). */
 const (
 	SublimeToolName             = "sublime"
 	SublimeOutputPathKey        = "output-path"
@@ -75,11 +73,7 @@ func RunSublimeToolchain(
 	compileResult *dsl.LangSpecCompileResult,
 	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
 ) error {
-	for _, pragma := range compileResult.CompiledToolPragmas {
-		if pragma.ToolName != SublimeToolName {
-			continue
-		}
-
+	if pragma, ok := compileResult.CompiledToolPragmas[SublimeToolName]; ok {
 		enabled, ok := pragma.Settings[SublimeEnableKey].(string)
 		if !ok {
 			return fmt.Errorf("sublime toolchain: missing or invalid '%s'", SublimeEnableKey)
@@ -103,7 +97,7 @@ func RunSublimeToolchain(
 			return err
 		}
 
-		outputPaths, err := ExtractOutputPathsFromSublimePragma(pragma)
+		outputPaths, err := ExtractOutputPathsFromPragma(pragma, SublimeOutputPathKey)
 		if err != nil {
 			return err
 		}
@@ -118,30 +112,6 @@ func RunSublimeToolchain(
 		)
 	}
 	return nil
-}
-
-func ExtractOutputPathsFromSublimePragma(pragma dsl.ToolPragma) ([]string, error) {
-	outputPathValue := pragma.Settings[SublimeOutputPathKey]
-	var rawPaths []string
-
-	if path, cnvOk := outputPathValue.(string); cnvOk {
-		rawPaths = append(rawPaths, path)
-	} else if pathArray, cnvOk := outputPathValue.([]string); cnvOk {
-		rawPaths = pathArray
-	} else {
-		return nil, fmt.Errorf("engine-error: output paths neither single value nor array")
-	}
-
-	var resolvedPaths []string
-	for _, rp := range rawPaths {
-		resolved, err := system.PathResolveWorkspace(rp)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve path %s: %w", rp, err)
-		}
-		resolvedPaths = append(resolvedPaths, resolved)
-	}
-
-	return resolvedPaths, nil
 }
 
 /*
@@ -245,7 +215,7 @@ func executeSublimeToolchain(
 	editorRuleset := LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
 
 	manifestUint := SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, manifest)
-	ctxProducer, scopeCov := BuildContextProducerFromManifestWithCoverage[rune, uint32, uint32, string, uint32](manifestUint)
+	ctxProducer, scopeCov := BuildContextProducerFromManifestWithCoverage[rune, uint32, uint32, string](manifestUint)
 
 	overrideProducer := overrideFactory(editorRuleset, ctxProducer)
 	if overrideProducer == nil {

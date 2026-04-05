@@ -31,4 +31,17 @@
 // bootstrap.RunToolchainsFromCompileResult when tool.go_bindings is enabled (see
 // package bootstrap). Use the generated types for type-safe references to tokens
 // and nodes in downstream compilers and tooling.
+//
+// # TM comments toolchain (Sublime Text .tmPreferences)
+//
+// RunTMCommentsToolchain writes a plist-style .tmPreferences file so Sublime’s
+// Toggle Comment uses the correct TM_COMMENT_* shell variables for your grammar’s scope.
+// Enable it via PRAGMA tool.tm_comments with enable, output-path, exactly one of
+// scope or scope-extension (same “source” + suffix rule as Sublime BaseScope),
+// single-line-comment-start, and optionally block-comment-start / block-comment-end together.
+//
+// Templates are embedded in the package (go:embed); consumers do not ship separate template files.
+// bootstrap.RunToolchainsFromSpecFile and RunToolchainsFromCompileResult run this step when
+// tool.tm_comments is enabled, unless bootstrap.WithToolchainFilter omits "tm_comments".
+// Use bootstrap.WithTMCommentsToolchain to supply TMCommentsConfiguration from Go instead of PRAGMA-derived fields.
 package toolchain

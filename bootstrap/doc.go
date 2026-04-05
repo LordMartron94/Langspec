@@ -15,9 +15,10 @@
 //
 // Use RunGoBindingsFromSpecFile(specFile, alloc, opts...) to emit go_bindings only (first
 // codegen step when generated Token/Node types must exist before the rest of the package
-// compiles). Use RunToolchainsFromSpecFile(specFile, alloc, opts...) to run go_bindings and
-// Sublime per PRAGMA. Same options as RunToolchainsFromCompileResult for the full pipeline,
-// including WithSublimeToolchain for an in-memory manifest and override factory.
+// compiles). Use RunToolchainsFromSpecFile(specFile, alloc, opts...) to run go_bindings, Sublime,
+// and tm_comments per PRAGMA. Same options as RunToolchainsFromCompileResult for the full pipeline,
+// including WithSublimeToolchain for an in-memory manifest and override factory, and
+// WithTMCommentsToolchain to override TM comment settings from Go.
 //
 // Use RunToolchainsFromCompileResult when you already have a LangSpecCompileResult
 // (e.g. after dsl.LangSpecCompilerCompile).
@@ -31,5 +32,7 @@
 // With WithSublimeToolchain(manifest, factory, fileExtensions, scopeExtension), the
 // in-memory manifest is used and configuration-path is ignored; factory may be nil.
 //
-// Toolchains also run the Go bindings generator when tool.go_bindings is enabled in PRAGMA.
+// Toolchains also run the Go bindings generator when tool.go_bindings is enabled in PRAGMA,
+// and RunTMCommentsToolchain when tool.tm_comments is enabled (or WithTMCommentsToolchain supplies config).
+// Use WithToolchainFilter("go_bindings", "sublime", "tm_comments", ...) to restrict which run.
 package bootstrap

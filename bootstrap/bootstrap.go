@@ -41,6 +41,9 @@ type ParserCompiler struct {
 	sublimeFactory  SublimeOverrideFactory
 	fileExtensions  []string
 	scopeExtension  string
+
+	// TM comments: nil = derive from PRAGMA via TMCommentsConfigurationFromPragma
+	tmCommentsOverride *toolchain.TMCommentsConfiguration
 }
 
 type Option func(*ParserCompiler)
@@ -122,7 +125,7 @@ func WithNodePoolGrowFn(growFn func(currentCap, needed int) int) Option {
 /*
 	WithToolchainFilter restricts the execution to a specific list of toolchain names
 
-(e.g., "go_bindings", "sublime"). If never called, all toolchains are executed.
+(e.g., "go_bindings", "sublime", "tm_comments"). If never called, all toolchains are executed.
 */
 func WithToolchainFilter(toolchainNames ...string) Option {
 	return func(c *ParserCompiler) {
@@ -142,6 +145,18 @@ func WithSublimeToolchain(
 		c.sublimeFactory = factory
 		c.fileExtensions = fileExtensions
 		c.scopeExtension = scopeExtension
+	}
+}
+
+/*
+WithTMCommentsToolchain supplies TMCommentsConfiguration for the tm_comments toolchain, bypassing
+PRAGMA-derived scope and comment strings. When unset, RunToolchainsFrom* uses tool.tm_comments
+settings from the compiled spec (scope or scope-extension, single-line-comment-start, optional block pair).
+*/
+func WithTMCommentsToolchain(cfg toolchain.TMCommentsConfiguration) Option {
+	copyCfg := cfg
+	return func(c *ParserCompiler) {
+		c.tmCommentsOverride = &copyCfg
 	}
 }
 
@@ -292,11 +307,15 @@ func executePipeline(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResu
 		return fmt.Errorf("sublime execution failed: %w", err)
 	}
 
+	if err := executeTMComments(cfg, compileResult); err != nil {
+		return fmt.Errorf("tm_comments execution failed: %w", err)
+	}
+
 	return nil
 }
 
 func executeGoBindings(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
-	if !cfg.shouldRunToolchain("go_bindings") {
+	if !cfg.shouldRunToolchain(toolchain.GoBindingsToolName) {
 		return nil
 	}
 	return toolchain.RunGoBindingsToolchain(compileResult)
@@ -314,9 +333,38 @@ func executeSublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResul
 	return runInMemorySublime(cfg, compileResult)
 }
 
+func executeTMComments(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
+	if !cfg.shouldRunToolchain(toolchain.TmCommentsToolName) {
+		return nil
+	}
+
+	pragma, ok := compileResult.CompiledToolPragmas[toolchain.TmCommentsToolName]
+	if !ok {
+		return nil
+	}
+
+	enabled, ok := pragma.Settings[toolchain.TmCommentsEnabledKey].(string)
+	if !ok || enabled != "true" {
+		return nil
+	}
+
+	var tmCfg toolchain.TMCommentsConfiguration
+	var err error
+	if cfg.tmCommentsOverride != nil {
+		tmCfg = *cfg.tmCommentsOverride
+	} else {
+		tmCfg, err = toolchain.TMCommentsConfigurationFromPragma(pragma)
+		if err != nil {
+			return err
+		}
+	}
+
+	return toolchain.RunTMCommentsToolchain(compileResult, tmCfg)
+}
+
 func runInMemorySublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
-	pragma := findSublimePragma(compileResult.CompiledToolPragmas)
-	if pragma == nil {
+	pragma, ok := compileResult.CompiledToolPragmas[toolchain.SublimeToolName]
+	if !ok {
 		return nil
 	}
 
@@ -324,21 +372,12 @@ func runInMemorySublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileR
 		return nil
 	}
 
-	outputPaths, err := toolchain.ExtractOutputPathsFromSublimePragma(*pragma)
+	outputPaths, err := toolchain.ExtractOutputPathsFromPragma(pragma, toolchain.SublimeOutputPathKey)
 	if err != nil {
 		return fmt.Errorf("could not extract output path: %w", err)
 	}
 
 	return dispatchInMemorySublimeGeneration(cfg, compileResult, outputPaths)
-}
-
-func findSublimePragma(pragmas []dsl.ToolPragma) *dsl.ToolPragma {
-	for _, pragma := range pragmas {
-		if pragma.ToolName == toolchain.SublimeToolName {
-			return &pragma
-		}
-	}
-	return nil
 }
 
 func dispatchInMemorySublimeGeneration(

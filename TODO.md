@@ -46,4 +46,4 @@
   * *Action:* Map expansion errors back to the invocation line, not the internal AST.
 
 ## [P3] Backlog
-* [ ] Toolchain for automatic `.tmPreference` comments generation.
+* ~~Toolchain for automatic `.tmPreferences` comments generation.~~ (tm_comments toolchain + embedded templates)

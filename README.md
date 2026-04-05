@@ -182,7 +182,7 @@ You must implement semantic validation for your target grammar yourself. You hav
 
 `bootstrap.CompileParserFromSpec` only compiles the `.lspec` and builds a `LangParser` — it does **not** run go_bindings or Sublime generation. To emit those artifacts, run toolchains explicitly:
 
-- **`bootstrap.RunToolchainsFromSpecFile(specPath, alloc, opts...)`** — compile the spec and run go_bindings + Sublime per PRAGMA and options (e.g. `WithSublimeToolchain` for in-memory manifest).
+- **`bootstrap.RunToolchainsFromSpecFile(specPath, alloc, opts...)`** — compile the spec and run go_bindings, Sublime, and tm_comments per PRAGMA and options (e.g. `WithSublimeToolchain` for in-memory manifest, `WithTMCommentsToolchain` to override TM comment settings from Go).
 - **`bootstrap.RunToolchainsFromCompileResult(result, opts...)`** — same, when you already have a `LangSpecCompileResult`.
 
 From the **ruleforge repository root** (with `go.work`), the generic CLI is:
@@ -225,6 +225,10 @@ Call `RunToolchainsFromSpecFile` (or `RunToolchainsFromCompileResult`) with `Wit
 
 _Note: Complex overrides (like region-based block comments) cannot be expressed in JSON. You must provide a Go-based `OverrideProducer` via the `editor` registry._
 
+### Sublime TM comments (.tmPreferences)
+
+Add `tool.tm_comments` to PRAGMA with `enable`, `output-path`, exactly one of `scope` or `scope-extension`, `single-line-comment-start`, and optionally `block-comment-start` / `block-comment-end` (both required if you use block comments). Running `RunToolchainsFromSpecFile`, `RunToolchainsFromCompileResult`, or `langspec-toolchain` emits the plist file; templates ship inside the `toolchain` package via `go:embed` (no extra files in your repo). Restrict runs with `bootstrap.WithToolchainFilter("tm_comments", ...)` alongside other toolchain names.
+
 ---
 
 ## Packages & API
@@ -237,8 +241,8 @@ The workspace relies on synchronized git submodules (`lexarch`, `syntaxa`, `auta
 - **`dsl/semantics`:** Semantic environment and DSL-specific LST validation stages.
 - **`validation`:** Go-side LST validation framework.
 - **`editor` / `editor/sublime`:** Generic push-down automaton IR and YAML generator for syntax highlighting.
-- **`toolchain`:** Helpers for executing Go bindings and Sublime integrations.
-- **`bootstrap`:** `CompileParserFromSpec` builds a `LangParser` from a `.lspec` (no codegen). `RunGoBindingsFromSpecFile` emits go_bindings only; `RunToolchainsFromSpecFile` / `RunToolchainsFromCompileResult` run go_bindings and Sublime per PRAGMA for `//go:generate` or CI.
+- **`toolchain`:** Helpers for executing Go bindings, Sublime syntax generation, and TM comment preferences.
+- **`bootstrap`:** `CompileParserFromSpec` builds a `LangParser` from a `.lspec` (no codegen). `RunGoBindingsFromSpecFile` emits go_bindings only; `RunToolchainsFromSpecFile` / `RunToolchainsFromCompileResult` run go_bindings, Sublime, and tm_comments per PRAGMA for `//go:generate` or CI.
 - **`cliutil`:** Shared scratch allocator + `Generator` wrapping `RunGoBindingsFromSpecFile` and `RunToolchainsFromSpecFile` for thin `//go:generate` commands.
 
 ---

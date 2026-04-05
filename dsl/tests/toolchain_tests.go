@@ -23,15 +23,8 @@ func TestClientDSLToolchain(t *testing.T) {
 		t.Fatalf("Client compilation failed with error: %s", err.Error())
 	}
 
-	var sublimePragma *dsl.ToolPragma
-	for _, pragma := range compileResult.CompiledToolPragmas {
-		if pragma.ToolName == toolchain.SublimeToolName {
-			sublimePragma = &pragma
-			break
-		}
-	}
-
-	if sublimePragma == nil || sublimePragma.Settings[toolchain.SublimeEnableKey] != "true" {
+	sublimePragma, ok := compileResult.CompiledToolPragmas[toolchain.SublimeToolName]
+	if !ok || sublimePragma.Settings[toolchain.SublimeEnableKey] != "true" {
 		t.Skip("Sublime toolchain not enabled in spec pragma")
 	}
 

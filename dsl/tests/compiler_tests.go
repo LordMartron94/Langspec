@@ -17,6 +17,11 @@ const currentLSpecVersion = "v1.0.0"
 const testGenSyntaxOutputFile = "/home/user/.config/sublime-text/Packages/User/LSpec.sublime-syntax"
 const testGoBindingsOutputFile = "libs/langspec/examples/generated_go_bindings.go"
 
+var testTmCommentsOutputFiles = []string{
+	"libs/langspec/examples/generated_tm_comments.tmPreferences",
+	"/home/user/.config/sublime-text/Packages/User/Comments (LSpec).tmPreferences",
+}
+
 // TestMaintainerGenerateLSpecExample regenerates the checked-in example .lspec from the live DSL
 // grammar (maintainer workflow; not what end users do).
 func TestMaintainerGenerateLSpecExample(t *testing.T) {
@@ -32,8 +37,12 @@ func TestMaintainerGenerateLSpecExample(t *testing.T) {
 		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
 		WithEofToken(dslspec.TokEOF).
 		WithSublimeConfiguration(
-			testGenSyntaxOutputFile,
+			[]string{testGenSyntaxOutputFile},
 		).
+		WithTmCommentsConfiguration(
+			testTmCommentsOutputFiles,
+		).
+		WithTmCommentsLanguageSettings(".lspec", "// ", "/*", "*/").
 		WithGoBindingsConfiguration(testGoBindingsOutputFile, "compiler")
 
 	if err := generator.GenerateLSpec[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind, dsl.LangSpecLexerState](
@@ -61,8 +70,12 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 		WithNodeKindFormatter(dsl.LangSpecParserNodeKind.String).
 		WithEofToken(dslspec.TokEOF).
 		WithSublimeConfiguration(
-			testGenSyntaxOutputFile,
+			[]string{testGenSyntaxOutputFile},
 		).
+		WithTmCommentsConfiguration(
+			testTmCommentsOutputFiles,
+		).
+		WithTmCommentsLanguageSettings(".lspec", "// ", "/*", "*/").
 		WithGoBindingsConfiguration(testGoBindingsOutputFile, "compiler")
 
 	if err := generator.GenerateLSpec[dsl.LangSpecLexerTokenType, dsl.LangSpecLexerTokenRole, dsl.LangSpecParserNodeKind, dsl.LangSpecLexerState](

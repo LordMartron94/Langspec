@@ -17,7 +17,7 @@ LEX {
 PARSE {
 	IGNORE { ws_role };
 
-	PROGRAM -> NodeHello {
+	rule PROGRAM -> NodeHello {
 		NodeWord : TokWord
 		virtual TokEOF
 	};

@@ -39,11 +39,12 @@ Edge cases:
 - Returns an error if output-path or package-name is missing when the toolchain is enabled.
 */
 func RunGoBindingsToolchain(compileResult *dsl.LangSpecCompileResult) error {
-	for _, pragma := range compileResult.CompiledToolPragmas {
-		if pragma.ToolName == GoBindingsToolName {
-			return processGoBindingsPragma(compileResult, pragma)
-		}
+	pragma, ok := compileResult.CompiledToolPragmas[GoBindingsToolName]
+
+	if ok {
+		return processGoBindingsPragma(compileResult, pragma)
 	}
+
 	return nil
 }
 

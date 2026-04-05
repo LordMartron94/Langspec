@@ -1,4 +1,4 @@
-// Command langspec-toolchain compiles a .lspec and runs LangSpec toolchains (go bindings, Sublime).
+// Command langspec-toolchain compiles a .lspec and runs LangSpec toolchains (go bindings, Sublime, tm_comments).
 // Intended for //go:generate and CI, not runtime parser creation.
 package main
 
@@ -14,7 +14,7 @@ import (
 
 func main() {
 	specPath := flag.String("spec", "", "path to the .lspec file (required)")
-	toolchains := flag.String("toolchains", "", "comma-separated toolchain names to run (default: all enabled in PRAGMA), e.g. go_bindings")
+	toolchains := flag.String("toolchains", "", "comma-separated toolchain names to run (default: all enabled in PRAGMA), e.g. go_bindings,sublime,tm_comments")
 	flag.Parse()
 
 	if *specPath == "" {

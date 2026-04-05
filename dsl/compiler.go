@@ -42,7 +42,7 @@ type CompiledLangSpec struct {
 
 	grammarPackage GrammarPackage
 
-	toolPragmas []ToolPragma
+	toolPragmas map[string]ToolPragma
 
 	symbols *semantics.CompiledSymbolTable
 
@@ -182,16 +182,16 @@ func getEOFToken(rootNode *Node) string {
 	return eofToken
 }
 
-func extractPragmas(rootNode *Node) []ToolPragma {
+func extractPragmas(rootNode *Node) map[string]ToolPragma {
 	section := rootNode.FindFirstKind(dslspec.NodePragmaSection)
 	if section == nil {
 		return nil
 	}
 
-	var out []ToolPragma
+	out := map[string]ToolPragma{}
 	for _, block := range section.FindAllKind(dslspec.NodePragmaBlock) {
 		if pragma, valid := extractSinglePragmaBlock(block); valid {
-			out = append(out, pragma)
+			out[pragma.ToolName] = pragma
 		}
 	}
 	return out

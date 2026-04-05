@@ -180,7 +180,7 @@ type LangSpecCompileResult struct {
 	// safety validation). They stay zero until that point.
 	CompiledGrammarPackage GrammarPackage
 
-	CompiledToolPragmas []ToolPragma
+	CompiledToolPragmas map[string]ToolPragma
 	SourceMap           map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
 
 	CompiledSymbols *semantics.CompiledSymbolTable
