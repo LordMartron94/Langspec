@@ -30,6 +30,10 @@ type ToolPragma struct {
 	Settings map[string]any // Values will be string, bool, or []string
 }
 
+type dslCompileOptions struct {
+	Library bool
+}
+
 /* CompiledLangSpec is compileTree output: lexer/parser specs, lowered grammar, EOF token, and pragmas. */
 type CompiledLangSpec struct {
 	dslName    string
@@ -205,6 +209,27 @@ func extractPragmas(rootNode *Node) map[string]ToolPragma {
 	return out
 }
 
+func extractCompileOptions(rootNode *Node) dslCompileOptions {
+	section := rootNode.FindFirstKind(dslspec.NodePragmaSection)
+	if section == nil {
+		return dslCompileOptions{}
+	}
+
+	opts := dslCompileOptions{}
+	for _, block := range section.FindAllKind(dslspec.NodePragmaBlock) {
+		keyNode := block.FindFirstKind(dslspec.NodePragmaBlockKey)
+		if keyNode == nil || !pragmaKeyMatches(keyNode, "lspec", "") {
+			continue
+		}
+		val, exists := extractPragmaSettings(block)["library"]
+		if !exists {
+			continue
+		}
+		opts.Library = pragmaSettingAsBool(val)
+	}
+	return opts
+}
+
 func extractSinglePragmaBlock(block *Node) (ToolPragma, bool) {
 	keyNode := block.FindFirstKind(dslspec.NodePragmaBlockKey)
 	if keyNode == nil {
@@ -224,17 +249,70 @@ func extractSinglePragmaBlock(block *Node) (ToolPragma, bool) {
 }
 
 func extractToolName(keyNode *Node) (string, bool) {
-	prefixNode := keyNode.FindFirstKind(dslspec.NodePragmaBlockKeyPrefix)
-	if prefixNode == nil || dslspec.TrimmedIdentifierNodeContent(prefixNode) != "tool" {
+	if !pragmaKeyHasPrefix(keyNode, "tool") {
 		return "", false
 	}
 
-	segments := keyNode.FindAllKind(dslspec.NodePragmaBlockKeySegment)
+	segments := pragmaKeyDirectSegments(keyNode)
 	if len(segments) != 1 {
 		panic(fmt.Errorf("tool pragma key must have exactly 1 segment, got=%d", len(segments)))
 	}
 
-	return dslspec.TrimmedIdentifierNodeContent(segments[0]), true
+	return pragmaSegmentIdentifier(segments[0]), true
+}
+
+func pragmaKeyHasPrefix(keyNode *Node, prefix string) bool {
+	prefixNode := keyNode.FindFirstKind(dslspec.NodePragmaBlockKeyPrefix)
+	return prefixNode != nil && dslspec.TrimmedIdentifierNodeContent(prefixNode) == prefix
+}
+
+func pragmaKeyMatches(keyNode *Node, prefix string, segment string) bool {
+	if !pragmaKeyHasPrefix(keyNode, prefix) {
+		return false
+	}
+	segments := pragmaKeyDirectSegments(keyNode)
+	if segment == "" {
+		return len(segments) == 0
+	}
+	if len(segments) != 1 {
+		return false
+	}
+	return pragmaSegmentIdentifier(segments[0]) == segment
+}
+
+func pragmaKeyDirectSegments(keyNode *Node) []*Node {
+	if keyNode == nil {
+		return nil
+	}
+	children := keyNode.Children()
+	out := make([]*Node, 0, len(children))
+	for _, ch := range children {
+		if ch != nil && ch.Kind() == dslspec.NodePragmaBlockKeySegment {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+func pragmaSegmentIdentifier(segmentNode *Node) string {
+	if segmentNode == nil {
+		return ""
+	}
+	// Optional-segment grammar can wrap the identifier in nested same-kind nodes.
+	// Prefer direct children first to avoid self-matching the outer wrapper.
+	for _, ch := range segmentNode.Children() {
+		if ch != nil && ch.Kind() == dslspec.NodePragmaBlockKeySegment {
+			if id := pragmaSegmentIdentifier(ch); id != "" {
+				return id
+			}
+		}
+	}
+	if nested := segmentNode.FindFirstKind(dslspec.NodePragmaBlockKeySegment); nested != nil && nested != segmentNode {
+		if id := pragmaSegmentIdentifier(nested); id != "" {
+			return id
+		}
+	}
+	return dslspec.TrimmedIdentifierNodeContent(segmentNode)
 }
 
 func extractPragmaSettings(block *Node) map[string]any {
@@ -267,6 +345,17 @@ func extractPragmaValue(valueNode *Node) any {
 
 	// 3. Fallback for Identifiers (e.g., true, false, or raw unquoted values)
 	return dslspec.TrimmedIdentifierNodeContent(valueNode)
+}
+
+func pragmaSettingAsBool(val any) bool {
+	switch v := val.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
 }
 
 func extractStringArray(arrayNode *Node) []string {

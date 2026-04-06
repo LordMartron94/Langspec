@@ -850,20 +850,19 @@ PARSE {
 	};
 	
 	rule PRAGMA_BLOCK_KEY -> NodePragmaBlockKey {
-		NodePragmaBlockKeyPrefix : TokKWTool
-		PRAGMA_BLOCK_KEY_sep
-		PRAGMA_BLOCK_KEY_tail
+		(
+			NodePragmaBlockKeyPrefix : (
+				NodePragmaBlockKeyPrefix : TokKWTool | NodePragmaBlockKeyPrefix : TokKWLSpec
+			)
+		)
+		(
+			PRAGMA_BLOCK_KEY_SEGMENT
+		)?
 	};
 	
-	rule PRAGMA_BLOCK_KEY_sep -> transparent gr_PRAGMA_BLOCK_KEY_sep {
+	rule PRAGMA_BLOCK_KEY_SEGMENT -> NodePragmaBlockKeySegment {
 		virtual TokDot
 		NodePragmaBlockKeySegment : TokIdentifier
-	};
-	
-	rule PRAGMA_BLOCK_KEY_tail -> transparent gr_PRAGMA_BLOCK_KEY_tail {
-		(
-			PRAGMA_BLOCK_KEY_sep
-		)*
 	};
 	
 	rule PRAGMA_BLOCK_LIST -> transparent gr_PRAGMA_BLOCK_LIST sync (TokSemicolon TokBraceClose) {

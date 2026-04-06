@@ -116,17 +116,41 @@ Imported lexer symbols are intentionally strict:
 * Imported lexer states are namespaced in generated artifacts (for example `M__INITIAL`) to avoid collisions.
 * For generated Go bindings, imported tokens and node kinds are namespaced with the importer alias (for example `M__TokWord`, `M__ItemNode`) to avoid cross-module collisions.
 
+### Library module pragma (`lspec`)
+
+Library modules can opt out of executable-entrypoint checks by declaring:
+
+```
+PRAGMA {
+  lspec {
+    library = true;
+  }
+}
+```
+
+Behavior:
+
+* Imported modules are parsed and validated through the same stage-0..3 pipeline used by root specs.
+* If an imported module fails syntax or validation, root compilation fails and includes import-context diagnostics (`import '<alias>' (<path>): <code> <message>`).
+* In `library = true` modules, executable-only checks are relaxed:
+  * `V_PAR004` (`PROGRAM` required) is disabled.
+  * unresolved-local-reference checks (`V_PAR002`, `V_PAT002`, `V_LEX006`) are relaxed for that library module.
+* Import/export contract checks (for example `V_IMP005`, `V_IMP006`) remain active in library mode.
+
 ---
 
 ## 3. PRAGMA
 
-The `PRAGMA` section defines tooling and compiler directives. The block key **must** begin with the `tool` keyword.
+The `PRAGMA` section defines tooling and compiler directives.
 
 **Syntax:**
 
     PRAGMA {
       tool.<tool_name> {
         key = value;
+      }
+      lspec.library {
+        library = true;
       }
     }
 

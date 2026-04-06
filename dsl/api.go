@@ -185,6 +185,17 @@ type LangSpecCompileResult struct {
 
 	CompiledSymbols *semantics.CompiledSymbolTable
 	EOFToken        uint32
+
+	ImportedDiagnostics []ImportedModuleDiagnostic
+}
+
+type ImportedModuleDiagnostic struct {
+	Alias      string
+	Path       string
+	Code       string
+	Message    string
+	StartLine  int
+	StartColumn int
 }
 
 /*
@@ -300,11 +311,27 @@ func LangSpecCompilerCompile(
 
 	// 3. First Validation Pass
 	importGraph, importResolveErr := resolveImportGraph(compiler, sourceFile, rootNode)
+	if importGraph != nil {
+		result.ImportedDiagnostics = append(result.ImportedDiagnostics, importGraph.diagnostics...)
+	}
 	if importResolveErr != nil {
+		if len(result.ImportedDiagnostics) > 0 {
+			for _, d := range result.ImportedDiagnostics {
+				fmt.Fprintf(
+					compiler.diagnosticWriter,
+					"import '%s' (%s): %s %s\n",
+					d.Alias,
+					d.Path,
+					d.Code,
+					d.Message,
+				)
+			}
+		}
 		return result, importResolveErr
 	}
 	preValidationState := &semantics.GrammarValidationState{
 		ImportedModules: importGraph.byAlias,
+		LibraryMode:     extractCompileOptions(rootNode).Library,
 	}
 	validationEntries, validationErr := validation.LSTValidatorRun(
 		compiler.validatorConfig,

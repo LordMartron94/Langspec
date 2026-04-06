@@ -569,15 +569,16 @@ func (b *dslGrammarBuilder) pragmaBlock() Rule {
 }
 
 func (b *dslGrammarBuilder) blockKey() Rule {
-	return b.g.rb.Scope(LangSpecGrammarIDFromNode(NodePragmaBlockKey)).Path(
-		NodePragmaBlockKey,
-		NodePragmaBlockKeyPrefix,
-		lexarch.TokenKind(TokKWTool),
-		lexarch.TokenKind(TokDot),
-		LangSpecGrammarIDFromNode(NodePragmaBlockKeySegment),
-		NodePragmaBlockKeySegment,
-		lexarch.TokenKind(TokIdentifier),
+	optionalToolSegment := b.g.rb.Rule.Optional(
+		b.g.sequence(NodePragmaBlockKeySegment, "").
+			expectVirtualInRule(TokDot).
+			expectToken(NodePragmaBlockKeySegment, TokIdentifier).
+			build(),
 	)
+	return b.g.sequence(NodePragmaBlockKey, "").
+		rule(b.g.expectOneOf(NodePragmaBlockKeyPrefix, TokKWTool, TokKWLSpec)).
+		rule(optionalToolSegment).
+		build()
 }
 
 func (b *dslGrammarBuilder) pragmaConfigurationList() Rule {

@@ -65,6 +65,9 @@ func TestToolchainGoBindingsNamespacesImportedSymbols(t *testing.T) {
 	mainPath := filepath.Join(tmpDir, "main_bindings.lspec")
 
 	module := `--- "Module" v1.0.0 | lspec v1.0.0 ---
+PRAGMA {
+	lspec { library = true; }
+}
 LEX {
 	state INITIAL {
 		TokShared -> word: ` + "`[a-zA-Z]+`" + `;

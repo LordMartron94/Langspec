@@ -18,6 +18,7 @@ type GrammarValidationState struct {
 	SourceMap       map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
 	Symbols         *CompiledSymbolTable
 	ImportedModules map[string]*ImportedModuleSymbols
+	LibraryMode     bool
 }
 
 /* ValidationCtx is the validation stage context type for LangSpec LST validation. */
@@ -591,7 +592,18 @@ func validateAndMarkToken(ctx *ValidationCtx, env *SemanticEnv, used map[string]
 }
 
 func reportUnresolvedToken(ctx *ValidationCtx, ref *Node, name string) {
+	if shouldSkipLibraryUnresolvedChecks(ctx) {
+		return
+	}
 	ctx.ReportError(codeForUnresolvedTokenRef(ref).String(), fmt.Sprintf("unresolved token reference '%s'", name), ref)
+}
+
+func isLibraryMode(ctx *ValidationCtx) bool {
+	return ctx != nil && ctx.RunState != nil && ctx.RunState.LibraryMode
+}
+
+func shouldSkipLibraryUnresolvedChecks(ctx *ValidationCtx) bool {
+	return isLibraryMode(ctx)
 }
 
 func reportUnusedTokens(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, ignoredRoles map[string]bool) {
@@ -643,6 +655,9 @@ func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
 		}
 
 		if _, exists := env.Patterns[name]; !exists {
+			if shouldSkipLibraryUnresolvedChecks(ctx) {
+				continue
+			}
 			ctx.ReportError(codeForUnresolvedPatternRef(ref).String(), fmt.Sprintf("unresolved pattern reference '%s'", name), ref)
 		} else {
 			if env.LocalPatterns[name] && enclosingPatternDef(ref) == nil {
@@ -653,8 +668,10 @@ func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
 }
 
 func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
-	if _, ok := env.Rules[ProgramRuleName]; !ok {
-		ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("parse section must define entry rule '%s'", ProgramRuleName), ctx.RootNode)
+	if !isLibraryMode(ctx) {
+		if _, ok := env.Rules[ProgramRuleName]; !ok {
+			ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("parse section must define entry rule '%s'", ProgramRuleName), ctx.RootNode)
+		}
 	}
 
 	for _, ref := range ctx.RootNode.FindAllKind(NodeParseExpressionReference) {
@@ -684,6 +701,9 @@ func validateParseExpressionReference(ctx *ValidationCtx, env *SemanticEnv, ref 
 	case parseRefSymbolToken:
 		ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), messageTokenNotAllowedBareInParse(name), ref)
 	default:
+		if shouldSkipLibraryUnresolvedChecks(ctx) {
+			return
+		}
 		ctx.ReportError(codeForUnresolvedParseRef(ref).String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
 	}
 }
@@ -710,6 +730,9 @@ func validateBareParseSegmentSymbolReference(ctx *ValidationCtx, env *SemanticEn
 	case parseRefSymbolToken:
 		ctx.ReportError(VALIDATION_TOKEN_REFERENCED_AS_EXPRESSION.String(), messageTokenNotAllowedBareInParse(name), ref)
 	default:
+		if shouldSkipLibraryUnresolvedChecks(ctx) {
+			return
+		}
 		ctx.ReportError(codeForUnresolvedParseRef(ref).String(), fmt.Sprintf("unresolved parse or pratt rule reference '%s'", name), ref)
 	}
 }

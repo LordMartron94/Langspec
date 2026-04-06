@@ -84,6 +84,10 @@ Import behavior is intentionally strict:
 - Unknown imported exports report `V_IMP005`.
 - Imported lexer symbols are referenced-only (unused imported patterns/tokens/states are not pulled into output), and imported states are namespaced to avoid collisions.
 - Generated go_bindings also namespace imported token/node constants by import alias (`Alias__Name`) to avoid collisions across imported modules.
+- Imported modules are parsed and stage-0..3 validated with the same pipeline as root specs. Import failures are surfaced with alias/path-context diagnostics.
+- Library modules can relax executable-entry checks via non-tool pragma:
+  - `PRAGMA { lspec { library = true; } }`
+  - this disables `PROGRAM`-required (`V_PAR004`) and unresolved-local-reference checks (`V_PAR002`, `V_PAT002`, `V_LEX006`) for that module, while keeping import/export contract checks active.
 
 ### 1. Header (Required)
 
@@ -103,6 +107,9 @@ PRAGMA {
     enable = true;
     output-path = "path/to/bindings.go";
     package-name = "mylang";
+  }
+  lspec {
+    library = true;
   }
 }
 ```

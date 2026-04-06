@@ -7,19 +7,23 @@ import (
 	"langspec"
 	"langspec/dsl/semantics"
 	dslspec "langspec/dsl/spec"
+	"langspec/validation"
 )
 
 type resolvedImportGraph struct {
-	byAlias map[string]*semantics.ImportedModuleSymbols
+	byAlias      map[string]*semantics.ImportedModuleSymbols
+	diagnostics  []ImportedModuleDiagnostic
+	diagnosticsN map[string]bool
 }
 
 func resolveImportGraph(compiler *LangSpecCompiler, sourceFile string, root *Node) (*resolvedImportGraph, error) {
 	graph := &resolvedImportGraph{
-		byAlias: make(map[string]*semantics.ImportedModuleSymbols),
+		byAlias:      make(map[string]*semantics.ImportedModuleSymbols),
+		diagnosticsN: make(map[string]bool),
 	}
 	visitedByPath := make(map[string]bool)
 	if err := resolveImportGraphRecursive(compiler, sourceFile, root, graph, visitedByPath); err != nil {
-		return nil, err
+		return graph, err
 	}
 	return graph, nil
 }
@@ -58,9 +62,9 @@ func resolveImportGraphRecursive(
 		}
 		absImport = filepath.Clean(absImport)
 
-		importRoot, parseErr := parseLangSpecRootOnly(compiler, absImport)
-		if parseErr != nil {
-			return fmt.Errorf("failed to parse imported module '%s' (%s): %w", alias, absImport, parseErr)
+		importRoot, importErr := parseAndValidateImportModule(compiler, alias, absImport, graph)
+		if importErr != nil {
+			return importErr
 		}
 		graph.byAlias[alias] = semantics.ImportedModuleSymbolsBuild(alias, absImport, importRoot)
 
@@ -96,19 +100,98 @@ func collectImportDefinitions(root *Node) map[string]string {
 	return out
 }
 
-func parseLangSpecRootOnly(compiler *LangSpecCompiler, sourceFile string) (*Node, error) {
+func parseAndValidateImportModule(
+	compiler *LangSpecCompiler,
+	alias string,
+	sourceFile string,
+	graph *resolvedImportGraph,
+) (*Node, error) {
 	session := langspec.LangParserSessionCreate[rune](sourceFile, nil)
-	_, root, syntaxErrors, err := langspec.LangParserParseFile(compiler.parser, session, nil)
+	contentRune, root, syntaxErrors, err := langspec.LangParserParseFile(compiler.parser, session, nil)
 	if err != nil {
-		if syntaxErrors != nil && syntaxErrors.HasErrors() {
-			first := syntaxErrors.Errors[0]
-			return nil, fmt.Errorf("%w; first syntax error: %s at %d:%d", err, first.Message, first.StartLine, first.StartColumn)
+		if syntaxErrors != nil {
+			for _, e := range syntaxErrors.Errors {
+				graph.appendDiagnostic(ImportedModuleDiagnostic{
+					Alias:       alias,
+					Path:        sourceFile,
+					Code:        "SYNTAX",
+					Message:     e.Message,
+					StartLine:   e.StartLine,
+					StartColumn: e.StartColumn,
+				})
+			}
 		}
+		graph.appendDiagnostic(ImportedModuleDiagnostic{
+			Alias:   alias,
+			Path:    sourceFile,
+			Code:    "IMPORT_PARSE",
+			Message: err.Error(),
+		})
 		return nil, err
 	}
 	if syntaxErrors != nil && syntaxErrors.HasErrors() {
-		first := syntaxErrors.Errors[0]
-		return nil, fmt.Errorf("imported file has syntax errors: %s at %d:%d", first.Message, first.StartLine, first.StartColumn)
+		for _, e := range syntaxErrors.Errors {
+			graph.appendDiagnostic(ImportedModuleDiagnostic{
+				Alias:       alias,
+				Path:        sourceFile,
+				Code:        "SYNTAX",
+				Message:     e.Message,
+				StartLine:   e.StartLine,
+				StartColumn: e.StartColumn,
+			})
+		}
+		return nil, fmt.Errorf("import '%s' (%s) has syntax errors", alias, sourceFile)
+	}
+
+	opts := extractCompileOptions(root)
+	preValidationState := &semantics.GrammarValidationState{
+		ImportedModules: graph.byAlias,
+		LibraryMode:     opts.Library,
+	}
+	validationEntries, validationErr := validation.LSTValidatorRun(
+		compiler.validatorConfig,
+		root,
+		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
+			return stage.Order < 4
+		},
+		preValidationState,
+	)
+	if validationErr != nil {
+		graph.appendDiagnostic(ImportedModuleDiagnostic{
+			Alias:   alias,
+			Path:    sourceFile,
+			Code:    "IMPORT_VALIDATE",
+			Message: validationErr.Error(),
+		})
+		return nil, validationErr
+	}
+	if validationEntries != nil {
+		for _, stage := range validationEntries.Results {
+			for _, entry := range stage.Entries {
+				graph.appendDiagnostic(ImportedModuleDiagnostic{
+					Alias:   alias,
+					Path:    sourceFile,
+					Code:    entry.Code,
+					Message: entry.Message,
+				})
+			}
+		}
+	}
+	if hasCriticalValidationErrors(validationEntries) {
+		_ = contentRune
+		return nil, fmt.Errorf("import '%s' (%s) failed validation", alias, sourceFile)
 	}
 	return root, nil
+}
+
+func (g *resolvedImportGraph) appendDiagnostic(diag ImportedModuleDiagnostic) {
+	if g == nil {
+		return
+	}
+	key := fmt.Sprintf("%s|%s|%s|%s|%d|%d", diag.Alias, diag.Path, diag.Code, diag.Message, diag.StartLine, diag.StartColumn)
+	if g.diagnosticsN[key] {
+		return
+	}
+	g.diagnosticsN[key] = true
+	g.diagnostics = append(g.diagnostics, diag)
 }
