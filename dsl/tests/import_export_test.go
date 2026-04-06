@@ -173,3 +173,83 @@ PARSE {
 		t.Fatalf("expected V_IMP006 for invoking non-template with call args")
 	}
 }
+
+func TestImportExportLexUsingPatternValidation(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modulePath := filepath.Join(tmpDir, "module_pattern.lspec")
+	mainPath := filepath.Join(tmpDir, "main_pattern.lspec")
+
+	module := `--- "Module" v1.0.0 | lspec v1.0.0 ---
+
+PATTERN {
+	export word_pat : ` + "`[a-zA-Z]+`" + `;
+}
+LEX {
+	state INITIAL {
+		TokWord -> word: word_pat;
+	}
+}
+PARSE {
+	export rule Item -> ItemNode { virtual TokWord };
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+
+IMPORT {
+	"` + modulePath + `" as M;
+}
+LEX {
+	state INITIAL {
+		TokWord -> word: using M.word_pat;
+		TokBadRule -> word: using M.Item;
+		TokMissing -> word: using M.MissingPat;
+	}
+}
+PARSE {
+	IGNORE { word };
+	rule PROGRAM -> ProgramNode { virtual TokWord };
+}`
+
+	if err := os.WriteFile(modulePath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module spec: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write main spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err == nil {
+		t.Fatalf("expected validation failure for invalid lex using references")
+	}
+	if res == nil || res.ValidationEntries == nil {
+		t.Fatalf("expected validation entries for invalid lex using references")
+	}
+
+	foundWrongCategory := false
+	foundUnresolved := false
+	for _, stage := range res.ValidationEntries.Results {
+		for _, entry := range stage.Entries {
+			switch entry.Code {
+			case "V_IMP006":
+				if entry.Message == "lexer using requires an exported pattern, got 'M.Item'" {
+					foundWrongCategory = true
+				}
+			case "V_IMP005":
+				if entry.Message == "unresolved exported symbol 'M.MissingPat'" {
+					foundUnresolved = true
+				}
+			}
+		}
+	}
+	if !foundWrongCategory {
+		t.Fatalf("expected V_IMP006 for using non-pattern export in lex section")
+	}
+	if !foundUnresolved {
+		t.Fatalf("expected V_IMP005 for unresolved external pattern in lex section")
+	}
+}

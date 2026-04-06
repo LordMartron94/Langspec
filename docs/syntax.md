@@ -101,6 +101,7 @@ Important constraints:
   * invalid: `using M.RuleName(...)`
 * Unknown exports are rejected during semantic validation.
 * Current import surface is intentionally limited to exported parse-side constructs used via `using`; direct external token or Pratt import usage is not part of the current public syntax surface.
+* In the `LEX` section, `using Alias.Symbol` is validated as a pattern-site reference: the symbol must resolve to an exported pattern. Wrong-category or missing exports are reported (`V_IMP006` / `V_IMP005`).
 
 Validation codes related to import/export misuse include:
 
