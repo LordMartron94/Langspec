@@ -777,3 +777,83 @@ PARSE {
 		t.Fatalf("expected non-colliding namespaced imported nodes A__SharedNode and B__SharedNode")
 	}
 }
+
+func TestImportExportUsingRuleWithSiblingReferencesBuildsLocalGrammarLabels(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modulePath := filepath.Join(tmpDir, "module_std_like.lspec")
+	mainPath := filepath.Join(tmpDir, "main_std_like.lspec")
+
+	module := `--- "Module" v1.0.0 | lspec v1.0.0 ---
+
+PRAGMA {
+	lspec { library = true; }
+}
+PATTERN {
+	export pat_TokKWGodebug : "godebug";
+	export pat_TokIdent : ['a'..'z']+;
+	export pat_Equals : '=';
+}
+LEX {
+	state INITIAL {
+		TokKWGodebug -> structural: pat_TokKWGodebug;
+		TokIdent -> structural: pat_TokIdent;
+		TokEquals -> structural: pat_Equals;
+	}
+}
+PARSE {
+	export rule GODEBUG_STATEMENT -> NodeGodebugStatement {
+		virtual TokKWGodebug
+		GODEBUG_REFERENCE
+	}
+	export rule GODEBUG_REFERENCE -> NodeGodebugReference {
+		NodeGodebugKey : TokIdent
+		virtual TokEquals
+		NodeGodebugValue : TokIdent
+	}
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+
+IMPORT {
+	"` + modulePath + `" as M;
+}
+LEX {
+	state INITIAL {
+		TokOwnWhitespace -> own: ` + "`\\s+`" + `;
+	}
+}
+PARSE {
+	IGNORE { own };
+	rule PROGRAM -> ProgramNode {
+		GODEBUG_STATEMENT*
+		GODEBUG_REFERENCE*
+	};
+	rule GODEBUG_STATEMENT -> transparent gr_GODEBUG_STATEMENT { using M.GODEBUG_STATEMENT };
+	rule GODEBUG_REFERENCE -> transparent gr_GODEBUG_REFERENCE { using M.GODEBUG_REFERENCE };
+}`
+
+	if err := os.WriteFile(modulePath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module spec: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write main spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err != nil {
+		logCompileFailureDiagnostics(t, res)
+		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
+	}
+	if res == nil || res.CompiledSymbols == nil || res.CompiledParserSpec == nil {
+		t.Fatalf("compile result missing compiled artifacts")
+	}
+
+	if res.CompiledSymbols.TokenID("M__TokKWGodebug") == 0 || res.CompiledSymbols.TokenID("M__TokIdent") == 0 {
+		t.Fatalf("expected imported tokens for namespaced module symbols")
+	}
+}

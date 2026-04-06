@@ -450,9 +450,12 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 	if patternNode == nil {
 		patternNode = ruleNode.FindFirstKind(dslspec.NodePatternRef)
 	}
+	if patternNode == nil {
+		patternNode = ruleNode.FindFirstKind(dslspec.NodeLexRulePatternUsing)
+	}
 
 	if patternNode == nil {
-		panic("compiler error: lex rule must have a pattern or a variable reference")
+		panic("compiler error: lex rule must have a pattern, pattern reference, or using import")
 	}
 
 	switch patternNode.Kind() {
@@ -490,14 +493,24 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 		if !ok || module == nil {
 			panic(fmt.Errorf("compiler error: unresolved import alias '%s'", moduleName))
 		}
-		patternDef, ok := module.ExportedPatterns[externalName]
-		if !ok {
+		if _, ok := module.ExportedPatterns[externalName]; !ok {
 			panic(fmt.Errorf("compiler error: unresolved exported pattern '%s.%s'", moduleName, externalName))
 		}
-		content := nodeFormattedContent(patternDef.FindFirstKind(dslspec.NodePatternRegEx), dslspec.ATTRIBUTE_REGEX_LITERAL_VALUE)
-		p, err := pattern.RegexToRegula(content, c.factory)
-		if err != nil {
-			panic(fmt.Errorf("compiler error while converting imported pattern to regula: %w", err))
+
+		// Exported imported patterns can be arbitrary pattern expressions (not only regex literals).
+		// Compile through the same pattern compiler used for local PATTERN definitions.
+		modulePatternEnv := semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
+		modulePatternCtx := &patternCompileCtx{
+			c:        c,
+			rootNode: module.Root,
+			env:      modulePatternEnv,
+			sym:      ctx.sym,
+		}
+		c.compilePatterns(modulePatternCtx)
+
+		p, ok := modulePatternCtx.patternTable[externalName]
+		if !ok {
+			panic(fmt.Errorf("compiler error: compiled imported pattern '%s.%s' not found", moduleName, externalName))
 		}
 		tokenPattern = p
 
@@ -733,10 +746,11 @@ func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
 		var exprNode *Node
 		for _, child := range definition.ChildrenUnsafe() {
 			kind := child.Kind()
-			if kind != dslspec.NodePatternDefName && kind != dslspec.NodeLocalVariable {
-				exprNode = child
-				break
+			if kind == dslspec.NodePatternDefName || kind == dslspec.NodeLocalVariable || kind == dslspec.NodeExported {
+				continue
 			}
+			exprNode = child
+			break
 		}
 
 		if exprNode == nil {
@@ -1193,6 +1207,16 @@ func compileParseRuleDefinition(ctx *parseCompileCtx, ruleNode *Node) (CompiledR
 	}
 
 	compiledExpr := compileParseExpression(ctx, rootExpr)
+	if g := compiledExpr.GetGrammar(); g == nil || g.GrammarLabel != ctx.grammarID {
+		// Guarantee every declared parse rule name materializes its own grammar label.
+		if ctx.ruleName == semantics.ProgramRuleName {
+			compiledExpr = ctx.builder.Rule.Root(ctx.grammarID, ctx.nodeKind, false, compiledExpr)
+		} else if ctx.transparent {
+			compiledExpr = ctx.builder.Rule.TransparentSequence(ctx.grammarID, compiledExpr)
+		} else {
+			compiledExpr = ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, compiledExpr)
+		}
+	}
 	if syncTokens := collectSyncTokens(ruleNode, ctx.sym); len(syncTokens) > 0 {
 		compiledExpr = ctx.builder.Rule.RecoverSync(compiledExpr, syncTokens...)
 	}
@@ -1590,8 +1614,17 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 	if !ok || module == nil {
 		panic(fmt.Errorf("compiler error: unresolved import alias '%s'", moduleName))
 	}
+	wrapRootRule := func(inner CompiledRule) CompiledRule {
+		if !ctx.rootLevel {
+			return inner
+		}
+		if ctx.transparent {
+			return ctx.builder.Rule.TransparentSequence(ctx.grammarID, inner)
+		}
+		return ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, inner)
+	}
 	if callArgs != nil {
-		return compileExternalUsingTemplateCall(ctx, moduleName, symbolName, module, callArgs, usingRef)
+		return wrapRootRule(compileExternalUsingTemplateCall(ctx, moduleName, symbolName, module, callArgs, usingRef))
 	}
 	if _, ok := module.ExportedRules[symbolName]; ok {
 		ruleNode := module.ExportedRules[symbolName]
@@ -1612,7 +1645,7 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 		subCtx := *ctx
 		subCtx.rootLevel = false
 		subCtx.importAlias = moduleName
-		return compileParseExpression(&subCtx, rootExpr)
+		return wrapRootRule(compileParseExpression(&subCtx, rootExpr))
 	}
 	if tplDecl, ok := module.ExportedTemplates[symbolName]; ok && tplDecl != nil {
 		if len(tplDecl.Params) != 0 {
@@ -1625,7 +1658,7 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 		subCtx := *ctx
 		subCtx.rootLevel = false
 		subCtx.importAlias = moduleName
-		return compileParseExpression(&subCtx, body)
+		return wrapRootRule(compileParseExpression(&subCtx, body))
 	}
 	if _, ok := module.ExportedPratt[symbolName]; ok {
 		panic(fmt.Errorf("compiler error: external pratt expressions are not supported ('%s.%s')", moduleName, symbolName))

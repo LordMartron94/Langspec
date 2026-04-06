@@ -50,6 +50,7 @@ const (
 	VALIDATION_LEX_UNREFERENCED_STATE         ValidationCode = "V_LEX009"
 	VALIDATION_LEX_PUSH_SET_EMPTY_ARGS        ValidationCode = "V_LEX010"
 	VALIDATION_LEX_TOKEN_MULTI_STATE_CONFLICT ValidationCode = "V_LEX011"
+	VALIDATION_LEX_RULE_MISSING_PATTERN       ValidationCode = "V_LEX012"
 	VALIDATION_LEX_DUPLICATE_STATE_NAME       ValidationCode = "V_LEX013"
 
 	VALIDATION_NEGATION_INVALID_CONTENT ValidationCode = "V_PAT007"
@@ -763,7 +764,11 @@ func symbolReferenceIsBareParseSegmentGrammarRef(ref *Node) bool {
 // ------------------------------------------------------------- REACHABILITY (STAGE 1)
 
 func processReachability(ctx *ValidationCtx) {
-	env := BuildSemanticEnv(ctx.RootNode, nil)
+	var imports map[string]*ImportedModuleSymbols
+	if ctx.RunState != nil {
+		imports = ctx.RunState.ImportedModules
+	}
+	env := BuildSemanticEnvWithImports(ctx.RootNode, imports, nil)
 
 	patternDeps := buildPatternDependencyMap(ctx.RootNode, env)
 	checkPatternCycles(ctx, env, patternDeps)
@@ -860,6 +865,7 @@ func processLexerStateSemantics(ctx *ValidationCtx) {
 			continue
 		}
 		for _, rule := range body.FindAllKind(NodeLexRule) {
+			validateLexRuleHasPattern(ctx, rule)
 			validateLexerMutations(ctx, rule, defined)
 			markReferencedLexerStates(rule, referenced)
 		}
@@ -878,6 +884,25 @@ func processLexerStateSemantics(ctx *ValidationCtx) {
 	}
 
 	checkLexTokenConsistencyAcrossStates(ctx)
+}
+
+func validateLexRuleHasPattern(ctx *ValidationCtx, ruleNode *Node) {
+	if ruleNode == nil {
+		return
+	}
+	key, _ := extractLexPattern(ruleNode)
+	if key != "" {
+		return
+	}
+	tokenNameNode := ruleNode.FindFirstKind(NodeLexRuleTokenName)
+	if tokenNameNode == nil {
+		tokenNameNode = ruleNode
+	}
+	ctx.ReportError(
+		VALIDATION_LEX_RULE_MISSING_PATTERN.String(),
+		"lexer rule must have a regex pattern, a pattern reference, or `using Module.exportedPattern`",
+		tokenNameNode,
+	)
 }
 
 func validateLexerMutations(ctx *ValidationCtx, rule *Node, defined map[string]struct{}) {
@@ -1568,6 +1593,18 @@ func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	var refs []string
 
 	container.WalkPre(func(node *Node) (bool, bool) {
+		if node != nil && node.Kind() == NodeLexRulePatternUsing {
+			moduleName, symbolName := usingRuleReferenceParts(node)
+			if moduleName != "" && symbolName != "" {
+				if module, ok := ResolveImportedModule(env, moduleName); ok && module != nil {
+					if importedRule := module.ExportedRules[symbolName]; importedRule != nil {
+						importedRefs := extractImportedRuleRefs(importedRule, env)
+						refs = append(refs, importedRefs...)
+					}
+				}
+			}
+		}
+
 		if node != nil && node.Kind() == NodeParseSegment {
 			if inner, _, ok := ExpandedTemplateBodyRootForCallSegment(node, env); ok {
 				refs = append(refs, StaticRuleAndPrattRefsFromTemplateCallSegment(node, env)...)
@@ -1594,6 +1631,43 @@ func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	})
 
 	return refs
+}
+
+func usingRuleReferenceParts(usingRef *Node) (string, string) {
+	if usingRef == nil {
+		return "", ""
+	}
+	moduleRef := usingRef.FindFirstKind(NodeModuleReference)
+	symbolRef := usingRef.FindFirstKind(NodePatternExternalPatternReference)
+	if moduleRef == nil || symbolRef == nil {
+		return "", ""
+	}
+	return IdentifierValue(moduleRef), IdentifierValue(symbolRef)
+}
+
+func extractImportedRuleRefs(ruleNode *Node, env *SemanticEnv) []string {
+	if ruleNode == nil {
+		return nil
+	}
+	body := ruleNode.FindFirstKind(NodeParseRuleBody)
+	if body == nil {
+		return nil
+	}
+	importedRefs := make([]string, 0)
+	for _, refNode := range body.FindAllKind(NodeParseSymbolReference) {
+		refName := RefName(refNode)
+		if refName == "" {
+			continue
+		}
+		if _, isRule := env.Rules[refName]; isRule {
+			importedRefs = append(importedRefs, refName)
+			continue
+		}
+		if _, isPratt := env.Pratt[refName]; isPratt {
+			importedRefs = append(importedRefs, refName)
+		}
+	}
+	return importedRefs
 }
 
 func computeReachablePatterns(root *Node, deps map[string][]string) map[string]bool {
