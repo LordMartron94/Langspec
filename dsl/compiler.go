@@ -86,10 +86,17 @@ type parseCompileCtx struct {
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
 }
 
-func compileTree(comp *LangSpecCompiler, rootNode *Node) *CompiledLangSpec {
+func compileTree(comp *LangSpecCompiler, rootNode *Node, sourceFile string, importGraph *resolvedImportGraph) *CompiledLangSpec {
 	dslName, dslVersion, langspecTargetVersion := getInfoFromHeader(rootNode.FindFirstKind(dslspec.NodeHeader))
 
-	env := semantics.BuildSemanticEnv(rootNode, nil)
+	if importGraph == nil {
+		var importErr error
+		importGraph, importErr = resolveImportGraph(comp, sourceFile, rootNode)
+		if importErr != nil {
+			panic(importErr)
+		}
+	}
+	env := semantics.BuildSemanticEnvWithImports(rootNode, importGraph.byAlias, nil)
 
 	eofName := getEOFToken(rootNode)
 	tokStrs, roleStrs, nodeStrs := semantics.CollectCompiledSymbolStrings(rootNode, env, eofName)
@@ -300,6 +307,7 @@ func (c *compiler) compileLexerSpec(ctx *patternCompileCtx, lexerSpec *langspec.
 			lexerSpec.WithRuleset(stateName, *rs)
 		}
 	}
+	appendImportedReferencedLexerRulesets(c, ctx, lexerSpec)
 }
 
 func collectLexerStateDefinitionNames(stateList *Node) []string {
@@ -377,6 +385,32 @@ func (c *compiler) constructLexRule(ruleNode *Node, ctx *patternCompileCtx) lexR
 		}
 		tokenPattern = p
 
+	case dslspec.NodeLexRulePatternUsing:
+		moduleRef := patternNode.FindFirstKind(dslspec.NodeModuleReference)
+		externalRef := patternNode.FindFirstKind(dslspec.NodePatternExternalPatternReference)
+		if moduleRef == nil || externalRef == nil {
+			panic("compiler error: malformed using expression (expected using Module.Symbol)")
+		}
+		if patternNode.FindFirstKind(dslspec.NodeParseTemplateCallArgs) != nil {
+			panic("compiler error: lexer using-pattern does not support template call arguments")
+		}
+		moduleName := dslspec.IdentifierValue(moduleRef)
+		externalName := dslspec.IdentifierValue(externalRef)
+		module, ok := semantics.ResolveImportedModule(ctx.env, moduleName)
+		if !ok || module == nil {
+			panic(fmt.Errorf("compiler error: unresolved import alias '%s'", moduleName))
+		}
+		patternDef, ok := module.ExportedPatterns[externalName]
+		if !ok {
+			panic(fmt.Errorf("compiler error: unresolved exported pattern '%s.%s'", moduleName, externalName))
+		}
+		content := nodeFormattedContent(patternDef.FindFirstKind(dslspec.NodePatternRegEx), dslspec.ATTRIBUTE_REGEX_LITERAL_VALUE)
+		p, err := pattern.RegexToRegula(content, c.factory)
+		if err != nil {
+			panic(fmt.Errorf("compiler error while converting imported pattern to regula: %w", err))
+		}
+		tokenPattern = p
+
 	default:
 		panic(fmt.Errorf("unsupported node kind for lex rule: %s", patternNode.Kind()))
 	}
@@ -420,6 +454,137 @@ func collectLexerStateReferences(mutRoot *Node) []string {
 	var out []string
 	for _, ref := range mutRoot.FindAllKind(dslspec.NodeStateReference) {
 		out = append(out, dslspec.NodeSingleTokenContent(ref))
+	}
+	return out
+}
+
+func appendImportedReferencedLexerRulesets(c *compiler, ctx *patternCompileCtx, lexerSpec *langspec.LexerSpec[rune, uint32, uint32, string]) {
+	referenced := collectReferencedImportedTokenNames(ctx.rootNode, ctx.env)
+	if len(referenced) == 0 {
+		return
+	}
+	for alias, module := range ctx.env.Imports {
+		if module == nil || module.Root == nil {
+			continue
+		}
+		moduleEnv := semantics.BuildSemanticEnv(module.Root, nil)
+		modulePatternCtx := &patternCompileCtx{
+			c:        c,
+			rootNode: module.Root,
+			env:      moduleEnv,
+			sym:      ctx.sym,
+		}
+		c.compilePatterns(modulePatternCtx)
+		lexSection := module.Root.FindFirstKind(dslspec.NodeLexSection)
+		if lexSection == nil {
+			continue
+		}
+		for _, stateListNode := range lexSection.FindAllKind(dslspec.NodeStateList) {
+			body := stateListNode.FindFirstKind(dslspec.NodeStateDefinitionBody)
+			if body == nil {
+				continue
+			}
+			filtered := gatherFilteredRulesInBody(body, modulePatternCtx, referenced)
+			if len(filtered) == 0 {
+				continue
+			}
+			for _, stateName := range collectLexerStateDefinitionNames(stateListNode) {
+				namespacedState := alias + "__" + stateName
+				rs := langspec.LexerRulesetCreate[uint32, uint32]()
+				for _, lr := range filtered {
+					stackStates := namespacedStackTargets(alias, lr.stackStates)
+					rs.WithLexerRule(
+						lr.tokenPattern,
+						ctx.sym.TokenID(lr.tokenName),
+						ctx.sym.RoleID(lr.tokenRole),
+						lr.priority,
+						lr.stackKind,
+						stackStates,
+						lr.popAmount,
+					)
+				}
+				lexerSpec.WithRuleset(namespacedState, *rs)
+			}
+		}
+	}
+}
+
+func collectReferencedImportedTokenNames(root *Node, env *SemanticEnv) map[string]bool {
+	out := make(map[string]bool)
+	if root == nil || env == nil {
+		return out
+	}
+	for _, usingRef := range root.FindAllKind(dslspec.NodeLexRulePatternUsing) {
+		moduleName, symbolName := parseUsingReference(usingRef)
+		module, ok := semantics.ResolveImportedModule(env, moduleName)
+		if !ok || module == nil {
+			continue
+		}
+		if pairDecl := module.ExportedPairs[symbolName]; pairDecl != nil {
+			out[pairDecl.OpenToken] = true
+			out[pairDecl.CloseToken] = true
+			continue
+		}
+		if ruleNode := module.ExportedRules[symbolName]; ruleNode != nil {
+			moduleEnv := semantics.BuildSemanticEnv(module.Root, nil)
+			body := ruleNode.FindFirstKind(dslspec.NodeParseRuleBody)
+			if body != nil {
+				collectReferencedTokensFromParseNode(body, moduleEnv.Pairs, out)
+			}
+		}
+	}
+	return out
+}
+
+func collectReferencedTokensFromParseNode(node *Node, pairs map[string]*semantics.PairDecl, out map[string]bool) {
+	if node == nil {
+		return
+	}
+	node.WalkPre(func(current *Node) (bool, bool) {
+		switch current.Kind() {
+		case dslspec.NodeParseTokenReference, dslspec.NodeParseNestOpenToken, dslspec.NodeParseNestCloseToken:
+			name := dslspec.NodeSingleTokenContent(current)
+			if name != "" {
+				out[name] = true
+			}
+		case dslspec.NodeParseNestPairRef:
+			name := semantics.PairNameFromNestPairRefNode(current)
+			if pair := pairs[name]; pair != nil {
+				out[pair.OpenToken] = true
+				out[pair.CloseToken] = true
+			}
+		}
+		return false, false
+	})
+}
+
+func gatherFilteredRulesInBody(body *Node, ctx *patternCompileCtx, referenced map[string]bool) []lexRule {
+	rules := body.FindAllKind(dslspec.NodeLexRule)
+	out := make([]lexRule, 0, len(rules))
+	for _, rule := range rules {
+		if nodeHasMetaByPred(rule, isEOFTrueMetaKVP) {
+			continue
+		}
+		tokenNode := rule.FindFirstKind(dslspec.NodeLexRuleTokenName)
+		if tokenNode == nil {
+			continue
+		}
+		tokenName := dslspec.NodeSingleTokenContent(tokenNode)
+		if !referenced[tokenName] {
+			continue
+		}
+		out = append(out, ctx.c.constructLexRule(rule, ctx))
+	}
+	return out
+}
+
+func namespacedStackTargets(alias string, states []string) []string {
+	if len(states) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(states))
+	for _, state := range states {
+		out = append(out, alias+"__"+state)
 	}
 	return out
 }
@@ -787,6 +952,15 @@ func getParserSpecInfo(
 			}
 		}
 	}
+	for moduleAlias := range collectUsedImportAliases(rootNode) {
+		module, ok := semantics.ResolveImportedModule(env, moduleAlias)
+		if !ok || module == nil {
+			continue
+		}
+		for roleName := range module.IgnoreRoles {
+			skipRoles = append(skipRoles, sym.RoleID(roleName))
+		}
+	}
 
 	programRuleNode := env.Rules[semantics.ProgramRuleName]
 	rootNodeKind := sym.NodeKindID(dslspec.NodeSingleTokenContent(programRuleNode.FindFirstKind(dslspec.NodeParseNodeName)))
@@ -838,6 +1012,21 @@ func getParserSpecInfo(
 	)
 
 	return grammarPackage, registry, rootNodeKind, skipRoles, sourceMap
+}
+
+func collectUsedImportAliases(rootNode *Node) map[string]bool {
+	out := make(map[string]bool)
+	for _, usingRef := range rootNode.FindAllKind(dslspec.NodeLexRulePatternUsing) {
+		moduleNode := usingRef.FindFirstKind(dslspec.NodeModuleReference)
+		if moduleNode == nil {
+			continue
+		}
+		moduleName := dslspec.IdentifierValue(moduleNode)
+		if moduleName != "" {
+			out[moduleName] = true
+		}
+	}
+	return out
 }
 
 func buildParseRuleBodyMapForCompile(rules map[string]*Node) map[string]*Node {
@@ -911,7 +1100,7 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		compiledRule = compilePredict(ctx, node)
 	case dslspec.NodeParseOptional:
 		compiledRule = compileOptional(ctx, node)
-	case dslspec.NodeParseExpressionReference, dslspec.NodeParseTokenReference:
+	case dslspec.NodeParseExpressionReference, dslspec.NodeParseTokenReference, dslspec.NodeParseSymbolReference:
 		compiledRule = compileReference(ctx, node)
 	case dslspec.NodeParsePlus:
 		compiledRule = compilePlus(ctx, node)
@@ -925,6 +1114,8 @@ func compileParseExpression(ctx *parseCompileCtx, node *Node) CompiledRule {
 		compiledRule = compileGroup(ctx, node)
 	case dslspec.NodeParseSegment:
 		compiledRule = compileParseSegment(ctx, node)
+	case dslspec.NodeLexRulePatternUsing:
+		compiledRule = compileExternalUsingSegment(ctx, node)
 	case dslspec.NodeRepetition:
 		compiledRule = compileParseRepetition(ctx, node)
 	default:
@@ -1111,6 +1302,10 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 }
 
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
+	if usingRef := node.FindFirstKind(dslspec.NodeLexRulePatternUsing); usingRef != nil {
+		return compileExternalUsingSegment(ctx, usingRef)
+	}
+
 	if semantics.SegmentHasExplicitTemplateInvocation(node) {
 		return compileTemplateCallSegment(ctx, node)
 	}
@@ -1197,6 +1392,18 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if openTokNode != nil && closeTokNode != nil {
 		openToken = ctx.sym.TokenID(dslspec.NodeSingleTokenContent(openTokNode))
 		closeToken = ctx.sym.TokenID(dslspec.NodeSingleTokenContent(closeTokNode))
+	} else if usingRef := node.FindFirstKind(dslspec.NodeLexRulePatternUsing); usingRef != nil {
+		moduleName, symbolName := parseUsingReference(usingRef)
+		module, ok := semantics.ResolveImportedModule(ctx.env, moduleName)
+		if !ok || module == nil {
+			panic(fmt.Errorf("compiler error: unresolved import alias '%s'", moduleName))
+		}
+		decl, ok := module.ExportedPairs[symbolName]
+		if !ok || decl == nil {
+			panic(fmt.Errorf("compiler error: unresolved exported pair '%s.%s' in nest", moduleName, symbolName))
+		}
+		openToken = ctx.sym.TokenID(decl.OpenToken)
+		closeToken = ctx.sym.TokenID(decl.CloseToken)
 	} else if pairRef := node.FindFirstKind(dslspec.NodeParseNestPairRef); pairRef != nil {
 		pName := semantics.PairNameFromNestPairRefNode(pairRef)
 		if pName == "" {
@@ -1223,6 +1430,110 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return ctx.builder.Rule.Nest(ctx.grammarID, ctx.nodeKind, lexarch.TokenKind(openToken), lexarch.TokenKind(closeToken), innerRule)
 	}
 	return ctx.builder.Rule.TransparentNest(parseCtxLabel(ctx, "NEST"), lexarch.TokenKind(openToken), lexarch.TokenKind(closeToken), innerRule)
+}
+
+func parseUsingReference(usingRef *Node) (string, string) {
+	moduleRef := usingRef.FindFirstKind(dslspec.NodeModuleReference)
+	symbolRef := usingRef.FindFirstKind(dslspec.NodePatternExternalPatternReference)
+	if moduleRef == nil || symbolRef == nil {
+		panic("compiler error: malformed using reference")
+	}
+	moduleName := dslspec.IdentifierValue(moduleRef)
+	symbolName := dslspec.IdentifierValue(symbolRef)
+	if moduleName == "" || symbolName == "" {
+		panic("compiler error: malformed using reference (missing module or symbol)")
+	}
+	return moduleName, symbolName
+}
+
+func parseUsingReferenceWithArgs(usingRef *Node) (string, string, *Node) {
+	moduleName, symbolName := parseUsingReference(usingRef)
+	return moduleName, symbolName, usingRef.FindFirstKind(dslspec.NodeParseTemplateCallArgs)
+}
+
+func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledRule {
+	moduleName, symbolName, callArgs := parseUsingReferenceWithArgs(usingRef)
+	module, ok := semantics.ResolveImportedModule(ctx.env, moduleName)
+	if !ok || module == nil {
+		panic(fmt.Errorf("compiler error: unresolved import alias '%s'", moduleName))
+	}
+	if callArgs != nil {
+		return compileExternalUsingTemplateCall(ctx, moduleName, symbolName, module, callArgs, usingRef)
+	}
+	if _, ok := module.ExportedRules[symbolName]; ok {
+		ruleNode := module.ExportedRules[symbolName]
+		body := ruleNode.FindFirstKind(dslspec.NodeParseRuleBody)
+		if body == nil {
+			panic(fmt.Errorf("compiler error: imported rule '%s.%s' has no body", moduleName, symbolName))
+		}
+		rootExpr := getParseRuleBodyRoot(body)
+		if rootExpr == nil {
+			bodyChildren := body.ChildrenUnsafe()
+			if len(bodyChildren) > 0 {
+				rootExpr = bodyChildren[0]
+			}
+		}
+		if rootExpr == nil {
+			panic(fmt.Errorf("compiler error: imported rule '%s.%s' has no expression root", moduleName, symbolName))
+		}
+		subCtx := *ctx
+		subCtx.rootLevel = false
+		return compileParseExpression(&subCtx, rootExpr)
+	}
+	if tplDecl, ok := module.ExportedTemplates[symbolName]; ok && tplDecl != nil {
+		if len(tplDecl.Params) != 0 {
+			panic(fmt.Errorf("compiler error: external template '%s.%s' requires call arguments and cannot be used via bare using", moduleName, symbolName))
+		}
+		body := semantics.GetTemplateBodyExpressionRoot(tplDecl.Node)
+		if body == nil {
+			panic(fmt.Errorf("compiler error: imported template '%s.%s' has no body", moduleName, symbolName))
+		}
+		subCtx := *ctx
+		subCtx.rootLevel = false
+		return compileParseExpression(&subCtx, body)
+	}
+	if _, ok := module.ExportedPratt[symbolName]; ok {
+		panic(fmt.Errorf("compiler error: external pratt expressions are not supported ('%s.%s')", moduleName, symbolName))
+	}
+	if _, ok := module.Tokens[symbolName]; ok {
+		panic(fmt.Errorf("compiler error: external tokens are not supported ('%s.%s')", moduleName, symbolName))
+	}
+	panic(fmt.Errorf("compiler error: unresolved exported symbol '%s.%s'", moduleName, symbolName))
+}
+
+func compileExternalUsingTemplateCall(
+	ctx *parseCompileCtx,
+	moduleName string,
+	symbolName string,
+	module *semantics.ImportedModuleSymbols,
+	callArgs *Node,
+	anchor *Node,
+) CompiledRule {
+	decl := module.ExportedTemplates[symbolName]
+	if decl == nil {
+		panic(fmt.Errorf("compiler error: unresolved exported template '%s.%s'", moduleName, symbolName))
+	}
+	body := semantics.GetTemplateBodyExpressionRoot(decl.Node)
+	if body == nil {
+		panic(fmt.Errorf("compiler error: imported template '%s.%s' has no body", moduleName, symbolName))
+	}
+	argNodes := semantics.TemplateCallArgumentNodes(callArgs)
+	if len(argNodes) != len(decl.Params) {
+		panic(fmt.Errorf("compiler error: template call '%s.%s' arity mismatch: expected %d args, got %d", moduleName, symbolName, len(decl.Params), len(argNodes)))
+	}
+	ed := newScratchLSTEditor()
+	bindings := make(map[string]*Node, len(decl.Params))
+	for i, p := range decl.Params {
+		bindings[p.Name] = buildTemplateArgumentParseRoot(ed, argNodes[i], p.Type)
+	}
+	substituted := semantics.SubstituteTemplateParameterReferences(body, bindings)
+	subCtx := *ctx
+	subCtx.rootLevel = false
+	compiled := compileParseExpression(&subCtx, substituted)
+	if g := compiled.GetGrammar(); g != nil && ctx.sourceMap != nil {
+		ctx.sourceMap[g] = anchor
+	}
+	return compiled
 }
 
 func extractNestInnerRule(ctx *parseCompileCtx, node *Node) CompiledRule {

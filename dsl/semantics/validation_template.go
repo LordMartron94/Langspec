@@ -398,3 +398,51 @@ func staticRuleAndPrattRefsFromTemplateBody(bodyRoot *Node, env *SemanticEnv, vi
 	})
 	return refs
 }
+
+/*
+StaticRuleAndPrattRefsFromTemplateCallSegment extracts parse-rule/pratt dependencies contributed
+by call arguments for explicit template invocations. This is needed for reachability because
+template expansion can bind Rule/PrattExpr parameters to identifiers that are only visible in
+call-site arguments.
+*/
+func StaticRuleAndPrattRefsFromTemplateCallSegment(segment *Node, env *SemanticEnv) []string {
+	if segment == nil || env == nil || !SegmentHasExplicitTemplateInvocation(segment) {
+		return nil
+	}
+	calleeName, _, ok := TemplateCallCalleeName(segment)
+	if !ok {
+		return nil
+	}
+	decl := env.Templates[calleeName]
+	if decl == nil {
+		return nil
+	}
+	args := TemplateCallArgsNode(segment)
+	argNodes := TemplateCallArgumentNodes(args)
+	if len(argNodes) != len(decl.Params) {
+		return nil
+	}
+
+	refs := make([]string, 0, len(argNodes))
+	for i, p := range decl.Params {
+		arg := argNodes[i]
+		if arg == nil {
+			continue
+		}
+		name := strings.TrimSpace(NodeSingleTokenContent(arg))
+		if name == "" {
+			continue
+		}
+		switch p.Type {
+		case TemplateParamRule:
+			if env.Rules[name] != nil {
+				refs = append(refs, name)
+			}
+		case TemplateParamPrattExpr:
+			if env.Pratt[name] != nil {
+				refs = append(refs, name)
+			}
+		}
+	}
+	return refs
+}

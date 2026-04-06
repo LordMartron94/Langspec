@@ -17,10 +17,14 @@ func buildTemplateArgumentParseRoot(
 	arg *Node,
 	pty semantics.TemplateParamType,
 ) *Node {
-	if arg == nil || len(arg.Tokens()) == 0 {
+	if arg == nil {
 		panic("compiler error: empty template call argument")
 	}
-	toks := arg.Tokens()
+	argSource := findTemplateArgumentSourceNode(arg)
+	if argSource == nil || len(argSource.Tokens()) == 0 {
+		panic("compiler error: empty template call argument")
+	}
+	toks := argSource.Tokens()
 	switch pty {
 	case semantics.TemplateParamToken:
 		n := ed.NewNode(dslspec.NodeParseTokenReference)
@@ -41,6 +45,35 @@ func buildTemplateArgumentParseRoot(
 	default:
 		panic(fmt.Errorf("compiler error: unknown template parameter type %v", pty))
 	}
+}
+
+func findTemplateArgumentSourceNode(arg *Node) *Node {
+	if arg == nil {
+		return nil
+	}
+	if len(arg.Tokens()) > 0 {
+		return arg
+	}
+	var best *Node
+	arg.WalkPre(func(n *Node) (bool, bool) {
+		if n == nil || len(n.Tokens()) == 0 {
+			return false, false
+		}
+		switch n.Kind() {
+		case dslspec.NodeParseTokenReference,
+			dslspec.NodeParseExpressionReference,
+			dslspec.NodeParseSymbolReference,
+			dslspec.NodeParseTemplateParameterReference,
+			dslspec.NodeParseNestPairRef:
+			best = n
+			return true, false
+		}
+		return false, false
+	})
+	if best != nil {
+		return best
+	}
+	return arg
 }
 
 func compileTemplateCallSegment(ctx *parseCompileCtx, segment *Node) CompiledRule {

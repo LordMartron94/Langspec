@@ -14,9 +14,10 @@ import (
 )
 
 type GrammarValidationState struct {
-	Package   *GrammarPackage
-	SourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
-	Symbols   *CompiledSymbolTable
+	Package         *GrammarPackage
+	SourceMap       map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
+	Symbols         *CompiledSymbolTable
+	ImportedModules map[string]*ImportedModuleSymbols
 }
 
 /* ValidationCtx is the validation stage context type for LangSpec LST validation. */
@@ -90,6 +91,13 @@ const (
 	VALIDATION_TEMPLATE_CALLEE_NOT_IDENT  ValidationCode = "V_TPL009"
 
 	VALIDATION_SYMBOL_NAME_COLLISION ValidationCode = "V_SYM001"
+
+	VALIDATION_IMPORT_DUPLICATE_ALIAS      ValidationCode = "V_IMP001"
+	VALIDATION_IMPORT_MISSING_ALIAS        ValidationCode = "V_IMP002"
+	VALIDATION_IMPORT_UNRESOLVED_MODULE    ValidationCode = "V_IMP003"
+	VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL ValidationCode = "V_IMP004"
+	VALIDATION_IMPORT_UNRESOLVED_EXPORT    ValidationCode = "V_IMP005"
+	VALIDATION_IMPORT_INVALID_USING_CALL   ValidationCode = "V_IMP006"
 )
 
 /* String returns the code string (implements fmt.Stringer). */
@@ -144,7 +152,11 @@ func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerToke
 // ------------------------------------------------------------- SYMBOL BINDING (STAGE 0)
 
 func processSymbolBinding(ctx *ValidationCtx) {
-	env := BuildSemanticEnv(ctx.RootNode, func(kind SemanticSymbolKind, name string, node *Node) {
+	var imports map[string]*ImportedModuleSymbols
+	if ctx.RunState != nil {
+		imports = ctx.RunState.ImportedModules
+	}
+	env := BuildSemanticEnvWithImports(ctx.RootNode, imports, func(kind SemanticSymbolKind, name string, node *Node) {
 		var code ValidationCode
 		var msg string
 		switch kind {
@@ -174,12 +186,186 @@ func processSymbolBinding(ctx *ValidationCtx) {
 	})
 
 	validateSymbolNameCollisions(ctx, env)
+	validateImportDefinitions(ctx)
 	validateTemplateParameterScoping(ctx, env)
 	nodeKinds := collectDeclaredParseOutputNodeKinds(ctx.RootNode)
+	validateUsingReferences(ctx, env, nodeKinds)
 	validateTemplateCallSites(ctx, env, nodeKinds)
 	validateTokenReferences(ctx, env)
 	validatePatternReferences(ctx, env)
 	validateRuleReferences(ctx, env)
+}
+
+func validateImportDefinitions(ctx *ValidationCtx) {
+	importSection := ctx.RootNode.FindFirstKind(NodeImportSection)
+	if importSection == nil {
+		return
+	}
+	seen := make(map[string]bool)
+	for _, imp := range importSection.FindAllKind(NodeImportDefinition) {
+		pathNode := imp.FindFirstKind(NodeImportPath)
+		aliasNode := imp.FindFirstKind(NodeImportAlias)
+		if pathNode == nil || aliasNode == nil {
+			ctx.ReportError(VALIDATION_IMPORT_MISSING_ALIAS.String(), "import definition must include path and alias", imp)
+			continue
+		}
+		alias := IdentifierValue(aliasNode)
+		if alias == "" {
+			ctx.ReportError(VALIDATION_IMPORT_MISSING_ALIAS.String(), "import alias cannot be empty", aliasNode)
+			continue
+		}
+		if seen[alias] {
+			ctx.ReportError(VALIDATION_IMPORT_DUPLICATE_ALIAS.String(), fmt.Sprintf("duplicate import alias '%s'", alias), aliasNode)
+			continue
+		}
+		seen[alias] = true
+	}
+}
+
+func validateUsingReferences(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}) {
+	importAliases := collectImportAliases(ctx.RootNode)
+	for _, usingRef := range ctx.RootNode.FindAllKind(NodeLexRulePatternUsing) {
+		moduleNode := usingRef.FindFirstKind(NodeModuleReference)
+		symbolNode := usingRef.FindFirstKind(NodePatternExternalPatternReference)
+		if moduleNode == nil || symbolNode == nil {
+			ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_MODULE.String(), "malformed using reference; expected using Module.Symbol", usingRef)
+			continue
+		}
+		moduleName := IdentifierValue(moduleNode)
+		symbolName := IdentifierValue(symbolNode)
+		if moduleName == "" || symbolName == "" {
+			ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_MODULE.String(), "malformed using reference; module and symbol are required", usingRef)
+			continue
+		}
+		if !importAliases[moduleName] {
+			ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_MODULE.String(), fmt.Sprintf("using references unknown import alias '%s'", moduleName), moduleNode)
+			continue
+		}
+		module, ok := env.Imports[moduleName]
+		if !ok || module == nil {
+			ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_MODULE.String(), fmt.Sprintf("import alias '%s' could not be resolved", moduleName), moduleNode)
+			continue
+		}
+
+		callArgs := usingRef.FindFirstKind(NodeParseTemplateCallArgs)
+		isLexSite := nodeHasAncestorKind(usingRef, NodeLexRule)
+		isNestPairSite := usingRef.Parent() != nil && usingRef.Parent().Kind() == NodeParseOpNest
+		isParseExpressionSite := !isLexSite && !isNestPairSite
+
+		if isLexSite {
+			if callArgs != nil {
+				ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), "lexer using-pattern does not support call arguments", usingRef)
+				continue
+			}
+			if module.ExportedPatterns[symbolName] == nil {
+				if module.ExportedRules[symbolName] != nil || module.ExportedTemplates[symbolName] != nil || module.ExportedPairs[symbolName] != nil {
+					ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), fmt.Sprintf("lexer using requires an exported pattern, got '%s.%s'", moduleName, symbolName), usingRef)
+				} else if module.ExportedPratt[symbolName] != nil || module.Tokens[symbolName] != nil {
+					ctx.ReportError(VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL.String(), fmt.Sprintf("external symbol '%s.%s' is not supported here", moduleName, symbolName), usingRef)
+				} else {
+					ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_EXPORT.String(), fmt.Sprintf("unresolved exported symbol '%s.%s'", moduleName, symbolName), usingRef)
+				}
+			}
+			continue
+		}
+
+		if isNestPairSite {
+			if callArgs != nil {
+				ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), "nest pair using does not support call arguments", usingRef)
+				continue
+			}
+			if module.ExportedPairs[symbolName] == nil {
+				if module.ExportedRules[symbolName] != nil || module.ExportedTemplates[symbolName] != nil || module.ExportedPatterns[symbolName] != nil {
+					ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), fmt.Sprintf("nest using requires an exported pair, got '%s.%s'", moduleName, symbolName), usingRef)
+				} else if module.ExportedPratt[symbolName] != nil || module.Tokens[symbolName] != nil {
+					ctx.ReportError(VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL.String(), fmt.Sprintf("external symbol '%s.%s' is not supported here", moduleName, symbolName), usingRef)
+				} else {
+					ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_EXPORT.String(), fmt.Sprintf("unresolved exported symbol '%s.%s'", moduleName, symbolName), usingRef)
+				}
+			}
+			continue
+		}
+
+		if isParseExpressionSite {
+			if callArgs != nil {
+				decl := module.ExportedTemplates[symbolName]
+				if decl == nil {
+					if module.ExportedRules[symbolName] != nil || module.ExportedPairs[symbolName] != nil || module.ExportedPatterns[symbolName] != nil {
+						ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), fmt.Sprintf("only templates can be invoked with call arguments, got '%s.%s'", moduleName, symbolName), usingRef)
+					} else if module.ExportedPratt[symbolName] != nil || module.Tokens[symbolName] != nil {
+						ctx.ReportError(VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL.String(), fmt.Sprintf("external symbol '%s.%s' is not supported", moduleName, symbolName), usingRef)
+					} else {
+						ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_EXPORT.String(), fmt.Sprintf("unresolved exported symbol '%s.%s'", moduleName, symbolName), usingRef)
+					}
+					continue
+				}
+				args := TemplateCallArgumentNodes(callArgs)
+				if len(args) != len(decl.Params) {
+					ctx.ReportError(VALIDATION_TEMPLATE_CALL_ARITY.String(),
+						fmt.Sprintf("template '%s.%s' expects %d argument(s), got %d", moduleName, symbolName, len(decl.Params), len(args)),
+						callArgs)
+					continue
+				}
+				for i, p := range decl.Params {
+					if p.Type == TemplateParamPrattExpr {
+						ctx.ReportError(VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL.String(), fmt.Sprintf("external template '%s.%s' cannot use PrattExpr parameter currently", moduleName, symbolName), usingRef)
+						break
+					}
+					validateTemplateCallArg(ctx, env, nodeKinds, p.Type, args[i])
+				}
+				continue
+			}
+
+			if module.ExportedTemplates[symbolName] != nil {
+				ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), fmt.Sprintf("template '%s.%s' must be invoked as using %s.%s(...)", moduleName, symbolName, moduleName, symbolName), usingRef)
+				continue
+			}
+			if module.ExportedRules[symbolName] != nil {
+				continue
+			}
+			if module.ExportedPairs[symbolName] != nil || module.ExportedPatterns[symbolName] != nil {
+				ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), fmt.Sprintf("parse using requires an exported rule or template call, got '%s.%s'", moduleName, symbolName), usingRef)
+				continue
+			}
+			if module.ExportedPratt[symbolName] != nil || module.Tokens[symbolName] != nil {
+				ctx.ReportError(VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL.String(), fmt.Sprintf("external symbol '%s.%s' is not supported", moduleName, symbolName), usingRef)
+				continue
+			}
+			ctx.ReportError(VALIDATION_IMPORT_UNRESOLVED_EXPORT.String(), fmt.Sprintf("unresolved exported symbol '%s.%s'", moduleName, symbolName), usingRef)
+			continue
+		}
+
+		ctx.ReportError(VALIDATION_IMPORT_INVALID_USING_CALL.String(), "using reference appears in unsupported location", usingRef)
+	}
+}
+
+func nodeHasAncestorKind(node *Node, kind LangSpecParserNodeKind) bool {
+	for cur := node; cur != nil; cur = cur.Parent() {
+		if cur.Kind() == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func collectImportAliases(root *Node) map[string]bool {
+	out := make(map[string]bool)
+	importSection := root.FindFirstKind(NodeImportSection)
+	if importSection == nil {
+		return out
+	}
+	for _, imp := range importSection.FindAllKind(NodeImportDefinition) {
+		aliasNode := imp.FindFirstKind(NodeImportAlias)
+		if aliasNode == nil {
+			continue
+		}
+		alias := IdentifierValue(aliasNode)
+		if alias == "" {
+			continue
+		}
+		out[alias] = true
+	}
+	return out
 }
 
 // validateSymbolNameCollisions ensures no name is declared in more than one symbol table
@@ -1334,6 +1520,7 @@ func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	container.WalkPre(func(node *Node) (bool, bool) {
 		if node != nil && node.Kind() == NodeParseSegment {
 			if inner, _, ok := ExpandedTemplateBodyRootForCallSegment(node, env); ok {
+				refs = append(refs, StaticRuleAndPrattRefsFromTemplateCallSegment(node, env)...)
 				refs = append(refs, staticRuleAndPrattRefsFromTemplateBody(inner, env, make(map[string]bool))...)
 				return false, false
 			}
@@ -1559,6 +1746,17 @@ func extractLexPattern(ruleNode *Node) (string, *Node) {
 	if varRef := ruleNode.FindFirstKind(NodePatternRef); varRef != nil {
 		if name := PatternRefTargetName(varRef); name != "" {
 			return "ref:" + name, varRef
+		}
+	}
+	if usingRef := ruleNode.FindFirstKind(NodeLexRulePatternUsing); usingRef != nil {
+		moduleNode := usingRef.FindFirstKind(NodeModuleReference)
+		symbolNode := usingRef.FindFirstKind(NodePatternExternalPatternReference)
+		if moduleNode != nil && symbolNode != nil {
+			moduleName := IdentifierValue(moduleNode)
+			symbolName := IdentifierValue(symbolNode)
+			if moduleName != "" && symbolName != "" {
+				return "using:" + moduleName + "." + symbolName, usingRef
+			}
 		}
 	}
 	if regexNode := ruleNode.FindFirstKind(NodeLexRulePattern); regexNode != nil {

@@ -28,6 +28,24 @@ type SemanticEnv struct {
 
 	LocalPatterns map[string]bool
 	LocalPratt    map[string]bool
+
+	Imports map[string]*ImportedModuleSymbols
+}
+
+type ImportedModuleSymbols struct {
+	Alias string
+	Path  string
+
+	Root   *Node
+	Tokens map[string]*Node
+
+	ExportedPatterns  map[string]*Node
+	ExportedRules     map[string]*Node
+	ExportedPairs     map[string]*PairDecl
+	ExportedTemplates map[string]*TemplateDecl
+	ExportedPratt     map[string]*Node
+
+	IgnoreRoles map[string]bool
 }
 
 /*
@@ -39,6 +57,10 @@ type OnDuplicateFunc func(kind SemanticSymbolKind, name string, node *Node)
 
 /* BuildSemanticEnv builds the semantic environment from the LST root. When onDuplicate is non-nil and a duplicate symbol is found, it is called with kind, name, and the duplicate node. */
 func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
+	return BuildSemanticEnvWithImports(root, nil, onDuplicate)
+}
+
+func BuildSemanticEnvWithImports(root *Node, imports map[string]*ImportedModuleSymbols, onDuplicate OnDuplicateFunc) *SemanticEnv {
 	env := &SemanticEnv{
 		Tokens:        make(map[string]*Node),
 		Patterns:      make(map[string]*Node),
@@ -48,6 +70,7 @@ func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 		Pratt:         make(map[string]*Node),
 		LocalPatterns: make(map[string]bool),
 		LocalPratt:    make(map[string]bool),
+		Imports:       make(map[string]*ImportedModuleSymbols),
 	}
 
 	buildEnvTokens(root, env, onDuplicate)
@@ -56,8 +79,21 @@ func BuildSemanticEnv(root *Node, onDuplicate OnDuplicateFunc) *SemanticEnv {
 	buildEnvPairs(root, env, onDuplicate)
 	buildEnvTemplates(root, env, onDuplicate)
 	buildEnvPratt(root, env, onDuplicate)
+	buildEnvImports(env, imports)
 
 	return env
+}
+
+func buildEnvImports(env *SemanticEnv, imports map[string]*ImportedModuleSymbols) {
+	if imports == nil {
+		return
+	}
+	for alias, module := range imports {
+		if alias == "" || module == nil {
+			continue
+		}
+		env.Imports[alias] = module
+	}
 }
 
 func buildEnvTokens(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
@@ -189,4 +225,12 @@ func buildEnvPratt(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 /* PatternRefTargetName returns the raw lexeme text of a pattern reference node (the referenced name). */
 func PatternRefTargetName(patternRef *Node) string {
 	return string(patternRef.Tokens()[0].Raw)
+}
+
+func ResolveImportedModule(env *SemanticEnv, alias string) (*ImportedModuleSymbols, bool) {
+	if env == nil || alias == "" {
+		return nil, false
+	}
+	module, ok := env.Imports[alias]
+	return module, ok
 }

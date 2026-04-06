@@ -78,6 +78,10 @@ PATTERN {
 	pat_TokKWTemplate : "template";
 	pat_TokKWCall : "call";
 	pat_TokKWRule : "rule";
+	pat_TokKWImport : "IMPORT";
+	pat_TokKWExport : "export";
+	pat_TokKWAs : "as";
+	pat_TokKWUsing : "using";
 	pat_TokTypeToken : "Token";
 	pat_TokTypeRule : "Rule";
 	pat_TokTypeNode : "Node";
@@ -99,10 +103,13 @@ PATTERN {
 
 LEX {
 	state INITIAL {
+		2 TokKWAs           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWAs          ;
 		2 TokKWCall         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWCall        ;
+		2 TokKWExport       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWExport      ;
 		2 TokKWFalse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWFalse       ;
 		2 TokKWIgnore       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWIgnore      ;
 		2 TokKWImplicit     -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWImplicit    ;
+		2 TokKWImport       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWImport      ;
 		2 TokKWInfix        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWInfix       ;
 		2 TokKWLSpec        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLSpec       ;
 		2 TokKWLex          -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWLex         ;
@@ -128,6 +135,7 @@ LEX {
 		2 TokKWTool         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTool        ;
 		2 TokKWTransparent  -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTransparent ;
 		2 TokKWTrue         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWTrue        ;
+		2 TokKWUsing        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWUsing       ;
 		2 TokKWVirtual      -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWVirtual     ;
 		2 TokTypeNode       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokTypeNode      ;
 		2 TokTypePair       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokTypePair      ;
@@ -196,10 +204,6 @@ PARSE {
 		)*
 	}
 	
-	rule DUMMY_CHOICE_FOR_PATTERNS -> transparent gr_DUMMY_CHOICE_FOR_PATTERNS {
-		DUMMY_LOCAL_VAR_FOR_PATTERNS | NodePatternDefName : TokIdentifier
-	};
-	
 	rule DUMMY_CHOICE_FOR_PRAGMA_VALUES -> transparent gr_DUMMY_CHOICE_FOR_PRAGMA_VALUES {
 		PRAGMA_VALUE
 		| NodePragmaValue : (
@@ -220,13 +224,8 @@ PARSE {
 	
 	rule DUMMY_CHOICE_PARSE_BLOCK_LIST -> transparent gr_DUMMY_CHOICE_PARSE_BLOCK_LIST {
 		(
-			DUMMY_CHOICE_PARSE_BLOCK_CHOICE
+			PARSE_BLOCK
 		)*
-	};
-	
-	rule DUMMY_LOCAL_VAR_FOR_PATTERNS -> transparent gr_DUMMY_LOCAL_VAR_FOR_PATTERNS {
-		NodeLocalVariable : TokKWLocal
-		NodePatternDefName : TokIdentifier
 	};
 	
 	rule DUMMY_CHOICE_IDENT_MAP_BASE -> transparent gr_DUMMY_CHOICE_IDENT_MAP_BASE {
@@ -253,6 +252,31 @@ PARSE {
 		NodeVersion : TokVersion
 	};
 	
+	rule IMPORT_DEFINITION -> NodeImportDefinition sync (TokSemicolon) {
+		NodeImportPath : TokStringLiteral
+		virtual TokKWAs
+		NodeImportAlias : TokIdentifier
+		virtual TokSemicolon
+	};
+	
+	rule IMPORT_DEFINITION_LIST -> transparent gr_IMPORT_DEFINITION_LIST sync (TokSemicolon) {
+		(
+			IMPORT_DEFINITION
+		)*
+	};
+	
+	rule IMPORT_SECTION -> NodeImportSection sync (TokSemicolon TokBraceClose) {
+		NodeImportKeyword : TokKWImport
+		IMPORT_SECTION_BLOCK_NEST
+		virtual TokSemicolon?
+	};
+	
+	rule IMPORT_SECTION_BLOCK_NEST -> transparent gr_IMPORT_SECTION_BLOCK_NEST sync (TokBraceClose) {
+		nest @GenPair_TokBraceOpen_TokBraceClose {
+			IMPORT_DEFINITION_LIST
+		}
+	};
+	
 	rule LEX_RULE -> NodeLexRule sync (TokSemicolon) {
 		NodeLexRulePriority : TokInteger?
 		NodeLexRuleTokenName : TokIdentifier
@@ -274,7 +298,31 @@ PARSE {
 	};
 	
 	rule LEX_RULE_PATTERN -> transparent gr_LEX_RULE_PATTERN {
-		PATTERN_REF | NodeLexRulePattern : TokRegexLiteral
+		PATTERN_REF | NodeLexRulePattern : TokRegexLiteral | LEX_RULE_PATTERN_USING_LEX
+	};
+	
+	rule LEX_RULE_PATTERN_USING_LEX -> NodeLexRulePatternUsing {
+		virtual TokKWUsing
+		NodeModuleReference : TokIdentifier
+		virtual TokDot
+		NodePatternExternalPatternReference : TokIdentifier
+		PARSE_TEMPLATE_CALL_ARGS_USING_LEX?
+	};
+	
+	rule LEX_RULE_PATTERN_USING_NEST -> NodeLexRulePatternUsing {
+		virtual TokKWUsing
+		NodeModuleReference : TokIdentifier
+		virtual TokDot
+		NodePatternExternalPatternReference : TokIdentifier
+		PARSE_TEMPLATE_CALL_ARGS_USING_NEST?
+	};
+	
+	rule LEX_RULE_PATTERN_USING_PARSE_SEGMENT -> NodeLexRulePatternUsing {
+		virtual TokKWUsing
+		NodeModuleReference : TokIdentifier
+		virtual TokDot
+		NodePatternExternalPatternReference : TokIdentifier
+		PARSE_TEMPLATE_CALL_ARGS_USING_PARSE_SEGMENT?
 	};
 	
 	rule LEX_RULE_STATE_MUTATION -> NodeLexRuleStateMutation sync (TokBracketClose) {
@@ -321,6 +369,13 @@ PARSE {
 		nest @GenPair_TokMetaSection_TokMetaSection {
 			META_KEY_VALUE_PAIR
 		}
+	};
+	
+	rule PARSE_BLOCK -> NodeParseBlock {
+		NodeExported : TokKWExport?
+		(
+			DUMMY_CHOICE_PARSE_BLOCK_CHOICE
+		)
 	};
 	
 	rule PARSE_EXPRESSION -> transparent gr_PARSE_EXPRESSION {
@@ -397,6 +452,7 @@ PARSE {
 	
 	rule PARSE_OP_NEST_CHOICE -> transparent gr_PARSE_OP_NEST_CHOICE {
 		PARSE_OP_NEST_EXPLICIT
+		| LEX_RULE_PATTERN_USING_NEST
 		| NodeParseNestPairRef : TokPairReference
 		| NodeParseTemplateParameterReference : TokParameter
 	};
@@ -461,6 +517,7 @@ PARSE {
 		PARSE_OP_SUPPRESS
 		| PARSE_OP_NEST
 		| PARSE_GROUP
+		| LEX_RULE_PATTERN_USING_PARSE_SEGMENT
 		| PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT
 		| PARSE_SEGMENT_IDENT_MAPPING_OR_CALL
 	};
@@ -490,16 +547,146 @@ PARSE {
 	rule PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT -> NodeParseSegment {
 		NodeParseTemplateCallKeyword : TokKWCall
 		NodeParseTemplateReference : TokIdentifier
-		PARSE_TEMPLATE_CALL_ARGS
+		PARSE_TEMPLATE_CALL_ARGS_SEGMENT
 	};
 	
 	rule PARSE_TEMPLATE_BODY -> NodeParseTemplateBody sync (TokBraceClose) {
 		nest @GenPair_TokBraceOpen_TokBraceClose PARSE_EXPRESSION
 	};
 	
-	rule PARSE_TEMPLATE_CALL_ARGS -> NodeParseTemplateCallArgs sync (TokParenClose) {
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT {
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+		PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX {
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+		PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST {
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+		PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT {
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+		PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT {
+		virtual TokComma
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX {
+		virtual TokComma
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST {
+		virtual TokComma
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT {
+		virtual TokComma
+		(
+			NodeParseTemplateCallArgument : (
+				NodeParseTemplateCallArgument : TokIdentifier
+				| NodeParseTemplateCallArgument : TokParameter
+				| NodeParseTemplateCallArgument : TokPairReference
+			)
+		)
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT {
+		(
+			PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT
+		)*
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX {
+		(
+			PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX
+		)*
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST {
+		(
+			PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST
+		)*
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT -> transparent gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT {
+		(
+			PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT
+		)*
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_SEGMENT -> NodeParseTemplateCallArgs sync (TokParenClose) {
 		nest @GenPair_TokParenOpen_TokParenClose {
-			TEMPLATE_CALL_ARGUMENT_LIST_DUMMY
+			PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT
+		}
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_USING_LEX -> NodeParseTemplateCallArgs sync (TokParenClose) {
+		nest @GenPair_TokParenOpen_TokParenClose {
+			PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX
+		}
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_USING_NEST -> NodeParseTemplateCallArgs sync (TokParenClose) {
+		nest @GenPair_TokParenOpen_TokParenClose {
+			PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST
+		}
+	};
+	
+	rule PARSE_TEMPLATE_CALL_ARGS_USING_PARSE_SEGMENT -> NodeParseTemplateCallArgs sync (TokParenClose) {
+		nest @GenPair_TokParenOpen_TokParenClose {
+			PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT
 		}
 	};
 	
@@ -563,8 +750,9 @@ PARSE {
 	
 	rule PATTERN_DEFINITION -> NodePatternDefinition sync (TokSemicolon) {
 		(
-			DUMMY_CHOICE_FOR_PATTERNS
-		)
+			PREFIX_DUMMY_RULE_PATTERNS
+		)?
+		NodePatternDefName : TokIdentifier
 		virtual TokColon
 		PATTERN_EXPRESSION
 		virtual TokSemicolon
@@ -892,10 +1080,17 @@ PARSE {
 		}
 	};
 	
+	rule PREFIX_DUMMY_RULE_PATTERNS -> transparent gr_PREFIX_DUMMY_RULE_PATTERNS {
+		NodeLocalVariable : TokKWLocal | NodeExported : TokKWExport
+	};
+	
 	rule PROGRAM -> NodeProgram {
 		HEADER
 		(
 			PRAGMA_SECTION
+		)?
+		(
+			IMPORT_SECTION
 		)?
 		(
 			PATTERN_SECTION
@@ -1058,33 +1253,5 @@ PARSE {
 	rule TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT -> transparent gr_TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT {
 		virtual TokComma
 		PARSE_TEMPLATE_PARAMETER
-	};
-	
-	rule TEMPLATE_CALL_ARGUMENT_LIST_DUMMY -> transparent gr_TEMPLATE_CALL_ARGUMENT_LIST_DUMMY {
-		(
-			NodeParseTemplateCallArgument : (
-				NodeParseTemplateCallArgument : TokIdentifier
-				| NodeParseTemplateCallArgument : TokParameter
-				| NodeParseTemplateCallArgument : TokPairReference
-			)
-		)
-		TEMPLATE_CALL_ARGUMENT_LIST_TAIL
-	};
-	
-	rule TEMPLATE_CALL_ARGUMENT_LIST_TAIL -> transparent gr_TEMPLATE_CALL_ARGUMENT_LIST_TAIL {
-		(
-			TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT
-		)*
-	};
-	
-	rule TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT -> transparent gr_TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT {
-		virtual TokComma
-		(
-			NodeParseTemplateCallArgument : (
-				NodeParseTemplateCallArgument : TokIdentifier
-				| NodeParseTemplateCallArgument : TokParameter
-				| NodeParseTemplateCallArgument : TokPairReference
-			)
-		)
 	};
 }

@@ -299,13 +299,20 @@ func LangSpecCompilerCompile(
 	}
 
 	// 3. First Validation Pass
+	importGraph, importResolveErr := resolveImportGraph(compiler, sourceFile, rootNode)
+	if importResolveErr != nil {
+		return result, importResolveErr
+	}
+	preValidationState := &semantics.GrammarValidationState{
+		ImportedModules: importGraph.byAlias,
+	}
 	validationEntries, validationErr := validation.LSTValidatorRun(
 		compiler.validatorConfig,
 		rootNode,
 		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
 			return stage.Order < 4
 		},
-		(*semantics.GrammarValidationState)(nil),
+		preValidationState,
 	)
 
 	result.ValidationEntries = validationEntries
@@ -320,7 +327,7 @@ func LangSpecCompilerCompile(
 	}
 
 	// 4. Compilation & Post-Validation
-	compiled := compileTree(compiler, result.RootNode)
+	compiled := compileTree(compiler, result.RootNode, sourceFile, importGraph)
 
 	// Attach lowered artifacts as soon as compileTree succeeds so callers (e.g. tests) can
 	// inspect lexer/parser/grammar even when stage-4+ validation or bootstrap fails later.

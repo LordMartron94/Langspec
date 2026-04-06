@@ -130,6 +130,7 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 	for name := range env.Tokens {
 		ts[name] = struct{}{}
 	}
+	collectReferencedImportedTokens(root, env, ts)
 	ts[eofTokenName] = struct{}{}
 
 	if lex := root.FindFirstKind(NodeLexSection); lex != nil {
@@ -175,6 +176,67 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 	nk["ERROR_NODE"] = struct{}{}
 
 	return sortedStringKeys(ts), sortedStringKeys(rs), sortedStringKeys(nk)
+}
+
+func collectReferencedImportedTokens(root *Node, env *SemanticEnv, ts map[string]struct{}) {
+	if root == nil || env == nil {
+		return
+	}
+	for _, usingRef := range root.FindAllKind(NodeLexRulePatternUsing) {
+		moduleNode := usingRef.FindFirstKind(NodeModuleReference)
+		symbolNode := usingRef.FindFirstKind(NodePatternExternalPatternReference)
+		if moduleNode == nil || symbolNode == nil {
+			continue
+		}
+		moduleName := IdentifierValue(moduleNode)
+		symbolName := IdentifierValue(symbolNode)
+		module, ok := env.Imports[moduleName]
+		if !ok || module == nil {
+			continue
+		}
+		if pairDecl := module.ExportedPairs[symbolName]; pairDecl != nil {
+			ts[pairDecl.OpenToken] = struct{}{}
+			ts[pairDecl.CloseToken] = struct{}{}
+			continue
+		}
+		if ruleNode := module.ExportedRules[symbolName]; ruleNode != nil {
+			localModuleEnv := BuildSemanticEnv(module.Root, nil)
+			body := ruleNode.FindFirstKind(NodeParseRuleBody)
+			if body != nil {
+				collectTokenRefsFromParseNode(body, localModuleEnv.Pairs, ts)
+			}
+			continue
+		}
+		if tplDecl := module.ExportedTemplates[symbolName]; tplDecl != nil && tplDecl.Node != nil {
+			body := tplDecl.Node.FindFirstKind(NodeParseTemplateBody)
+			if body != nil {
+				localModuleEnv := BuildSemanticEnv(module.Root, nil)
+				collectTokenRefsFromParseNode(body, localModuleEnv.Pairs, ts)
+			}
+		}
+	}
+}
+
+func collectTokenRefsFromParseNode(node *Node, pairs map[string]*PairDecl, ts map[string]struct{}) {
+	if node == nil {
+		return
+	}
+	node.WalkPre(func(current *Node) (bool, bool) {
+		switch current.Kind() {
+		case NodeParseTokenReference, NodeParseNestOpenToken, NodeParseNestCloseToken:
+			name := NodeSingleTokenContent(current)
+			if name != "" {
+				ts[name] = struct{}{}
+			}
+		case NodeParseNestPairRef:
+			pairName := PairNameFromNestPairRefNode(current)
+			if pair := pairs[pairName]; pair != nil {
+				ts[pair.OpenToken] = struct{}{}
+				ts[pair.CloseToken] = struct{}{}
+			}
+		}
+		return false, false
+	})
 }
 
 func sortedStringKeys(m map[string]struct{}) []string {

@@ -283,5 +283,9 @@ var LangSpecEditorManifest = toolchain.SemanticManifest[dsl.LangSpecLexerTokenTy
 				dslspec.TokPairReference: {"constant.language.token-pair-reference"},
 			},
 		},
+		dslspec.NodeImportPath:                      {Scopes: []string{"string.quoted.double.import"}},
+		dslspec.NodeImportAlias:                     {Scopes: []string{"entity.name.import.alias"}},
+		dslspec.NodeModuleReference:                 {Scopes: []string{"variable.other.import.alias"}},
+		dslspec.NodePatternExternalPatternReference: {Scopes: []string{"variable.other.member.pattern-reference"}},
 	},
 }

@@ -26,58 +26,62 @@ const (
 	TokEqualsOperator Token = 14
 	TokIdentifier Token = 15
 	TokInteger Token = 16
-	TokKWCall Token = 17
-	TokKWFalse Token = 18
-	TokKWIgnore Token = 19
-	TokKWImplicit Token = 20
-	TokKWInfix Token = 21
-	TokKWLSpec Token = 22
-	TokKWLex Token = 23
-	TokKWLocal Token = 24
-	TokKWNest Token = 25
-	TokKWPair Token = 26
-	TokKWParse Token = 27
-	TokKWPattern Token = 28
-	TokKWPop Token = 29
-	TokKWPostfix Token = 30
-	TokKWPragma Token = 31
-	TokKWPratt Token = 32
-	TokKWPrecedence Token = 33
-	TokKWPredict Token = 34
-	TokKWPrefix Token = 35
-	TokKWPrimary Token = 36
-	TokKWPush Token = 37
-	TokKWRule Token = 38
-	TokKWSet Token = 39
-	TokKWState Token = 40
-	TokKWSync Token = 41
-	TokKWTemplate Token = 42
-	TokKWTool Token = 43
-	TokKWTransparent Token = 44
-	TokKWTrue Token = 45
-	TokKWVirtual Token = 46
-	TokLineComment Token = 47
-	TokMetaSection Token = 48
-	TokNegation Token = 49
-	TokOptional Token = 50
-	TokPairReference Token = 51
-	TokParameter Token = 52
-	TokParenClose Token = 53
-	TokParenOpen Token = 54
-	TokPipe Token = 55
-	TokPlus Token = 56
-	TokRange Token = 57
-	TokRegexLiteral Token = 58
-	TokSemicolon Token = 59
-	TokStar Token = 60
-	TokStringLiteral Token = 61
-	TokTypeNode Token = 62
-	TokTypePair Token = 63
-	TokTypePrattExpr Token = 64
-	TokTypeRule Token = 65
-	TokTypeToken Token = 66
-	TokVersion Token = 67
-	TokWhitespace Token = 68
+	TokKWAs Token = 17
+	TokKWCall Token = 18
+	TokKWExport Token = 19
+	TokKWFalse Token = 20
+	TokKWIgnore Token = 21
+	TokKWImplicit Token = 22
+	TokKWImport Token = 23
+	TokKWInfix Token = 24
+	TokKWLSpec Token = 25
+	TokKWLex Token = 26
+	TokKWLocal Token = 27
+	TokKWNest Token = 28
+	TokKWPair Token = 29
+	TokKWParse Token = 30
+	TokKWPattern Token = 31
+	TokKWPop Token = 32
+	TokKWPostfix Token = 33
+	TokKWPragma Token = 34
+	TokKWPratt Token = 35
+	TokKWPrecedence Token = 36
+	TokKWPredict Token = 37
+	TokKWPrefix Token = 38
+	TokKWPrimary Token = 39
+	TokKWPush Token = 40
+	TokKWRule Token = 41
+	TokKWSet Token = 42
+	TokKWState Token = 43
+	TokKWSync Token = 44
+	TokKWTemplate Token = 45
+	TokKWTool Token = 46
+	TokKWTransparent Token = 47
+	TokKWTrue Token = 48
+	TokKWUsing Token = 49
+	TokKWVirtual Token = 50
+	TokLineComment Token = 51
+	TokMetaSection Token = 52
+	TokNegation Token = 53
+	TokOptional Token = 54
+	TokPairReference Token = 55
+	TokParameter Token = 56
+	TokParenClose Token = 57
+	TokParenOpen Token = 58
+	TokPipe Token = 59
+	TokPlus Token = 60
+	TokRange Token = 61
+	TokRegexLiteral Token = 62
+	TokSemicolon Token = 63
+	TokStar Token = 64
+	TokStringLiteral Token = 65
+	TokTypeNode Token = 66
+	TokTypePair Token = 67
+	TokTypePrattExpr Token = 68
+	TokTypeRule Token = 69
+	TokTypeToken Token = 70
+	TokVersion Token = 71
+	TokWhitespace Token = 72
 )
 
 var TokenNames = [...]string{
@@ -96,10 +100,13 @@ var TokenNames = [...]string{
 	"TokEqualsOperator",
 	"TokIdentifier",
 	"TokInteger",
+	"TokKWAs",
 	"TokKWCall",
+	"TokKWExport",
 	"TokKWFalse",
 	"TokKWIgnore",
 	"TokKWImplicit",
+	"TokKWImport",
 	"TokKWInfix",
 	"TokKWLSpec",
 	"TokKWLex",
@@ -125,6 +132,7 @@ var TokenNames = [...]string{
 	"TokKWTool",
 	"TokKWTransparent",
 	"TokKWTrue",
+	"TokKWUsing",
 	"TokKWVirtual",
 	"TokLineComment",
 	"TokMetaSection",
@@ -172,351 +180,395 @@ func init() {
 type Node uint32
 
 const (
-	DUMMY_CHOICE_FOR_PATTERNS Node = 1
-	DUMMY_CHOICE_FOR_PRAGMA_VALUES Node = 2
-	DUMMY_CHOICE_IDENT_MAP_BASE Node = 3
-	DUMMY_CHOICE_NEST Node = 4
-	DUMMY_CHOICE_PARSE_BLOCK_CHOICE Node = 5
-	DUMMY_CHOICE_PARSE_BLOCK_LIST Node = 6
-	DUMMY_CHOICE_VIRTUAL_MAPPING Node = 7
-	DUMMY_LOCAL_VAR_FOR_PATTERNS Node = 8
-	ERROR_NODE Node = 9
-	HEADER Node = 10
-	HEADER_CONTENT Node = 11
-	LEX_RULE Node = 12
-	LEX_RULE_LIST Node = 13
-	LEX_RULE_PATTERN Node = 14
-	LEX_RULE_STATE_MUTATION Node = 15
-	LEX_RULE_STATE_MUTATION_KIND Node = 16
-	LEX_SECTION Node = 17
-	LEX_SECTION_BLOCK_NEST Node = 18
-	META_KEY_VALUE_PAIR Node = 19
-	META_KEY_VALUE_SEQUENCE Node = 20
-	META_SECTION Node = 21
-	NodeCharLiteral Node = 22
-	NodeDSLName Node = 23
-	NodeHeader Node = 24
-	NodeLSPECName Node = 25
-	NodeLexKeyword Node = 26
-	NodeLexRule Node = 27
-	NodeLexRulePattern Node = 28
-	NodeLexRulePriority Node = 29
-	NodeLexRuleRole Node = 30
-	NodeLexRuleStateMutation Node = 31
-	NodeLexRuleTokenName Node = 32
-	NodeLexSection Node = 33
-	NodeLocalVariable Node = 34
-	NodeMetaKey Node = 35
-	NodeMetaKeyValuePair Node = 36
-	NodeMetaSection Node = 37
-	NodeMetaValue Node = 38
-	NodeParseExpressionReference Node = 39
-	NodeParseGroup Node = 40
-	NodeParseIgnoreKeyword Node = 41
-	NodeParseIgnoreRole Node = 42
-	NodeParseIgnoreSection Node = 43
-	NodeParseKeyword Node = 44
-	NodeParseModifierPredict Node = 45
-	NodeParseNestBody Node = 46
-	NodeParseNestCloseToken Node = 47
-	NodeParseNestOpenToken Node = 48
-	NodeParseNestPairRef Node = 49
-	NodeParseNodeName Node = 50
-	NodeParseOpNest Node = 51
-	NodeParseOpSuppress Node = 52
-	NodeParsePair Node = 53
-	NodeParsePairIdentifier Node = 54
-	NodeParseRule Node = 55
-	NodeParseRuleBody Node = 56
-	NodeParseRuleName Node = 57
-	NodeParseSection Node = 58
-	NodeParseSectionBody Node = 59
-	NodeParseSegment Node = 60
-	NodeParseSymbolReference Node = 61
-	NodeParseTemplate Node = 62
-	NodeParseTemplateBody Node = 63
-	NodeParseTemplateCallArgs Node = 64
-	NodeParseTemplateCallArgument Node = 65
-	NodeParseTemplateCallKeyword Node = 66
-	NodeParseTemplateIdentifier Node = 67
-	NodeParseTemplateParameter Node = 68
-	NodeParseTemplateParameterIdentifier Node = 69
-	NodeParseTemplateParameterList Node = 70
-	NodeParseTemplateParameterReference Node = 71
-	NodeParseTemplateParameterType Node = 72
-	NodeParseTemplateReference Node = 73
-	NodeParseTokenReference Node = 74
-	NodePatternAny Node = 75
-	NodePatternClass Node = 76
-	NodePatternClassItem Node = 77
-	NodePatternDefName Node = 78
-	NodePatternDefinition Node = 79
-	NodePatternGroup Node = 80
-	NodePatternKeyword Node = 81
-	NodePatternRange Node = 82
-	NodePatternRef Node = 83
-	NodePatternRegEx Node = 84
-	NodePatternSection Node = 85
-	NodePragmaBlock Node = 86
-	NodePragmaBlockKey Node = 87
-	NodePragmaBlockKeyPrefix Node = 88
-	NodePragmaBlockKeySegment Node = 89
-	NodePragmaConfiguration Node = 90
-	NodePragmaKey Node = 91
-	NodePragmaKeyword Node = 92
-	NodePragmaSection Node = 93
-	NodePragmaValue Node = 94
-	NodePrattExprBody Node = 95
-	NodePrattExprDef Node = 96
-	NodePrattExprName Node = 97
-	NodePrattImplicit Node = 98
-	NodePrattImplicitBody Node = 99
-	NodePrattImplicitDef Node = 100
-	NodePrattInfix Node = 101
-	NodePrattInfixBody Node = 102
-	NodePrattKeyword Node = 103
-	NodePrattLeftPrecedenceValue Node = 104
-	NodePrattOperatorDef Node = 105
-	NodePrattPostfix Node = 106
-	NodePrattPostfixBody Node = 107
-	NodePrattPrefix Node = 108
-	NodePrattPrefixBody Node = 109
-	NodePrattPrimary Node = 110
-	NodePrattPrimaryBody Node = 111
-	NodePrattPrimaryRef Node = 112
-	NodePrattRightPrecedenceValue Node = 113
-	NodePrattSection Node = 114
-	NodePredictLookahead Node = 115
-	NodePredictLookaheadList Node = 116
-	NodePredictOffset Node = 117
-	NodePredictToken Node = 118
-	NodeProgram Node = 119
-	NodeRepetitionBounds Node = 120
-	NodeRepetitionMax Node = 121
-	NodeRepetitionMin Node = 122
-	NodeRuleModifierSync Node = 123
-	NodeRuleModifierTransparent Node = 124
-	NodeStateDefinition Node = 125
-	NodeStateDefinitionBody Node = 126
-	NodeStateDefinitionList Node = 127
-	NodeStateKeyword Node = 128
-	NodeStateList Node = 129
-	NodeStateMutationArgumentList Node = 130
-	NodeStateMutationPop Node = 131
-	NodeStateMutationPopAmount Node = 132
-	NodeStateMutationPush Node = 133
-	NodeStateMutationSet Node = 134
-	NodeStateReference Node = 135
-	NodeStringArray Node = 136
-	NodeStringLiteral Node = 137
-	NodeSyncBlock Node = 138
-	NodeSyncToken Node = 139
-	NodeVersion Node = 140
-	PARSE_EXPRESSION_BP_10 Node = 141
-	PARSE_EXPRESSION_BP_20 Node = 142
-	PARSE_EXPRESSION_BP_30 Node = 143
-	PARSE_EXPRESSION_BP_40 Node = 144
-	PARSE_GROUP Node = 145
-	PARSE_IGNORE_ROLE_LIST Node = 146
-	PARSE_IGNORE_SECTION Node = 147
-	PARSE_IGNORE_SECTION_BLOCK_NEST Node = 148
-	PARSE_MODIFIER_PREDICT Node = 149
-	PARSE_NEST_BODY Node = 150
-	PARSE_OP_NEST Node = 151
-	PARSE_OP_NEST_CHOICE Node = 152
-	PARSE_OP_NEST_EXPLICIT Node = 153
-	PARSE_OP_SUPPRESS Node = 154
-	PARSE_PAIR_DECLARATION Node = 155
-	PARSE_RULE Node = 156
-	PARSE_RULE_BODY Node = 157
-	PARSE_SECTION Node = 158
-	PARSE_SECTION_BLOCK_NEST Node = 159
-	PARSE_SECTION_BODY Node = 160
-	PARSE_SEGMENT Node = 161
-	PARSE_SEGMENT_IDENT_MAPPING_OR_CALL Node = 162
-	PARSE_SEGMENT_MAPPING_TAIL Node = 163
-	PARSE_SEGMENT_MAPPING_TARGET_CHOICE Node = 164
-	PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT Node = 165
-	PARSE_TEMPLATE_BODY Node = 166
-	PARSE_TEMPLATE_CALL_ARGS Node = 167
-	PARSE_TEMPLATE_DECLARATION Node = 168
-	PARSE_TEMPLATE_PARAMETER Node = 169
-	PARSE_TEMPLATE_PARAMETER_LIST Node = 170
-	PARSE_TEMPLATE_SIGNATURE Node = 171
-	PATTERN_CLASS Node = 172
-	PATTERN_CLASS_ITEM_COMMA Node = 173
-	PATTERN_CLASS_ITEM_LIST Node = 174
-	PATTERN_CLASS_ITEM_SEQ Node = 175
-	PATTERN_DEFINITION Node = 176
-	PATTERN_DEFINITION_LIST Node = 177
-	PATTERN_EXPRESSION Node = 178
-	PATTERN_EXPRESSION_BP_10 Node = 179
-	PATTERN_EXPRESSION_BP_20 Node = 180
-	PATTERN_EXPRESSION_BP_30 Node = 181
-	PATTERN_EXPRESSION_BP_40 Node = 182
-	PATTERN_EXPRESSION_BP_60 Node = 183
-	PATTERN_GROUP Node = 184
-	PATTERN_RANGE_TAIL Node = 185
-	PATTERN_REF Node = 186
-	PATTERN_SECTION Node = 187
-	PATTERN_SECTION_BLOCK_NEST Node = 188
-	PATTERN_SEGMENT Node = 189
-	PRAGMA_BLOCK Node = 190
-	PRAGMA_BLOCK_BLOCK_NEST Node = 191
-	PRAGMA_BLOCK_KEY Node = 192
-	PRAGMA_BLOCK_KEY_sep Node = 193
-	PRAGMA_BLOCK_KEY_tail Node = 194
-	PRAGMA_BLOCK_LIST Node = 195
-	PRAGMA_CONFIGURATION Node = 196
-	PRAGMA_CONFIGURATION_LIST Node = 197
-	PRAGMA_SECTION Node = 198
-	PRAGMA_SECTION_BLOCK_NEST Node = 199
-	PRAGMA_VALUE Node = 200
-	PRATT_CATEGORY Node = 201
-	PRATT_CATEGORY_LIST Node = 202
-	PRATT_EXPR_BODY Node = 203
-	PRATT_EXPR_DEF Node = 204
-	PRATT_EXPR_DEF_LIST Node = 205
-	PRATT_IMPLICIT Node = 206
-	PRATT_IMPLICIT_BODY Node = 207
-	PRATT_IMPLICIT_DEF Node = 208
-	PRATT_INFIX Node = 209
-	PRATT_INFIX_BODY Node = 210
-	PRATT_INFIX_LIST Node = 211
-	PRATT_OPERATOR_DEF_INFIX Node = 212
-	PRATT_OPERATOR_DEF_POSTFIX Node = 213
-	PRATT_OPERATOR_DEF_PREFIX Node = 214
-	PRATT_POSTFIX Node = 215
-	PRATT_POSTFIX_BODY Node = 216
-	PRATT_POSTFIX_LIST Node = 217
-	PRATT_PREFIX Node = 218
-	PRATT_PREFIX_BODY Node = 219
-	PRATT_PREFIX_LIST Node = 220
-	PRATT_PRIMARY Node = 221
-	PRATT_PRIMARY_BODY Node = 222
-	PRATT_PRIMARY_REF Node = 223
-	PRATT_SECTION Node = 224
-	PRATT_SECTION_BLOCK_NEST Node = 225
-	PREDICT_LOOKAHEAD Node = 226
-	PREDICT_LOOKAHEAD_ITEMS Node = 227
-	PREDICT_LOOKAHEAD_LIST Node = 228
-	REPETITION_BOUNDS Node = 229
-	REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ Node = 230
-	REPETITION_BOUNDS_NEST Node = 231
-	REPETITION_BOUNDS_STARTS_WITH_COMMA Node = 232
-	REPETITION_BOUNDS_STARTS_WITH_MIN Node = 233
-	RULE_MODIFIER_SYNC Node = 234
-	STATE_DEFINITION_BODY Node = 235
-	STATE_DEFINITION_LIST Node = 236
-	STATE_DEFINITION_TAIL Node = 237
-	STATE_DEFINITION_TAIL_CONTENT Node = 238
-	STATE_LIST Node = 239
-	STATE_LIST_BLOCKS Node = 240
-	STATE_MUTATION_ARGUMENT_LIST_ARGS Node = 241
-	STATE_MUTATION_ARGUMENT_LIST_LIST Node = 242
-	STATE_MUTATION_ARGUMENT_LIST_POP Node = 243
-	STATE_MUTATION_ARGUMENT_LIST_TAIL Node = 244
-	STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT Node = 245
-	STATE_MUTATION_POP Node = 246
-	STATE_MUTATION_PUSH Node = 247
-	STATE_MUTATION_SET Node = 248
-	STRING_ARRAY Node = 249
-	STRING_ARRAY_ELEMENT_LIST Node = 250
-	STRING_ARRAY_ELEMENT_LIST_TAIL Node = 251
-	STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT Node = 252
-	SYNC_BLOCK Node = 253
-	SYNC_TOKEN_LIST Node = 254
-	TEMPLATE_ARGUMENT_LIST_TAIL Node = 255
-	TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT Node = 256
-	TEMPLATE_CALL_ARGUMENT_LIST_DUMMY Node = 257
-	TEMPLATE_CALL_ARGUMENT_LIST_TAIL Node = 258
-	TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT Node = 259
-	gr_DUMMY_CHOICE_FOR_PATTERNS Node = 260
-	gr_DUMMY_CHOICE_FOR_PRAGMA_VALUES Node = 261
-	gr_DUMMY_CHOICE_IDENT_MAP_BASE Node = 262
-	gr_DUMMY_CHOICE_NEST Node = 263
-	gr_DUMMY_CHOICE_PARSE_BLOCK_CHOICE Node = 264
-	gr_DUMMY_CHOICE_PARSE_BLOCK_LIST Node = 265
-	gr_DUMMY_CHOICE_VIRTUAL_MAPPING Node = 266
-	gr_DUMMY_LOCAL_VAR_FOR_PATTERNS Node = 267
-	gr_HEADER Node = 268
-	gr_LEX_RULE_LIST Node = 269
-	gr_LEX_RULE_PATTERN Node = 270
-	gr_LEX_RULE_STATE_MUTATION_KIND Node = 271
-	gr_LEX_SECTION_BLOCK_NEST Node = 272
-	gr_META_KEY_VALUE_PAIR Node = 273
-	gr_NodePatternRef Node = 274
-	gr_PARSE_EXPRESSION Node = 275
-	gr_PARSE_EXPRESSION_BP_10 Node = 276
-	gr_PARSE_EXPRESSION_BP_20 Node = 277
-	gr_PARSE_EXPRESSION_BP_30 Node = 278
-	gr_PARSE_EXPRESSION_BP_40 Node = 279
-	gr_PARSE_IGNORE_ROLE_LIST Node = 280
-	gr_PARSE_IGNORE_SECTION_BLOCK_NEST Node = 281
-	gr_PARSE_OP_NEST_CHOICE Node = 282
-	gr_PARSE_OP_NEST_EXPLICIT Node = 283
-	gr_PARSE_SECTION_BLOCK_NEST Node = 284
-	gr_PARSE_SEGMENT Node = 285
-	gr_PARSE_SEGMENT_MAPPING_TARGET_CHOICE Node = 286
-	gr_PARSE_TEMPLATE_SIGNATURE Node = 287
-	gr_PATTERN_CLASS_ITEM_LIST Node = 288
-	gr_PATTERN_DEFINITION_LIST Node = 289
-	gr_PATTERN_EXPRESSION Node = 290
-	gr_PATTERN_EXPRESSION_BP_10 Node = 291
-	gr_PATTERN_EXPRESSION_BP_20 Node = 292
-	gr_PATTERN_EXPRESSION_BP_30 Node = 293
-	gr_PATTERN_EXPRESSION_BP_40 Node = 294
-	gr_PATTERN_EXPRESSION_BP_60 Node = 295
-	gr_PATTERN_SECTION_BLOCK_NEST Node = 296
-	gr_PATTERN_SEGMENT Node = 297
-	gr_PRAGMA_BLOCK_BLOCK_NEST Node = 298
-	gr_PRAGMA_BLOCK_KEY_sep Node = 299
-	gr_PRAGMA_BLOCK_KEY_tail Node = 300
-	gr_PRAGMA_BLOCK_LIST Node = 301
-	gr_PRAGMA_CONFIGURATION_LIST Node = 302
-	gr_PRAGMA_SECTION_BLOCK_NEST Node = 303
-	gr_PRATT_CATEGORY Node = 304
-	gr_PRATT_CATEGORY_LIST Node = 305
-	gr_PRATT_EXPR_DEF_LIST Node = 306
-	gr_PRATT_INFIX_LIST Node = 307
-	gr_PRATT_POSTFIX_LIST Node = 308
-	gr_PRATT_PREFIX_LIST Node = 309
-	gr_PRATT_SECTION_BLOCK_NEST Node = 310
-	gr_PREDICT_LOOKAHEAD_ITEMS Node = 311
-	gr_REPETITION_BOUNDS Node = 312
-	gr_REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ Node = 313
-	gr_REPETITION_BOUNDS_NEST Node = 314
-	gr_STATE_DEFINITION_TAIL Node = 315
-	gr_STATE_DEFINITION_TAIL_CONTENT Node = 316
-	gr_STATE_LIST_BLOCKS Node = 317
-	gr_STATE_MUTATION_ARGUMENT_LIST_TAIL Node = 318
-	gr_STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT Node = 319
-	gr_STRING_ARRAY_ELEMENT_LIST Node = 320
-	gr_STRING_ARRAY_ELEMENT_LIST_TAIL Node = 321
-	gr_STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT Node = 322
-	gr_SYNC_TOKEN_LIST Node = 323
-	gr_TEMPLATE_ARGUMENT_LIST_TAIL Node = 324
-	gr_TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT Node = 325
-	gr_TEMPLATE_CALL_ARGUMENT_LIST_DUMMY Node = 326
-	gr_TEMPLATE_CALL_ARGUMENT_LIST_TAIL Node = 327
-	gr_TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT Node = 328
+	DUMMY_CHOICE_FOR_PRAGMA_VALUES Node = 1
+	DUMMY_CHOICE_IDENT_MAP_BASE Node = 2
+	DUMMY_CHOICE_NEST Node = 3
+	DUMMY_CHOICE_PARSE_BLOCK_CHOICE Node = 4
+	DUMMY_CHOICE_PARSE_BLOCK_LIST Node = 5
+	DUMMY_CHOICE_VIRTUAL_MAPPING Node = 6
+	ERROR_NODE Node = 7
+	HEADER Node = 8
+	HEADER_CONTENT Node = 9
+	IMPORT_DEFINITION Node = 10
+	IMPORT_DEFINITION_LIST Node = 11
+	IMPORT_SECTION Node = 12
+	IMPORT_SECTION_BLOCK_NEST Node = 13
+	LEX_RULE Node = 14
+	LEX_RULE_LIST Node = 15
+	LEX_RULE_PATTERN Node = 16
+	LEX_RULE_PATTERN_USING_LEX Node = 17
+	LEX_RULE_PATTERN_USING_NEST Node = 18
+	LEX_RULE_PATTERN_USING_PARSE_SEGMENT Node = 19
+	LEX_RULE_STATE_MUTATION Node = 20
+	LEX_RULE_STATE_MUTATION_KIND Node = 21
+	LEX_SECTION Node = 22
+	LEX_SECTION_BLOCK_NEST Node = 23
+	META_KEY_VALUE_PAIR Node = 24
+	META_KEY_VALUE_SEQUENCE Node = 25
+	META_SECTION Node = 26
+	NodeCharLiteral Node = 27
+	NodeDSLName Node = 28
+	NodeExported Node = 29
+	NodeHeader Node = 30
+	NodeImportAlias Node = 31
+	NodeImportDefinition Node = 32
+	NodeImportKeyword Node = 33
+	NodeImportPath Node = 34
+	NodeImportSection Node = 35
+	NodeLSPECName Node = 36
+	NodeLexKeyword Node = 37
+	NodeLexRule Node = 38
+	NodeLexRulePattern Node = 39
+	NodeLexRulePatternUsing Node = 40
+	NodeLexRulePriority Node = 41
+	NodeLexRuleRole Node = 42
+	NodeLexRuleStateMutation Node = 43
+	NodeLexRuleTokenName Node = 44
+	NodeLexSection Node = 45
+	NodeLocalVariable Node = 46
+	NodeMetaKey Node = 47
+	NodeMetaKeyValuePair Node = 48
+	NodeMetaSection Node = 49
+	NodeMetaValue Node = 50
+	NodeModuleReference Node = 51
+	NodeParseBlock Node = 52
+	NodeParseExpressionReference Node = 53
+	NodeParseGroup Node = 54
+	NodeParseIgnoreKeyword Node = 55
+	NodeParseIgnoreRole Node = 56
+	NodeParseIgnoreSection Node = 57
+	NodeParseKeyword Node = 58
+	NodeParseModifierPredict Node = 59
+	NodeParseNestBody Node = 60
+	NodeParseNestCloseToken Node = 61
+	NodeParseNestOpenToken Node = 62
+	NodeParseNestPairRef Node = 63
+	NodeParseNodeName Node = 64
+	NodeParseOpNest Node = 65
+	NodeParseOpSuppress Node = 66
+	NodeParsePair Node = 67
+	NodeParsePairIdentifier Node = 68
+	NodeParseRule Node = 69
+	NodeParseRuleBody Node = 70
+	NodeParseRuleName Node = 71
+	NodeParseSection Node = 72
+	NodeParseSectionBody Node = 73
+	NodeParseSegment Node = 74
+	NodeParseSymbolReference Node = 75
+	NodeParseTemplate Node = 76
+	NodeParseTemplateBody Node = 77
+	NodeParseTemplateCallArgs Node = 78
+	NodeParseTemplateCallArgument Node = 79
+	NodeParseTemplateCallKeyword Node = 80
+	NodeParseTemplateIdentifier Node = 81
+	NodeParseTemplateParameter Node = 82
+	NodeParseTemplateParameterIdentifier Node = 83
+	NodeParseTemplateParameterList Node = 84
+	NodeParseTemplateParameterReference Node = 85
+	NodeParseTemplateParameterType Node = 86
+	NodeParseTemplateReference Node = 87
+	NodeParseTokenReference Node = 88
+	NodePatternAny Node = 89
+	NodePatternClass Node = 90
+	NodePatternClassItem Node = 91
+	NodePatternDefName Node = 92
+	NodePatternDefinition Node = 93
+	NodePatternExternalPatternReference Node = 94
+	NodePatternGroup Node = 95
+	NodePatternKeyword Node = 96
+	NodePatternRange Node = 97
+	NodePatternRef Node = 98
+	NodePatternRegEx Node = 99
+	NodePatternSection Node = 100
+	NodePragmaBlock Node = 101
+	NodePragmaBlockKey Node = 102
+	NodePragmaBlockKeyPrefix Node = 103
+	NodePragmaBlockKeySegment Node = 104
+	NodePragmaConfiguration Node = 105
+	NodePragmaKey Node = 106
+	NodePragmaKeyword Node = 107
+	NodePragmaSection Node = 108
+	NodePragmaValue Node = 109
+	NodePrattExprBody Node = 110
+	NodePrattExprDef Node = 111
+	NodePrattExprName Node = 112
+	NodePrattImplicit Node = 113
+	NodePrattImplicitBody Node = 114
+	NodePrattImplicitDef Node = 115
+	NodePrattInfix Node = 116
+	NodePrattInfixBody Node = 117
+	NodePrattKeyword Node = 118
+	NodePrattLeftPrecedenceValue Node = 119
+	NodePrattOperatorDef Node = 120
+	NodePrattPostfix Node = 121
+	NodePrattPostfixBody Node = 122
+	NodePrattPrefix Node = 123
+	NodePrattPrefixBody Node = 124
+	NodePrattPrimary Node = 125
+	NodePrattPrimaryBody Node = 126
+	NodePrattPrimaryRef Node = 127
+	NodePrattRightPrecedenceValue Node = 128
+	NodePrattSection Node = 129
+	NodePredictLookahead Node = 130
+	NodePredictLookaheadList Node = 131
+	NodePredictOffset Node = 132
+	NodePredictToken Node = 133
+	NodeProgram Node = 134
+	NodeRepetitionBounds Node = 135
+	NodeRepetitionMax Node = 136
+	NodeRepetitionMin Node = 137
+	NodeRuleModifierSync Node = 138
+	NodeRuleModifierTransparent Node = 139
+	NodeStateDefinition Node = 140
+	NodeStateDefinitionBody Node = 141
+	NodeStateDefinitionList Node = 142
+	NodeStateKeyword Node = 143
+	NodeStateList Node = 144
+	NodeStateMutationArgumentList Node = 145
+	NodeStateMutationPop Node = 146
+	NodeStateMutationPopAmount Node = 147
+	NodeStateMutationPush Node = 148
+	NodeStateMutationSet Node = 149
+	NodeStateReference Node = 150
+	NodeStringArray Node = 151
+	NodeStringLiteral Node = 152
+	NodeSyncBlock Node = 153
+	NodeSyncToken Node = 154
+	NodeVersion Node = 155
+	PARSE_BLOCK Node = 156
+	PARSE_EXPRESSION_BP_10 Node = 157
+	PARSE_EXPRESSION_BP_20 Node = 158
+	PARSE_EXPRESSION_BP_30 Node = 159
+	PARSE_EXPRESSION_BP_40 Node = 160
+	PARSE_GROUP Node = 161
+	PARSE_IGNORE_ROLE_LIST Node = 162
+	PARSE_IGNORE_SECTION Node = 163
+	PARSE_IGNORE_SECTION_BLOCK_NEST Node = 164
+	PARSE_MODIFIER_PREDICT Node = 165
+	PARSE_NEST_BODY Node = 166
+	PARSE_OP_NEST Node = 167
+	PARSE_OP_NEST_CHOICE Node = 168
+	PARSE_OP_NEST_EXPLICIT Node = 169
+	PARSE_OP_SUPPRESS Node = 170
+	PARSE_PAIR_DECLARATION Node = 171
+	PARSE_RULE Node = 172
+	PARSE_RULE_BODY Node = 173
+	PARSE_SECTION Node = 174
+	PARSE_SECTION_BLOCK_NEST Node = 175
+	PARSE_SECTION_BODY Node = 176
+	PARSE_SEGMENT Node = 177
+	PARSE_SEGMENT_IDENT_MAPPING_OR_CALL Node = 178
+	PARSE_SEGMENT_MAPPING_TAIL Node = 179
+	PARSE_SEGMENT_MAPPING_TARGET_CHOICE Node = 180
+	PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT Node = 181
+	PARSE_TEMPLATE_BODY Node = 182
+	PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT Node = 183
+	PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX Node = 184
+	PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST Node = 185
+	PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT Node = 186
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT Node = 187
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX Node = 188
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST Node = 189
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT Node = 190
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT Node = 191
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX Node = 192
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST Node = 193
+	PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT Node = 194
+	PARSE_TEMPLATE_CALL_ARGS_SEGMENT Node = 195
+	PARSE_TEMPLATE_CALL_ARGS_USING_LEX Node = 196
+	PARSE_TEMPLATE_CALL_ARGS_USING_NEST Node = 197
+	PARSE_TEMPLATE_CALL_ARGS_USING_PARSE_SEGMENT Node = 198
+	PARSE_TEMPLATE_DECLARATION Node = 199
+	PARSE_TEMPLATE_PARAMETER Node = 200
+	PARSE_TEMPLATE_PARAMETER_LIST Node = 201
+	PARSE_TEMPLATE_SIGNATURE Node = 202
+	PATTERN_CLASS Node = 203
+	PATTERN_CLASS_ITEM_COMMA Node = 204
+	PATTERN_CLASS_ITEM_LIST Node = 205
+	PATTERN_CLASS_ITEM_SEQ Node = 206
+	PATTERN_DEFINITION Node = 207
+	PATTERN_DEFINITION_LIST Node = 208
+	PATTERN_EXPRESSION Node = 209
+	PATTERN_EXPRESSION_BP_10 Node = 210
+	PATTERN_EXPRESSION_BP_20 Node = 211
+	PATTERN_EXPRESSION_BP_30 Node = 212
+	PATTERN_EXPRESSION_BP_40 Node = 213
+	PATTERN_EXPRESSION_BP_60 Node = 214
+	PATTERN_GROUP Node = 215
+	PATTERN_RANGE_TAIL Node = 216
+	PATTERN_REF Node = 217
+	PATTERN_SECTION Node = 218
+	PATTERN_SECTION_BLOCK_NEST Node = 219
+	PATTERN_SEGMENT Node = 220
+	PRAGMA_BLOCK Node = 221
+	PRAGMA_BLOCK_BLOCK_NEST Node = 222
+	PRAGMA_BLOCK_KEY Node = 223
+	PRAGMA_BLOCK_KEY_sep Node = 224
+	PRAGMA_BLOCK_KEY_tail Node = 225
+	PRAGMA_BLOCK_LIST Node = 226
+	PRAGMA_CONFIGURATION Node = 227
+	PRAGMA_CONFIGURATION_LIST Node = 228
+	PRAGMA_SECTION Node = 229
+	PRAGMA_SECTION_BLOCK_NEST Node = 230
+	PRAGMA_VALUE Node = 231
+	PRATT_CATEGORY Node = 232
+	PRATT_CATEGORY_LIST Node = 233
+	PRATT_EXPR_BODY Node = 234
+	PRATT_EXPR_DEF Node = 235
+	PRATT_EXPR_DEF_LIST Node = 236
+	PRATT_IMPLICIT Node = 237
+	PRATT_IMPLICIT_BODY Node = 238
+	PRATT_IMPLICIT_DEF Node = 239
+	PRATT_INFIX Node = 240
+	PRATT_INFIX_BODY Node = 241
+	PRATT_INFIX_LIST Node = 242
+	PRATT_OPERATOR_DEF_INFIX Node = 243
+	PRATT_OPERATOR_DEF_POSTFIX Node = 244
+	PRATT_OPERATOR_DEF_PREFIX Node = 245
+	PRATT_POSTFIX Node = 246
+	PRATT_POSTFIX_BODY Node = 247
+	PRATT_POSTFIX_LIST Node = 248
+	PRATT_PREFIX Node = 249
+	PRATT_PREFIX_BODY Node = 250
+	PRATT_PREFIX_LIST Node = 251
+	PRATT_PRIMARY Node = 252
+	PRATT_PRIMARY_BODY Node = 253
+	PRATT_PRIMARY_REF Node = 254
+	PRATT_SECTION Node = 255
+	PRATT_SECTION_BLOCK_NEST Node = 256
+	PREDICT_LOOKAHEAD Node = 257
+	PREDICT_LOOKAHEAD_ITEMS Node = 258
+	PREDICT_LOOKAHEAD_LIST Node = 259
+	PREFIX_DUMMY_RULE_PATTERNS Node = 260
+	REPETITION_BOUNDS Node = 261
+	REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ Node = 262
+	REPETITION_BOUNDS_NEST Node = 263
+	REPETITION_BOUNDS_STARTS_WITH_COMMA Node = 264
+	REPETITION_BOUNDS_STARTS_WITH_MIN Node = 265
+	RULE_MODIFIER_SYNC Node = 266
+	STATE_DEFINITION_BODY Node = 267
+	STATE_DEFINITION_LIST Node = 268
+	STATE_DEFINITION_TAIL Node = 269
+	STATE_DEFINITION_TAIL_CONTENT Node = 270
+	STATE_LIST Node = 271
+	STATE_LIST_BLOCKS Node = 272
+	STATE_MUTATION_ARGUMENT_LIST_ARGS Node = 273
+	STATE_MUTATION_ARGUMENT_LIST_LIST Node = 274
+	STATE_MUTATION_ARGUMENT_LIST_POP Node = 275
+	STATE_MUTATION_ARGUMENT_LIST_TAIL Node = 276
+	STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT Node = 277
+	STATE_MUTATION_POP Node = 278
+	STATE_MUTATION_PUSH Node = 279
+	STATE_MUTATION_SET Node = 280
+	STRING_ARRAY Node = 281
+	STRING_ARRAY_ELEMENT_LIST Node = 282
+	STRING_ARRAY_ELEMENT_LIST_TAIL Node = 283
+	STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT Node = 284
+	SYNC_BLOCK Node = 285
+	SYNC_TOKEN_LIST Node = 286
+	TEMPLATE_ARGUMENT_LIST_TAIL Node = 287
+	TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT Node = 288
+	gr_DUMMY_CHOICE_FOR_PRAGMA_VALUES Node = 289
+	gr_DUMMY_CHOICE_IDENT_MAP_BASE Node = 290
+	gr_DUMMY_CHOICE_NEST Node = 291
+	gr_DUMMY_CHOICE_PARSE_BLOCK_CHOICE Node = 292
+	gr_DUMMY_CHOICE_PARSE_BLOCK_LIST Node = 293
+	gr_DUMMY_CHOICE_VIRTUAL_MAPPING Node = 294
+	gr_HEADER Node = 295
+	gr_IMPORT_DEFINITION_LIST Node = 296
+	gr_IMPORT_SECTION_BLOCK_NEST Node = 297
+	gr_LEX_RULE_LIST Node = 298
+	gr_LEX_RULE_PATTERN Node = 299
+	gr_LEX_RULE_STATE_MUTATION_KIND Node = 300
+	gr_LEX_SECTION_BLOCK_NEST Node = 301
+	gr_META_KEY_VALUE_PAIR Node = 302
+	gr_NodePatternRef Node = 303
+	gr_PARSE_EXPRESSION Node = 304
+	gr_PARSE_EXPRESSION_BP_10 Node = 305
+	gr_PARSE_EXPRESSION_BP_20 Node = 306
+	gr_PARSE_EXPRESSION_BP_30 Node = 307
+	gr_PARSE_EXPRESSION_BP_40 Node = 308
+	gr_PARSE_IGNORE_ROLE_LIST Node = 309
+	gr_PARSE_IGNORE_SECTION_BLOCK_NEST Node = 310
+	gr_PARSE_OP_NEST_CHOICE Node = 311
+	gr_PARSE_OP_NEST_EXPLICIT Node = 312
+	gr_PARSE_SECTION_BLOCK_NEST Node = 313
+	gr_PARSE_SEGMENT Node = 314
+	gr_PARSE_SEGMENT_MAPPING_TARGET_CHOICE Node = 315
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT Node = 316
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX Node = 317
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST Node = 318
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT Node = 319
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT Node = 320
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX Node = 321
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST Node = 322
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT Node = 323
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT Node = 324
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX Node = 325
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST Node = 326
+	gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT Node = 327
+	gr_PARSE_TEMPLATE_SIGNATURE Node = 328
+	gr_PATTERN_CLASS_ITEM_LIST Node = 329
+	gr_PATTERN_DEFINITION_LIST Node = 330
+	gr_PATTERN_EXPRESSION Node = 331
+	gr_PATTERN_EXPRESSION_BP_10 Node = 332
+	gr_PATTERN_EXPRESSION_BP_20 Node = 333
+	gr_PATTERN_EXPRESSION_BP_30 Node = 334
+	gr_PATTERN_EXPRESSION_BP_40 Node = 335
+	gr_PATTERN_EXPRESSION_BP_60 Node = 336
+	gr_PATTERN_SECTION_BLOCK_NEST Node = 337
+	gr_PATTERN_SEGMENT Node = 338
+	gr_PRAGMA_BLOCK_BLOCK_NEST Node = 339
+	gr_PRAGMA_BLOCK_KEY_sep Node = 340
+	gr_PRAGMA_BLOCK_KEY_tail Node = 341
+	gr_PRAGMA_BLOCK_LIST Node = 342
+	gr_PRAGMA_CONFIGURATION_LIST Node = 343
+	gr_PRAGMA_SECTION_BLOCK_NEST Node = 344
+	gr_PRATT_CATEGORY Node = 345
+	gr_PRATT_CATEGORY_LIST Node = 346
+	gr_PRATT_EXPR_DEF_LIST Node = 347
+	gr_PRATT_INFIX_LIST Node = 348
+	gr_PRATT_POSTFIX_LIST Node = 349
+	gr_PRATT_PREFIX_LIST Node = 350
+	gr_PRATT_SECTION_BLOCK_NEST Node = 351
+	gr_PREDICT_LOOKAHEAD_ITEMS Node = 352
+	gr_PREFIX_DUMMY_RULE_PATTERNS Node = 353
+	gr_REPETITION_BOUNDS Node = 354
+	gr_REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ Node = 355
+	gr_REPETITION_BOUNDS_NEST Node = 356
+	gr_STATE_DEFINITION_TAIL Node = 357
+	gr_STATE_DEFINITION_TAIL_CONTENT Node = 358
+	gr_STATE_LIST_BLOCKS Node = 359
+	gr_STATE_MUTATION_ARGUMENT_LIST_TAIL Node = 360
+	gr_STATE_MUTATION_ARGUMENT_LIST_TAIL_CONTENT Node = 361
+	gr_STRING_ARRAY_ELEMENT_LIST Node = 362
+	gr_STRING_ARRAY_ELEMENT_LIST_TAIL Node = 363
+	gr_STRING_ARRAY_ELEMENT_LIST_TAIL_CONTENT Node = 364
+	gr_SYNC_TOKEN_LIST Node = 365
+	gr_TEMPLATE_ARGUMENT_LIST_TAIL Node = 366
+	gr_TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT Node = 367
 )
 
 var NodeNames = [...]string{
-	"DUMMY_CHOICE_FOR_PATTERNS",
 	"DUMMY_CHOICE_FOR_PRAGMA_VALUES",
 	"DUMMY_CHOICE_IDENT_MAP_BASE",
 	"DUMMY_CHOICE_NEST",
 	"DUMMY_CHOICE_PARSE_BLOCK_CHOICE",
 	"DUMMY_CHOICE_PARSE_BLOCK_LIST",
 	"DUMMY_CHOICE_VIRTUAL_MAPPING",
-	"DUMMY_LOCAL_VAR_FOR_PATTERNS",
 	"ERROR_NODE",
 	"HEADER",
 	"HEADER_CONTENT",
+	"IMPORT_DEFINITION",
+	"IMPORT_DEFINITION_LIST",
+	"IMPORT_SECTION",
+	"IMPORT_SECTION_BLOCK_NEST",
 	"LEX_RULE",
 	"LEX_RULE_LIST",
 	"LEX_RULE_PATTERN",
+	"LEX_RULE_PATTERN_USING_LEX",
+	"LEX_RULE_PATTERN_USING_NEST",
+	"LEX_RULE_PATTERN_USING_PARSE_SEGMENT",
 	"LEX_RULE_STATE_MUTATION",
 	"LEX_RULE_STATE_MUTATION_KIND",
 	"LEX_SECTION",
@@ -526,11 +578,18 @@ var NodeNames = [...]string{
 	"META_SECTION",
 	"NodeCharLiteral",
 	"NodeDSLName",
+	"NodeExported",
 	"NodeHeader",
+	"NodeImportAlias",
+	"NodeImportDefinition",
+	"NodeImportKeyword",
+	"NodeImportPath",
+	"NodeImportSection",
 	"NodeLSPECName",
 	"NodeLexKeyword",
 	"NodeLexRule",
 	"NodeLexRulePattern",
+	"NodeLexRulePatternUsing",
 	"NodeLexRulePriority",
 	"NodeLexRuleRole",
 	"NodeLexRuleStateMutation",
@@ -541,6 +600,8 @@ var NodeNames = [...]string{
 	"NodeMetaKeyValuePair",
 	"NodeMetaSection",
 	"NodeMetaValue",
+	"NodeModuleReference",
+	"NodeParseBlock",
 	"NodeParseExpressionReference",
 	"NodeParseGroup",
 	"NodeParseIgnoreKeyword",
@@ -582,6 +643,7 @@ var NodeNames = [...]string{
 	"NodePatternClassItem",
 	"NodePatternDefName",
 	"NodePatternDefinition",
+	"NodePatternExternalPatternReference",
 	"NodePatternGroup",
 	"NodePatternKeyword",
 	"NodePatternRange",
@@ -643,6 +705,7 @@ var NodeNames = [...]string{
 	"NodeSyncBlock",
 	"NodeSyncToken",
 	"NodeVersion",
+	"PARSE_BLOCK",
 	"PARSE_EXPRESSION_BP_10",
 	"PARSE_EXPRESSION_BP_20",
 	"PARSE_EXPRESSION_BP_30",
@@ -669,7 +732,22 @@ var NodeNames = [...]string{
 	"PARSE_SEGMENT_MAPPING_TARGET_CHOICE",
 	"PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT",
 	"PARSE_TEMPLATE_BODY",
-	"PARSE_TEMPLATE_CALL_ARGS",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST",
+	"PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_SEGMENT",
+	"PARSE_TEMPLATE_CALL_ARGS_USING_LEX",
+	"PARSE_TEMPLATE_CALL_ARGS_USING_NEST",
+	"PARSE_TEMPLATE_CALL_ARGS_USING_PARSE_SEGMENT",
 	"PARSE_TEMPLATE_DECLARATION",
 	"PARSE_TEMPLATE_PARAMETER",
 	"PARSE_TEMPLATE_PARAMETER_LIST",
@@ -731,6 +809,7 @@ var NodeNames = [...]string{
 	"PREDICT_LOOKAHEAD",
 	"PREDICT_LOOKAHEAD_ITEMS",
 	"PREDICT_LOOKAHEAD_LIST",
+	"PREFIX_DUMMY_RULE_PATTERNS",
 	"REPETITION_BOUNDS",
 	"REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ",
 	"REPETITION_BOUNDS_NEST",
@@ -759,18 +838,15 @@ var NodeNames = [...]string{
 	"SYNC_TOKEN_LIST",
 	"TEMPLATE_ARGUMENT_LIST_TAIL",
 	"TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT",
-	"TEMPLATE_CALL_ARGUMENT_LIST_DUMMY",
-	"TEMPLATE_CALL_ARGUMENT_LIST_TAIL",
-	"TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT",
-	"gr_DUMMY_CHOICE_FOR_PATTERNS",
 	"gr_DUMMY_CHOICE_FOR_PRAGMA_VALUES",
 	"gr_DUMMY_CHOICE_IDENT_MAP_BASE",
 	"gr_DUMMY_CHOICE_NEST",
 	"gr_DUMMY_CHOICE_PARSE_BLOCK_CHOICE",
 	"gr_DUMMY_CHOICE_PARSE_BLOCK_LIST",
 	"gr_DUMMY_CHOICE_VIRTUAL_MAPPING",
-	"gr_DUMMY_LOCAL_VAR_FOR_PATTERNS",
 	"gr_HEADER",
+	"gr_IMPORT_DEFINITION_LIST",
+	"gr_IMPORT_SECTION_BLOCK_NEST",
 	"gr_LEX_RULE_LIST",
 	"gr_LEX_RULE_PATTERN",
 	"gr_LEX_RULE_STATE_MUTATION_KIND",
@@ -789,6 +865,18 @@ var NodeNames = [...]string{
 	"gr_PARSE_SECTION_BLOCK_NEST",
 	"gr_PARSE_SEGMENT",
 	"gr_PARSE_SEGMENT_MAPPING_TARGET_CHOICE",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_SEGMENT",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_LEX",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_NEST",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_DUMMY_USING_PARSE_SEGMENT",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_SEGMENT",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_LEX",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_NEST",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_CONTENT_USING_PARSE_SEGMENT",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_SEGMENT",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_LEX",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_NEST",
+	"gr_PARSE_TEMPLATE_CALL_ARGS_LIST_TAIL_USING_PARSE_SEGMENT",
 	"gr_PARSE_TEMPLATE_SIGNATURE",
 	"gr_PATTERN_CLASS_ITEM_LIST",
 	"gr_PATTERN_DEFINITION_LIST",
@@ -814,6 +902,7 @@ var NodeNames = [...]string{
 	"gr_PRATT_PREFIX_LIST",
 	"gr_PRATT_SECTION_BLOCK_NEST",
 	"gr_PREDICT_LOOKAHEAD_ITEMS",
+	"gr_PREFIX_DUMMY_RULE_PATTERNS",
 	"gr_REPETITION_BOUNDS",
 	"gr_REPETITION_BOUNDS_MIN_COMMA_MAX_OPT_SEQ",
 	"gr_REPETITION_BOUNDS_NEST",
@@ -828,9 +917,6 @@ var NodeNames = [...]string{
 	"gr_SYNC_TOKEN_LIST",
 	"gr_TEMPLATE_ARGUMENT_LIST_TAIL",
 	"gr_TEMPLATE_ARGUMENT_LIST_TAIL_CONTENT",
-	"gr_TEMPLATE_CALL_ARGUMENT_LIST_DUMMY",
-	"gr_TEMPLATE_CALL_ARGUMENT_LIST_TAIL",
-	"gr_TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT",
 }
 
 func (t Node) String() string {

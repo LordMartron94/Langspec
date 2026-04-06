@@ -98,6 +98,10 @@ const (
 	TokKWRule
 	TokKWTemplate
 	TokKWCall
+	TokKWImport
+	TokKWExport
+	TokKWAs
+	TokKWUsing
 
 	TokTypeToken
 	TokTypeRule
@@ -172,6 +176,10 @@ const (
 	NodeStateMutationArgumentList
 	NodeStateMutationPopAmount
 	NodeStateReference
+
+	NodeLexRulePatternUsing
+	NodeModuleReference
+	NodePatternExternalPatternReference
 
 	// -- Pattern Section --
 	NodePatternSection
@@ -302,6 +310,19 @@ const (
 
 	// Dummy
 	NodeDummyChoiceParseBlock
+
+	// IMPORT & EXPORT
+	NodeImportSection
+	NodeImportKeyword
+
+	NodeImportList
+	NodeImportDefinition
+
+	NodeImportPath
+	NodeImportAlias
+
+	NodeExported
+	NodeParseBlock
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -350,7 +371,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWPratt, "keyword.declaration.pratt", "PRATT", 2},
 		{TokKWTrue, "constant.language.boolean", "true", 2},
 		{TokKWFalse, "constant.language.boolean", "false", 2},
-		{TokKWLocal, "keyword.modifier.local", "local", 2},
+		{TokKWLocal, "storage.modifier.local", "local", 2},
 		{TokKWParse, "keyword.declaration.parse", "PARSE", 2},
 		{TokKWVirtual, "keyword.operator.virtual", "virtual", 2},
 		{TokKWNest, "keyword.operator.nest", "nest", 2},
@@ -372,6 +393,10 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWTemplate, "keyword.declaration.template", "template", 2},
 		{TokKWCall, "keyword.operator.call", "call", 2},
 		{TokKWRule, "keyword.declaration.rule", "rule", 2},
+		{TokKWImport, "keyword.declaration.import", "IMPORT", 2},
+		{TokKWExport, "storage.modifier.export", "export", 2},
+		{TokKWAs, "keyword.control.import.as", "as", 2},
+		{TokKWUsing, "keyword.operator.using", "using", 2},
 
 		// Types
 		{TokTypeToken, "support.type.token", "Token", 2},
@@ -496,6 +521,7 @@ func (b *dslGrammarBuilder) program() Rule {
 	return b.g.RootByNode(NodeProgram, false,
 		b.g.rb.Rule.Required(b.header(), "must have header"),
 		b.g.rb.Rule.OptionalPrefix(b.pragmaSection(), lexarch.TokenKind(TokKWPragma)),
+		b.g.rb.Rule.OptionalPrefix(b.importSection(), lexarch.TokenKind(TokKWImport)),
 		b.g.rb.Rule.OptionalPrefix(b.patternSection(), lexarch.TokenKind(TokKWPattern)),
 		b.g.rb.Rule.Required(b.lexSection(), "must have lex ruleset"),
 		b.g.rb.Rule.OptionalPrefix(b.prattSection(), lexarch.TokenKind(TokKWPratt)),
@@ -592,6 +618,35 @@ func (b *dslGrammarBuilder) stringArray() Rule {
 	)
 }
 
+// ----------------------------------------------------------- IMPORT SECTION
+
+func (b *dslGrammarBuilder) importSection() Rule {
+	blockRule := b.g.block(
+		NodeImportSection,
+		NodeImportKeyword,
+		TokKWImport,
+		b.importList(),
+	)
+	return b.g.rb.Rule.RecoverSync(blockRule, lexarch.TokenKind(TokSemicolon), lexarch.TokenKind(TokBraceClose))
+}
+
+func (b *dslGrammarBuilder) importList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(NodeImportDefinition, "LIST", b.importDefinition())
+}
+
+func (b *dslGrammarBuilder) importDefinition() Rule {
+	definitionRule := b.g.sequence(
+		NodeImportDefinition, "",
+	).
+		expectToken(NodeImportPath, TokStringLiteral).
+		expectVirtualInRule(TokKWAs).
+		expectToken(NodeImportAlias, TokIdentifier).
+		expectVirtualInRule(TokSemicolon).
+		build()
+
+	return b.g.rb.Rule.RecoverSync(definitionRule, lexarch.TokenKind(TokSemicolon))
+}
+
 // ----------------------------------------------------------- PATTERN SECTION
 
 func (b *dslGrammarBuilder) patternSection() Rule {
@@ -609,18 +664,17 @@ func (b *dslGrammarBuilder) patternDefinitionList() Rule {
 }
 
 func (b *dslGrammarBuilder) patternDefinition() Rule {
+	optionalPrefixRule := b.g.rb.Rule.Optional(
+		b.g.rb.Rule.Choice(
+			"PREFIX_DUMMY_RULE_PATTERNS",
+			b.g.expectToken(NodeLocalVariable, TokKWLocal),
+			b.g.expectToken(NodeExported, TokKWExport),
+		),
+	)
+
 	return b.g.rb.Rule.RecoverSync(b.g.sequence(NodePatternDefinition, "").
-		rule(
-			b.g.rb.Rule.Choice(
-				syntaxa.GrammarLabel("DUMMY CHOICE FOR PATTERNS"),
-				b.g.rb.Rule.TransparentSequence(
-					syntaxa.GrammarLabel("DUMMY LOCAL VAR FOR PATTERNS"),
-					b.g.expectToken(NodeLocalVariable, TokKWLocal),
-					b.g.expectToken(NodePatternDefName, TokIdentifier),
-				),
-				b.g.expectToken(NodePatternDefName, TokIdentifier),
-			),
-		).
+		rule(optionalPrefixRule).
+		expectToken(NodePatternDefName, TokIdentifier).
 		expectVirtualInRule(TokColon).
 		requiredRule(b.patternExpr(), "pattern definition must have an expression").
 		expectVirtualInRule(TokSemicolon).
@@ -800,10 +854,25 @@ func (b *dslGrammarBuilder) lexRule() Rule {
 		rule(b.g.ChoiceByNode(NodeLexRulePattern,
 			b.patternRefReference(),
 			b.g.expectToken(NodeLexRulePattern, TokRegexLiteral),
+			b.usingPattern("LEX"),
 		)).
 		optionalRule(b.stateMutation()).
 		optionalRule(b.metaSection()).
 		expectVirtualInRule(TokSemicolon).
+		build()
+}
+
+func (b *dslGrammarBuilder) usingPattern(suffix string) Rule {
+	// Suffix distinguishes LEX vs NEST vs PARSE_SEGMENT sites. sequence(..., "") would memoize
+	// one NodeLexRulePatternUsing production and the first optional segmentTemplateCallTail would
+	// wire all three contexts to the same PARSE_TEMPLATE_CALL_ARGS_* variant (wrong + V_PAR003).
+	return b.g.sequence(
+		NodeLexRulePatternUsing, suffix,
+	).expectVirtualInRule(TokKWUsing).
+		expectToken(NodeModuleReference, TokIdentifier).
+		expectVirtualInRule(TokDot).
+		expectToken(NodePatternExternalPatternReference, TokIdentifier).
+		optionalRule(b.segmentTemplateCallTail("USING_" + suffix)).
 		build()
 }
 
@@ -1057,7 +1126,7 @@ func (b *dslGrammarBuilder) parseSection() Rule {
 func (b *dslGrammarBuilder) parseSectionBody() Rule {
 	return b.g.sequence(NodeParseSectionBody, "").
 		optionalRule(b.parseIgnoreSection()).
-		rule(b.parseBlock()).
+		rule(b.parseBlockList()).
 		build()
 }
 
@@ -1083,19 +1152,28 @@ func (b *dslGrammarBuilder) parseIgnoreRole() Rule {
 	return b.g.expectToken(NodeParseIgnoreRole, TokIdentifier)
 }
 
+func (b *dslGrammarBuilder) parseBlockList() Rule {
+	return b.g.TransparentZeroOrMoreByNode(
+		NodeDummyChoiceParseBlock, "LIST", b.parseBlock(),
+	)
+}
+
 func (b *dslGrammarBuilder) parseBlock() Rule {
 	parseRuleWithRecovery := b.g.rb.Rule.RecoverSync(b.parseRule(), lexarch.TokenKind(TokSemicolon))
 	pairDeclaration := b.pairDeclaration()
 	templateDeclaration := b.templateDeclaration()
 
-	return b.g.TransparentZeroOrMoreByNode(
-		NodeDummyChoiceParseBlock, "LIST", b.g.rb.Rule.Choice(
-			LangSpecGrammarIDFromNodeWithSuffix(NodeDummyChoiceParseBlock, "CHOICE"),
-			parseRuleWithRecovery,
-			pairDeclaration,
-			templateDeclaration,
-		),
+	element := b.g.rb.Rule.Choice(
+		LangSpecGrammarIDFromNodeWithSuffix(NodeDummyChoiceParseBlock, "CHOICE"),
+		parseRuleWithRecovery,
+		pairDeclaration,
+		templateDeclaration,
 	)
+
+	return b.g.sequence(
+		NodeParseBlock, "",
+	).optionalRule(b.g.expectToken(NodeExported, TokKWExport)).
+		rule(element).build()
 }
 
 func (b *dslGrammarBuilder) templateDeclaration() Rule {
@@ -1219,6 +1297,7 @@ func (b *dslGrammarBuilder) parseSegment() Rule {
 		b.virtualMapping(),
 		b.nestMapping(),
 		b.parseGroup(),
+		b.usingPattern("PARSE_SEGMENT"),
 		b.segmentExplicitTemplateCall(),
 		b.segmentIdentOrCall(),
 	)
@@ -1226,9 +1305,9 @@ func (b *dslGrammarBuilder) parseSegment() Rule {
 
 func (b *dslGrammarBuilder) segmentExplicitTemplateCall() Rule {
 	return b.g.sequence(NodeParseSegment, "TEMPLATE_CALL_SEGMENT").
-		rule(b.g.expectToken(NodeParseTemplateCallKeyword, TokKWCall)).
-		rule(b.g.expectToken(NodeParseTemplateReference, TokIdentifier)).
-		rule(b.segmentTemplateCallTail()).
+		expectToken(NodeParseTemplateCallKeyword, TokKWCall).
+		expectToken(NodeParseTemplateReference, TokIdentifier).
+		rule(b.segmentTemplateCallTail("SEGMENT")).
 		build()
 }
 
@@ -1267,20 +1346,24 @@ func (b *dslGrammarBuilder) segmentMappingTail() Rule {
 		build()
 }
 
-func (b *dslGrammarBuilder) segmentTemplateCallTail() Rule {
+func (b *dslGrammarBuilder) segmentTemplateCallTail(suffix string) Rule {
 	templateArgRule := b.g.expectOneOf(NodeParseTemplateCallArgument, TokIdentifier, TokParameter, TokPairReference)
 
-	return b.g.NestByNode(
+	// NestByNodeWithSuffix: NodeParseTemplateCallArgs must not share one memoized nest across
+	// SEGMENT / USING_LEX / USING_NEST / USING_PARSE_SEGMENT — otherwise only one variant's
+	// LIST_DUMMY_* / LIST_TAIL_* chain is wired and stage-1 reachability falsely warns V_PAR003.
+	return b.g.NestByNodeWithSuffix(
 		NodeParseTemplateCallArgs,
+		suffix,
 		TokParenOpen,
 		TokParenClose,
 		b.g.rb.Rule.TransparentSequence(
-			"TEMPLATE_CALL_ARGUMENT_LIST_DUMMY",
+			LangSpecGrammarIDFromNodeWithSuffix(NodeParseTemplateCallArgs, "LIST_DUMMY_"+suffix),
 			templateArgRule,
 			b.g.rb.Rule.TransparentZeroOrMore(
-				"TEMPLATE_CALL_ARGUMENT_LIST_TAIL",
+				LangSpecGrammarIDFromNodeWithSuffix(NodeParseTemplateCallArgs, "LIST_TAIL_"+suffix),
 				b.g.rb.Rule.TransparentSequence(
-					"TEMPLATE_CALL_ARGUMENT_LIST_TAIL_CONTENT",
+					LangSpecGrammarIDFromNodeWithSuffix(NodeParseTemplateCallArgs, "LIST_TAIL_CONTENT_"+suffix),
 					b.g.rb.Token.ExpectVirtual("COMMA", lexarch.TokenKind(TokComma)),
 					templateArgRule,
 				),
@@ -1310,6 +1393,7 @@ func (b *dslGrammarBuilder) nestMapping() Rule {
 				b.g.expectToken(NodeParseNestOpenToken, TokIdentifier),
 				b.g.expectToken(NodeParseNestCloseToken, TokIdentifier),
 			),
+			b.usingPattern("NEST"),
 			b.g.expectToken(NodeParseNestPairRef, TokPairReference),
 			b.g.expectToken(NodeParseTemplateParameterReference, TokParameter),
 		)).
