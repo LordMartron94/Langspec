@@ -8,6 +8,9 @@ import (
 	dslspec "langspec/dsl/spec"
 	"langspec/editor"
 	"langspec/toolchain"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +49,84 @@ func TestClientDSLToolchain(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("Toolchains failed: %s", err.Error())
+	}
+}
+
+func TestToolchainGoBindingsNamespacesImportedSymbols(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modAPath := filepath.Join(tmpDir, "module_a_bindings.lspec")
+	modBPath := filepath.Join(tmpDir, "module_b_bindings.lspec")
+	outPath := filepath.Join(tmpDir, "generated_bindings.go")
+	mainPath := filepath.Join(tmpDir, "main_bindings.lspec")
+
+	module := `--- "Module" v1.0.0 | lspec v1.0.0 ---
+LEX {
+	state INITIAL {
+		TokShared -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	export rule SharedRule -> SharedNode { virtual TokShared };
+}`
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+PRAGMA {
+	tool.go_bindings {
+		enable = true;
+		output-path = "` + outPath + `";
+		package-name = "tmpbindings";
+	}
+}
+IMPORT {
+	"` + modAPath + `" as A;
+	"` + modBPath + `" as B;
+}
+LEX {
+	state INITIAL {
+		TokMain -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	IGNORE { word };
+	rule PROGRAM -> ProgramNode {
+		using A.SharedRule
+		using B.SharedRule
+	};
+}`
+
+	if err := os.WriteFile(modAPath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module A spec: %v", err)
+	}
+	if err := os.WriteFile(modBPath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module B spec: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write main spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err != nil {
+		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
+	}
+
+	if err := toolchain.RunGoBindingsToolchain(res); err != nil {
+		t.Fatalf("RunGoBindingsToolchain failed: %v", err)
+	}
+
+	content, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read generated bindings: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "A__TokShared") || !strings.Contains(text, "B__TokShared") {
+		t.Fatalf("generated bindings missing namespaced imported token constants")
+	}
+	if !strings.Contains(text, "A__SharedNode") || !strings.Contains(text, "B__SharedNode") {
+		t.Fatalf("generated bindings missing namespaced imported node constants")
 	}
 }
 

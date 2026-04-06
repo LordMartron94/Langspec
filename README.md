@@ -83,6 +83,7 @@ Import behavior is intentionally strict:
 - External templates must be invoked as `using Alias.Template(...)` (shape/category validation reports `V_IMP006` on mismatch).
 - Unknown imported exports report `V_IMP005`.
 - Imported lexer symbols are referenced-only (unused imported patterns/tokens/states are not pulled into output), and imported states are namespaced to avoid collisions.
+- Generated go_bindings also namespace imported token/node constants by import alias (`Alias__Name`) to avoid collisions across imported modules.
 
 ### 1. Header (Required)
 

@@ -130,7 +130,7 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 	for name := range env.Tokens {
 		ts[name] = struct{}{}
 	}
-	collectReferencedImportedTokens(root, env, ts)
+	collectReferencedImportedSymbols(root, env, ts, nk)
 	ts[eofTokenName] = struct{}{}
 
 	if lex := root.FindFirstKind(NodeLexSection); lex != nil {
@@ -179,6 +179,10 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 }
 
 func collectReferencedImportedTokens(root *Node, env *SemanticEnv, ts map[string]struct{}) {
+	collectReferencedImportedSymbols(root, env, ts, nil)
+}
+
+func collectReferencedImportedSymbols(root *Node, env *SemanticEnv, ts map[string]struct{}, nk map[string]struct{}) {
 	if root == nil || env == nil {
 		return
 	}
@@ -195,15 +199,20 @@ func collectReferencedImportedTokens(root *Node, env *SemanticEnv, ts map[string
 			continue
 		}
 		if pairDecl := module.ExportedPairs[symbolName]; pairDecl != nil {
-			ts[pairDecl.OpenToken] = struct{}{}
-			ts[pairDecl.CloseToken] = struct{}{}
+			ts[moduleName+"__"+pairDecl.OpenToken] = struct{}{}
+			ts[moduleName+"__"+pairDecl.CloseToken] = struct{}{}
 			continue
 		}
 		if ruleNode := module.ExportedRules[symbolName]; ruleNode != nil {
 			localModuleEnv := BuildSemanticEnv(module.Root, nil)
+			if nk != nil {
+				if nodeNameNode := ruleNode.FindFirstKind(NodeParseNodeName); nodeNameNode != nil {
+					nk[moduleName+"__"+NodeSingleTokenContent(nodeNameNode)] = struct{}{}
+				}
+			}
 			body := ruleNode.FindFirstKind(NodeParseRuleBody)
 			if body != nil {
-				collectTokenRefsFromParseNode(body, localModuleEnv.Pairs, ts)
+				collectTokenAndNodeRefsFromParseNodeWithAlias(body, localModuleEnv, moduleName, ts, nk)
 			}
 			continue
 		}
@@ -211,9 +220,26 @@ func collectReferencedImportedTokens(root *Node, env *SemanticEnv, ts map[string
 			body := tplDecl.Node.FindFirstKind(NodeParseTemplateBody)
 			if body != nil {
 				localModuleEnv := BuildSemanticEnv(module.Root, nil)
-				collectTokenRefsFromParseNode(body, localModuleEnv.Pairs, ts)
+				collectTokenAndNodeRefsFromParseNodeWithAlias(body, localModuleEnv, moduleName, ts, nk)
 			}
 		}
+	}
+}
+
+func collectTokenAndNodeRefsFromParseNodeWithAlias(node *Node, env *SemanticEnv, moduleAlias string, ts map[string]struct{}, nk map[string]struct{}) {
+	localTokens := make(map[string]struct{})
+	localNodeKinds := make(map[string]struct{})
+	collectTokenRefsFromParseNode(node, env.Pairs, localTokens)
+	walkParseTreeForSymbols(node, env, localTokens, localNodeKinds)
+
+	for tokenName := range localTokens {
+		ts[moduleAlias+"__"+tokenName] = struct{}{}
+	}
+	if nk == nil {
+		return
+	}
+	for nodeName := range localNodeKinds {
+		nk[moduleAlias+"__"+nodeName] = struct{}{}
 	}
 }
 

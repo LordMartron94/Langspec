@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"langspec"
 	"os"
 	"path/filepath"
 	"testing"
@@ -251,5 +252,154 @@ PARSE {
 	}
 	if !foundUnresolved {
 		t.Fatalf("expected V_IMP005 for unresolved external pattern in lex section")
+	}
+}
+
+func TestImportExportTemplateOnlyPullsImportedLexerRules(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modulePath := filepath.Join(tmpDir, "module_tpl_tokens.lspec")
+	mainPath := filepath.Join(tmpDir, "main_tpl_tokens.lspec")
+
+	module := `--- "Module" v1.0.0 | lspec v1.0.0 ---
+
+LEX {
+	state INITIAL {
+		TokTplWord -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	export template EmitWord($r : Rule) { virtual TokTplWord }
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+
+IMPORT {
+	"` + modulePath + `" as M;
+}
+LEX {
+	state INITIAL {
+		TokMain -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	IGNORE { word };
+	rule PROGRAM -> ProgramNode {
+		using M.EmitWord(PROGRAM)
+	};
+}`
+
+	if err := os.WriteFile(modulePath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module spec: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write main spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err != nil {
+		logCompileFailureDiagnostics(t, res)
+		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
+	}
+	if res == nil || res.CompiledSymbols == nil || res.CompiledLexerSpec == nil {
+		t.Fatalf("compile result missing lowered artifacts")
+	}
+
+	importedTok := res.CompiledSymbols.TokenID("M__TokTplWord")
+	if importedTok == 0 {
+		t.Fatalf("expected namespaced imported template token M__TokTplWord in compiled symbols")
+	}
+
+	rs := res.CompiledLexerSpec.Ruleset("M__INITIAL")
+	if len(langspec.LexerRulesetGetRules(rs)) == 0 {
+		t.Fatalf("expected namespaced imported lexer ruleset M__INITIAL to contain template token rules")
+	}
+}
+
+func TestImportExportCompiledSymbolsNamespaceImportedCollisions(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modAPath := filepath.Join(tmpDir, "module_a.lspec")
+	modBPath := filepath.Join(tmpDir, "module_b.lspec")
+	mainPath := filepath.Join(tmpDir, "main_collision.lspec")
+
+	moduleA := `--- "ModuleA" v1.0.0 | lspec v1.0.0 ---
+
+LEX {
+	state INITIAL {
+		TokShared -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	export rule SharedRule -> SharedNode { virtual TokShared };
+}`
+
+	moduleB := `--- "ModuleB" v1.0.0 | lspec v1.0.0 ---
+
+LEX {
+	state INITIAL {
+		TokShared -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	export rule SharedRule -> SharedNode { virtual TokShared };
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+
+IMPORT {
+	"` + modAPath + `" as A;
+	"` + modBPath + `" as B;
+}
+LEX {
+	state INITIAL {
+		TokMain -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	IGNORE { word };
+	rule PROGRAM -> ProgramNode {
+		using A.SharedRule
+		using B.SharedRule
+	};
+}`
+
+	if err := os.WriteFile(modAPath, []byte(moduleA), 0644); err != nil {
+		t.Fatalf("write module A spec: %v", err)
+	}
+	if err := os.WriteFile(modBPath, []byte(moduleB), 0644); err != nil {
+		t.Fatalf("write module B spec: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write main spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err != nil {
+		logCompileFailureDiagnostics(t, res)
+		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
+	}
+	if res == nil || res.CompiledSymbols == nil {
+		t.Fatalf("compile result missing compiled symbols")
+	}
+
+	aTok := res.CompiledSymbols.TokenID("A__TokShared")
+	bTok := res.CompiledSymbols.TokenID("B__TokShared")
+	if aTok == 0 || bTok == 0 || aTok == bTok {
+		t.Fatalf("expected non-colliding namespaced imported tokens A__TokShared and B__TokShared")
+	}
+
+	aNode := res.CompiledSymbols.NodeKindID("A__SharedNode")
+	bNode := res.CompiledSymbols.NodeKindID("B__SharedNode")
+	if aNode == 0 || bNode == 0 || aNode == bNode {
+		t.Fatalf("expected non-colliding namespaced imported nodes A__SharedNode and B__SharedNode")
 	}
 }

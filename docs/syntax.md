@@ -114,6 +114,7 @@ Imported lexer symbols are intentionally strict:
 
 * Only imported lexer symbols that are actually referenced are pulled into the compiled output (including imported patterns/tokens/states as applicable).
 * Imported lexer states are namespaced in generated artifacts (for example `M__INITIAL`) to avoid collisions.
+* For generated Go bindings, imported tokens and node kinds are namespaced with the importer alias (for example `M__TokWord`, `M__ItemNode`) to avoid cross-module collisions.
 
 ---
 

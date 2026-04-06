@@ -82,6 +82,7 @@ type parseCompileCtx struct {
 	counts      map[string]int
 	rootLevel   bool
 	transparent bool
+	importAlias string
 
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
 }
@@ -459,12 +460,16 @@ func collectLexerStateReferences(mutRoot *Node) []string {
 }
 
 func appendImportedReferencedLexerRulesets(c *compiler, ctx *patternCompileCtx, lexerSpec *langspec.LexerSpec[rune, uint32, uint32, string]) {
-	referenced := collectReferencedImportedTokenNames(ctx.rootNode, ctx.env)
-	if len(referenced) == 0 {
+	referencedByModule := collectReferencedImportedTokenNames(ctx.rootNode, ctx.env)
+	if len(referencedByModule) == 0 {
 		return
 	}
 	for alias, module := range ctx.env.Imports {
 		if module == nil || module.Root == nil {
+			continue
+		}
+		moduleReferenced := referencedByModule[alias]
+		if len(moduleReferenced) == 0 {
 			continue
 		}
 		moduleEnv := semantics.BuildSemanticEnv(module.Root, nil)
@@ -484,7 +489,7 @@ func appendImportedReferencedLexerRulesets(c *compiler, ctx *patternCompileCtx, 
 			if body == nil {
 				continue
 			}
-			filtered := gatherFilteredRulesInBody(body, modulePatternCtx, referenced)
+			filtered := gatherFilteredRulesInBody(body, modulePatternCtx, moduleReferenced)
 			if len(filtered) == 0 {
 				continue
 			}
@@ -493,9 +498,13 @@ func appendImportedReferencedLexerRulesets(c *compiler, ctx *patternCompileCtx, 
 				rs := langspec.LexerRulesetCreate[uint32, uint32]()
 				for _, lr := range filtered {
 					stackStates := namespacedStackTargets(alias, lr.stackStates)
+					tokenID := resolveSymbolTokenIDForAlias(ctx.sym, alias, lr.tokenName)
+					if tokenID == 0 {
+						panic(fmt.Errorf("compiler error: unresolved imported token '%s.%s' in lexer materialization", alias, lr.tokenName))
+					}
 					rs.WithLexerRule(
 						lr.tokenPattern,
-						ctx.sym.TokenID(lr.tokenName),
+						tokenID,
 						ctx.sym.RoleID(lr.tokenRole),
 						lr.priority,
 						lr.stackKind,
@@ -509,10 +518,21 @@ func appendImportedReferencedLexerRulesets(c *compiler, ctx *patternCompileCtx, 
 	}
 }
 
-func collectReferencedImportedTokenNames(root *Node, env *SemanticEnv) map[string]bool {
-	out := make(map[string]bool)
+func collectReferencedImportedTokenNames(root *Node, env *SemanticEnv) map[string]map[string]bool {
+	out := make(map[string]map[string]bool)
 	if root == nil || env == nil {
 		return out
+	}
+	addToken := func(moduleAlias, tokenName string) {
+		if moduleAlias == "" || tokenName == "" {
+			return
+		}
+		modSet, ok := out[moduleAlias]
+		if !ok {
+			modSet = make(map[string]bool)
+			out[moduleAlias] = modSet
+		}
+		modSet[tokenName] = true
 	}
 	for _, usingRef := range root.FindAllKind(dslspec.NodeLexRulePatternUsing) {
 		moduleName, symbolName := parseUsingReference(usingRef)
@@ -521,22 +541,30 @@ func collectReferencedImportedTokenNames(root *Node, env *SemanticEnv) map[strin
 			continue
 		}
 		if pairDecl := module.ExportedPairs[symbolName]; pairDecl != nil {
-			out[pairDecl.OpenToken] = true
-			out[pairDecl.CloseToken] = true
+			addToken(moduleName, pairDecl.OpenToken)
+			addToken(moduleName, pairDecl.CloseToken)
 			continue
 		}
 		if ruleNode := module.ExportedRules[symbolName]; ruleNode != nil {
 			moduleEnv := semantics.BuildSemanticEnv(module.Root, nil)
 			body := ruleNode.FindFirstKind(dslspec.NodeParseRuleBody)
 			if body != nil {
-				collectReferencedTokensFromParseNode(body, moduleEnv.Pairs, out)
+				collectReferencedTokensFromParseNode(body, moduleEnv.Pairs, addToken, moduleName)
+			}
+			continue
+		}
+		if tplDecl := module.ExportedTemplates[symbolName]; tplDecl != nil && tplDecl.Node != nil {
+			body := tplDecl.Node.FindFirstKind(dslspec.NodeParseTemplateBody)
+			if body != nil {
+				moduleEnv := semantics.BuildSemanticEnv(module.Root, nil)
+				collectReferencedTokensFromParseNode(body, moduleEnv.Pairs, addToken, moduleName)
 			}
 		}
 	}
 	return out
 }
 
-func collectReferencedTokensFromParseNode(node *Node, pairs map[string]*semantics.PairDecl, out map[string]bool) {
+func collectReferencedTokensFromParseNode(node *Node, pairs map[string]*semantics.PairDecl, addToken func(moduleAlias, tokenName string), moduleAlias string) {
 	if node == nil {
 		return
 	}
@@ -545,13 +573,13 @@ func collectReferencedTokensFromParseNode(node *Node, pairs map[string]*semantic
 		case dslspec.NodeParseTokenReference, dslspec.NodeParseNestOpenToken, dslspec.NodeParseNestCloseToken:
 			name := dslspec.NodeSingleTokenContent(current)
 			if name != "" {
-				out[name] = true
+				addToken(moduleAlias, name)
 			}
 		case dslspec.NodeParseNestPairRef:
 			name := semantics.PairNameFromNestPairRefNode(current)
 			if pair := pairs[name]; pair != nil {
-				out[pair.OpenToken] = true
-				out[pair.CloseToken] = true
+				addToken(moduleAlias, pair.OpenToken)
+				addToken(moduleAlias, pair.CloseToken)
 			}
 		}
 		return false, false
@@ -587,6 +615,18 @@ func namespacedStackTargets(alias string, states []string) []string {
 		out = append(out, alias+"__"+state)
 	}
 	return out
+}
+
+func resolveSymbolTokenIDForAlias(sym *semantics.CompiledSymbolTable, alias string, tokenName string) uint32 {
+	if sym == nil {
+		return 0
+	}
+	if alias != "" {
+		if id := sym.TokenID(alias + "__" + tokenName); id != 0 {
+			return id
+		}
+	}
+	return sym.TokenID(tokenName)
 }
 
 func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
@@ -1198,7 +1238,7 @@ func compilePredict(ctx *parseCompileCtx, node *Node) CompiledRule {
 	var preds []prediction
 	for _, la := range lookaheads {
 		offset := extractIntContent(la.FindFirstKind(dslspec.NodePredictOffset))
-		token := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(la.FindFirstKind(dslspec.NodePredictToken)))
+		token := resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(la.FindFirstKind(dslspec.NodePredictToken)))
 		preds = append(preds, prediction{offset, token})
 	}
 	lookaheadSlice := make([]syntaxa.Lookahead[lexarch.TokenKind], len(preds))
@@ -1264,12 +1304,12 @@ func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if outputNodeKindNode == nil {
 		panic("compiler error: emit node missing output kind")
 	}
-	outputNodeKind := ctx.sym.NodeKindID(dslspec.NodeSingleTokenContent(outputNodeKindNode))
+	outputNodeKind := resolveSymbolNodeKindIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(outputNodeKindNode))
 	refNode := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if refNode == nil {
 		panic("compiler error: emit node missing reference")
 	}
-	targetToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(refNode))
+	targetToken := resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(refNode))
 	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), outputNodeKind, lexarch.TokenKind(targetToken))
 }
 
@@ -1291,14 +1331,14 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 			panic(fmt.Sprintf("compiler error: emit-one-of alternatives for '%s' must be token references", customNodeKind))
 		}
 
-		tokens = append(tokens, lexarch.TokenKind(ctx.sym.TokenID(dslspec.IdentifierValue(refNode))))
+		tokens = append(tokens, lexarch.TokenKind(resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.IdentifierValue(refNode))))
 	}
 
 	if len(tokens) == 0 {
 		panic(fmt.Sprintf("compiler error: emit-one-of for '%s' has no valid tokens", customNodeKind))
 	}
 
-	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), ctx.sym.NodeKindID(customNodeKind), tokens...)
+	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), resolveSymbolNodeKindIDForAlias(ctx.sym, ctx.importAlias, customNodeKind), tokens...)
 }
 
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
@@ -1327,7 +1367,11 @@ func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 	tokenRef := node.FindFirstKind(dslspec.NodeParseTokenReference)
 	if tokenRef != nil {
-		return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), ctx.sym.NodeKindID(targetName), lexarch.TokenKind(ctx.sym.TokenID(dslspec.IdentifierValue(tokenRef))))
+		return ctx.builder.Token.Expect(
+			parseCtxLabel(ctx, "EMIT"),
+			resolveSymbolNodeKindIDForAlias(ctx.sym, ctx.importAlias, targetName),
+			lexarch.TokenKind(resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.IdentifierValue(tokenRef))),
+		)
 	}
 
 	return compileRuleReference(ctx, nameNode, targetName)
@@ -1380,7 +1424,7 @@ func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if refNode == nil {
 		panic("compiler error: virtual node missing reference")
 	}
-	targetToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(refNode))
+	targetToken := resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(refNode))
 	return ctx.builder.Token.ExpectVirtual(parseCtxLabel(ctx, "VIRTUAL"), lexarch.TokenKind(targetToken))
 }
 
@@ -1390,8 +1434,8 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 
 	var openToken, closeToken uint32
 	if openTokNode != nil && closeTokNode != nil {
-		openToken = ctx.sym.TokenID(dslspec.NodeSingleTokenContent(openTokNode))
-		closeToken = ctx.sym.TokenID(dslspec.NodeSingleTokenContent(closeTokNode))
+		openToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(openTokNode))
+		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(closeTokNode))
 	} else if usingRef := node.FindFirstKind(dslspec.NodeLexRulePatternUsing); usingRef != nil {
 		moduleName, symbolName := parseUsingReference(usingRef)
 		module, ok := semantics.ResolveImportedModule(ctx.env, moduleName)
@@ -1402,8 +1446,8 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		if !ok || decl == nil {
 			panic(fmt.Errorf("compiler error: unresolved exported pair '%s.%s' in nest", moduleName, symbolName))
 		}
-		openToken = ctx.sym.TokenID(decl.OpenToken)
-		closeToken = ctx.sym.TokenID(decl.CloseToken)
+		openToken = resolveSymbolTokenIDForAlias(ctx.sym, moduleName, decl.OpenToken)
+		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, moduleName, decl.CloseToken)
 	} else if pairRef := node.FindFirstKind(dslspec.NodeParseNestPairRef); pairRef != nil {
 		pName := semantics.PairNameFromNestPairRefNode(pairRef)
 		if pName == "" {
@@ -1478,6 +1522,7 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 		}
 		subCtx := *ctx
 		subCtx.rootLevel = false
+		subCtx.importAlias = moduleName
 		return compileParseExpression(&subCtx, rootExpr)
 	}
 	if tplDecl, ok := module.ExportedTemplates[symbolName]; ok && tplDecl != nil {
@@ -1490,6 +1535,7 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 		}
 		subCtx := *ctx
 		subCtx.rootLevel = false
+		subCtx.importAlias = moduleName
 		return compileParseExpression(&subCtx, body)
 	}
 	if _, ok := module.ExportedPratt[symbolName]; ok {
@@ -1529,6 +1575,7 @@ func compileExternalUsingTemplateCall(
 	substituted := semantics.SubstituteTemplateParameterReferences(body, bindings)
 	subCtx := *ctx
 	subCtx.rootLevel = false
+	subCtx.importAlias = moduleName
 	compiled := compileParseExpression(&subCtx, substituted)
 	if g := compiled.GetGrammar(); g != nil && ctx.sourceMap != nil {
 		ctx.sourceMap[g] = anchor
@@ -1587,7 +1634,7 @@ func compileGroup(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileTokenMatch(ctx *parseCompileCtx, node *Node) CompiledRule {
-	targetToken := ctx.sym.TokenID(dslspec.NodeSingleTokenContent(node))
+	targetToken := resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(node))
 	if ctx.rootLevel {
 		if ctx.transparent {
 			return ctx.builder.Token.ExpectVirtual(ctx.grammarID, lexarch.TokenKind(targetToken))
@@ -1595,6 +1642,18 @@ func compileTokenMatch(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return ctx.builder.Token.Expect(ctx.grammarID, ctx.nodeKind, lexarch.TokenKind(targetToken))
 	}
 	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "TOKEN"), 0, lexarch.TokenKind(targetToken))
+}
+
+func resolveSymbolNodeKindIDForAlias(sym *semantics.CompiledSymbolTable, alias string, nodeName string) uint32 {
+	if sym == nil {
+		return 0
+	}
+	if alias != "" {
+		if id := sym.NodeKindID(alias + "__" + nodeName); id != 0 {
+			return id
+		}
+	}
+	return sym.NodeKindID(nodeName)
 }
 
 func compilePrattExprDef(
