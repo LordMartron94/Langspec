@@ -607,6 +607,9 @@ func shouldSkipLibraryUnresolvedChecks(ctx *ValidationCtx) bool {
 }
 
 func reportUnusedTokens(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, ignoredRoles map[string]bool) {
+	if isLibraryMode(ctx) {
+		return
+	}
 	for name, node := range env.Tokens {
 		if used[name] || ignoredRoles[getTokenRole(node)] {
 			continue
@@ -668,7 +671,15 @@ func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
 }
 
 func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
-	if !isLibraryMode(ctx) {
+	if isLibraryMode(ctx) {
+		if programNode, ok := env.Rules[ProgramRuleName]; ok {
+			nameNode := programNode.FindFirstKind(NodeParseRuleName)
+			if nameNode == nil {
+				nameNode = programNode
+			}
+			ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("library specs must not define entry rule '%s'", ProgramRuleName), nameNode)
+		}
+	} else {
 		if _, ok := env.Rules[ProgramRuleName]; !ok {
 			ctx.ReportError(VALIDATION_PROGRAM_RULE_REQUIRED.String(), fmt.Sprintf("parse section must define entry rule '%s'", ProgramRuleName), ctx.RootNode)
 		}
@@ -756,10 +767,14 @@ func processReachability(ctx *ValidationCtx) {
 
 	patternDeps := buildPatternDependencyMap(ctx.RootNode, env)
 	checkPatternCycles(ctx, env, patternDeps)
-	checkPatternReachability(ctx, env, patternDeps)
+	if !isLibraryMode(ctx) {
+		checkPatternReachability(ctx, env, patternDeps)
+	}
 
-	parseDeps := buildUnifiedParseDependencyMap(ctx.RootNode, env)
-	checkParseReachability(ctx, env, parseDeps)
+	if !isLibraryMode(ctx) {
+		parseDeps := buildUnifiedParseDependencyMap(ctx.RootNode, env)
+		checkParseReachability(ctx, env, parseDeps)
+	}
 }
 
 func checkPatternCycles(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
@@ -777,11 +792,20 @@ func checkPatternReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[str
 		if env.LocalPatterns[name] {
 			continue
 		}
+		if isLibraryMode(ctx) && patternDefinitionIsExported(node) {
+			// Library modules often export utility patterns intended for importers only.
+			// Do not report local-unreachable warnings for exported pattern surface.
+			continue
+		}
 		if !reachable[name] {
 			_, nameNode := ExtractPatternDefName(node)
 			ctx.ReportWarning(VALIDATION_UNREACHABLE_PATTERN.String(), fmt.Sprintf("pattern '%s' is never referenced (unreachable)", name), nameNode)
 		}
 	}
+}
+
+func patternDefinitionIsExported(def *Node) bool {
+	return def != nil && def.FindFirstKind(NodeExported) != nil
 }
 
 func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
@@ -843,6 +867,9 @@ func processLexerStateSemantics(ctx *ValidationCtx) {
 
 	for name := range defined {
 		if name == "INITIAL" {
+			continue
+		}
+		if isLibraryMode(ctx) {
 			continue
 		}
 		if !referenced[name] {

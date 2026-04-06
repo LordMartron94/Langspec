@@ -266,6 +266,71 @@ PARSE {
 	}
 }
 
+func TestImportExportLibraryProgramRuleForbidden(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modulePath := filepath.Join(tmpDir, "module_library_with_program.lspec")
+	mainPath := filepath.Join(tmpDir, "main_library_with_program_import.lspec")
+
+	module := `--- "Module" v1.0.0 | lspec v1.0.0 ---
+PRAGMA {
+	lspec { library = true; }
+}
+LEX {
+	state INITIAL {
+		TokWord -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	rule PROGRAM -> ProgramNode { virtual TokWord };
+	export rule Item -> ItemNode { virtual TokWord };
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+IMPORT {
+	"` + modulePath + `" as M;
+}
+LEX {
+	state INITIAL {
+		TokWord -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	IGNORE { word };
+	rule PROGRAM -> ProgramNode { virtual TokWord };
+}`
+
+	if err := os.WriteFile(modulePath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module spec: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write main spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err == nil {
+		t.Fatalf("expected compile failure for library imported module defining PROGRAM")
+	}
+	if res == nil || len(res.ImportedDiagnostics) == 0 {
+		t.Fatalf("expected imported diagnostics for library PROGRAM violation")
+	}
+
+	foundProgramViolation := false
+	for _, diag := range res.ImportedDiagnostics {
+		if diag.Alias == "M" && diag.Code == "V_PAR004" {
+			foundProgramViolation = true
+			break
+		}
+	}
+	if !foundProgramViolation {
+		t.Fatalf("expected imported V_PAR004 for library PROGRAM rule violation")
+	}
+}
+
 func TestImportExportNonLibraryMissingProgramStillFails(t *testing.T) {
 	t.Parallel()
 
@@ -384,6 +449,7 @@ PARSE {
 		t.Fatalf("expected compile success with library unresolved references allowed: %v", err)
 	}
 }
+
 func TestImportExportValidationForExternalTemplateCallErrors(t *testing.T) {
 	t.Parallel()
 

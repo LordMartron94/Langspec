@@ -81,6 +81,7 @@ func resolveSyntaxErrorLineSpan(
 
 func renderValidationEntries(
 	w io.Writer,
+	sourcePath string,
 	source []rune,
 	entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind],
 	advanceFn columnAdvanceFn,
@@ -92,6 +93,9 @@ func renderValidationEntries(
 	lines := splitLinesRunes(source)
 
 	fmt.Fprintln(w, "\n===== VALIDATION =====")
+	if strings.TrimSpace(sourcePath) != "" {
+		fmt.Fprintf(w, "Source: %s\n", sourcePath)
+	}
 
 	sourceText := string(source)
 	for _, stage := range entries.Results {

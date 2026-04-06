@@ -190,11 +190,11 @@ type LangSpecCompileResult struct {
 }
 
 type ImportedModuleDiagnostic struct {
-	Alias      string
-	Path       string
-	Code       string
-	Message    string
-	StartLine  int
+	Alias       string
+	Path        string
+	Code        string
+	Message     string
+	StartLine   int
 	StartColumn int
 }
 
@@ -349,7 +349,7 @@ func LangSpecCompilerCompile(
 	}
 
 	if hasCriticalValidationErrors(validationEntries) {
-		renderValidationEntries(compiler.diagnosticWriter, contentRune, validationEntries, advanceRuneTab4)
+		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, validationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("parsing failed with validation errors")
 	}
 
@@ -395,7 +395,7 @@ func LangSpecCompilerCompile(
 	}
 
 	if hasCriticalValidationErrors(postValidationEntries) {
-		renderValidationEntries(compiler.diagnosticWriter, contentRune, postValidationEntries, advanceRuneTab4)
+		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, postValidationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("compilation failed with grammar safety errors")
 	}
 
