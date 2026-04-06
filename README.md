@@ -70,6 +70,20 @@ LangSpec uses a custom meta-language to define both lexing and parsing rules in 
 - **[View a real-world example](examples/lspec.lspec)** to see how LangSpec defines its own syntax.
 - **[View the collection of my own syntaxes created with LangSpec](https://github.com/LordMartron94/Lingua)** to see how my other grammars (whether DSL or real) are built using LangSpec
 
+### Import/export system (module composition)
+
+LangSpec supports cross-file grammar composition through:
+
+- `IMPORT { "path/to/module.lspec" as Alias; }` at top level.
+- `export` declarations for reusable external symbols (for example `export`ed patterns, parse rules, pairs, and templates).
+- `using Alias.Symbol` and `using Alias.Template(args)` at parse/lex integration sites.
+
+Import behavior is intentionally strict:
+
+- External templates must be invoked as `using Alias.Template(...)` (shape/category validation reports `V_IMP006` on mismatch).
+- Unknown imported exports report `V_IMP005`.
+- Imported lexer symbols are referenced-only (unused imported patterns/tokens/states are not pulled into output), and imported states are namespaced to avoid collisions.
+
 ### 1. Header (Required)
 
 ```lspec

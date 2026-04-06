@@ -39,6 +39,83 @@ The header declares the target language name and version, alongside the required
 
 ---
 
+## 2.5 IMPORT and module exports
+
+LangSpec supports composing grammars from other `.lspec` modules through an explicit import system.
+
+### IMPORT block
+
+Import declarations live in an optional top-level `IMPORT` block:
+
+```
+IMPORT {
+  "path/to/module.lspec" as M;
+  "/absolute/path/other.lspec" as Other;
+}
+```
+
+Rules:
+
+* Each entry uses a quoted file path and an alias: `"..." as Alias;`
+* Alias names must be unique inside the file.
+* Imported symbols are referenced through the alias namespace (`M.<Name>`).
+
+### Exporting symbols from a module
+
+In `PARSE`, declarations can be exported so other modules can reference them:
+
+```
+PARSE {
+  export pair Braces TokOpen TokClose;
+  export rule Item -> ItemNode { virtual TokWord };
+  export template ItemTpl($r : Rule) { $r };
+}
+```
+
+This enables external use through `using <Alias>.<ExportedName>` and `using <Alias>.<ExportedTemplate>(...)`.
+
+Patterns can also be exported from `PATTERN` and referenced from importing modules (for example from lex `using` sites). This is part of the same import/export symbol surface.
+
+### Referencing imported symbols (`using`)
+
+Imported parse-side symbols are used via `using` (not via inline dotted parse references):
+
+```
+PARSE {
+  rule PROGRAM -> ProgramNode {
+    nest using M.Braces {
+      using M.Item
+      using M.ItemTpl(PROGRAM)
+    }
+  };
+}
+```
+
+Important constraints:
+
+* Template usage must include call arguments:
+  * valid: `using M.TemplateName(arg1, arg2)`
+  * invalid: `using M.TemplateName`
+* Non-template exports must not be called with arguments:
+  * valid: `using M.RuleName`
+  * invalid: `using M.RuleName(...)`
+* Unknown exports are rejected during semantic validation.
+* Current import surface is intentionally limited to exported parse-side constructs used via `using`; direct external token or Pratt import usage is not part of the current public syntax surface.
+
+Validation codes related to import/export misuse include:
+
+* `V_IMP005`: unresolved import/export symbol (alias or exported name not found).
+* `V_IMP006`: invalid import `using` category/shape (for example, missing template call syntax or calling a non-template as a template).
+
+### Imported lexer symbols (including patterns)
+
+Imported lexer symbols are intentionally strict:
+
+* Only imported lexer symbols that are actually referenced are pulled into the compiled output (including imported patterns/tokens/states as applicable).
+* Imported lexer states are namespaced in generated artifacts (for example `M__INITIAL`) to avoid collisions.
+
+---
+
 ## 3. PRAGMA
 
 The `PRAGMA` section defines tooling and compiler directives. The block key **must** begin with the `tool` keyword.
