@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"langspec"
 	"langspec/dsl"
 )
 
@@ -862,5 +863,167 @@ PARSE {
 	}
 	if res.CompiledSymbols.TokenID("M__TokKWGodebug") != 0 || res.CompiledSymbols.TokenID("M__TokIdent") != 0 {
 		t.Fatalf("imported namespaced tokens should not be materialized")
+	}
+}
+
+func TestEmbedImportMergesLexerNamespaceAndInjectsHandoff(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modulePath := filepath.Join(tmpDir, "sql_embed.lspec")
+	mainPath := filepath.Join(tmpDir, "main_embed.lspec")
+
+	module := `--- "SQL" v1.0.0 | lspec v1.0.0 ---
+LEX {
+	state INITIAL {
+		TokSQLWord -> sql: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	rule PROGRAM -> NodeSQLProgram { virtual TokSQLWord };
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+IMPORT {
+	embed "` + modulePath + `" as SQL;
+}
+LEX {
+	state INITIAL {
+		TokOpen -> delim: ` + "`BEGINSQL`" + `;
+		TokClose -> delim: ` + "`ENDSQL`" + `;
+		TokHostWord -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	IGNORE { delim word };
+	rule PROGRAM -> ProgramNode {
+		embed SQL nest TokOpen TokClose
+	};
+}`
+
+	if err := os.WriteFile(modulePath, []byte(module), 0644); err != nil {
+		t.Fatalf("write embed module: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write host spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err != nil {
+		logCompileFailureDiagnostics(t, res)
+		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
+	}
+	if res == nil || res.CompiledSymbols == nil || res.CompiledLexerSpec == nil {
+		t.Fatalf("compile result missing compiled artifacts")
+	}
+	if res.CompiledSymbols.TokenID("SQL::TokSQLWord") == 0 {
+		t.Fatalf("expected namespaced embedded token SQL::TokSQLWord in compiled symbols")
+	}
+	hasEmbedState := false
+	for _, state := range res.CompiledLexerSpec.SortedStateKeys() {
+		if state == "SQL::INITIAL" {
+			hasEmbedState = true
+			break
+		}
+	}
+	if !hasEmbedState {
+		t.Fatalf("expected namespaced embedded lexer state SQL::INITIAL")
+	}
+
+	hostRules := langspec.LexerRulesetGetRules(res.CompiledLexerSpec.Ruleset("INITIAL"))
+	foundEntryPush := false
+	for _, rule := range hostRules {
+		if rule.Token != res.CompiledSymbols.TokenID("TokOpen") {
+			continue
+		}
+		if rule.StackKind == langspec.LexerStackOpPush && len(rule.StackStates) > 0 && rule.StackStates[0] == "SQL::INITIAL" {
+			foundEntryPush = true
+			break
+		}
+	}
+	if !foundEntryPush {
+		t.Fatalf("expected TokOpen host rule to push SQL::INITIAL")
+	}
+
+	embedRules := langspec.LexerRulesetGetRules(res.CompiledLexerSpec.Ruleset("SQL::INITIAL"))
+	foundExitPop := false
+	for _, rule := range embedRules {
+		if rule.Token != res.CompiledSymbols.TokenID("TokClose") {
+			continue
+		}
+		if rule.StackKind == langspec.LexerStackOpPop && rule.StackPopAmount == 1 {
+			foundExitPop = true
+			break
+		}
+	}
+	if !foundExitPop {
+		t.Fatalf("expected injected TokClose pop(1) rule in SQL::INITIAL")
+	}
+}
+
+func TestEmbedStatementRequiresEmbedImportAlias(t *testing.T) {
+	t.Parallel()
+
+	compiler, _, _, teardown := setupTestCompiler()
+	defer teardown()
+
+	tmpDir := t.TempDir()
+	modulePath := filepath.Join(tmpDir, "mod_plain_import.lspec")
+	mainPath := filepath.Join(tmpDir, "main_embed_alias_error.lspec")
+
+	module := `--- "M" v1.0.0 | lspec v1.0.0 ---
+LEX {
+	state INITIAL {
+		TokWord -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	rule PROGRAM -> NodeProg { virtual TokWord };
+}`
+
+	main := `--- "Main" v1.0.0 | lspec v1.0.0 ---
+IMPORT {
+	"` + modulePath + `" as M;
+}
+LEX {
+	state INITIAL {
+		TokOpen -> delim: ` + "`BEGIN`" + `;
+		TokClose -> delim: ` + "`END`" + `;
+		TokWord -> word: ` + "`[a-zA-Z]+`" + `;
+	}
+}
+PARSE {
+	IGNORE { delim word };
+	rule PROGRAM -> ProgramNode { embed M nest TokOpen TokClose };
+}`
+
+	if err := os.WriteFile(modulePath, []byte(module), 0644); err != nil {
+		t.Fatalf("write module: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0644); err != nil {
+		t.Fatalf("write host spec: %v", err)
+	}
+
+	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	if err == nil {
+		t.Fatalf("expected compile failure when embed uses non-embed import alias")
+	}
+	if res == nil || res.ValidationEntries == nil {
+		t.Fatalf("expected validation entries")
+	}
+	found := false
+	for _, stage := range res.ValidationEntries.Results {
+		for _, entry := range stage.Entries {
+			if entry.Code == "V_IMP009" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected V_IMP009 for embed alias misuse")
 	}
 }

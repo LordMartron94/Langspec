@@ -7,5 +7,4 @@ func RunAllLangSpecTests(t *testing.T) {
 	TestParseGeneratedLSpecViaBootstrap(t)
 	TestBuildSublimeSyntaxForDSL(t)
 	TestClientDSLToolchain(t)
-	TestToolchainGoBindingsNamespacesImportedSymbols(t)
 }

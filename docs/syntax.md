@@ -50,6 +50,7 @@ Import declarations live in an optional top-level `IMPORT` block:
 ```
 IMPORT {
   "path/to/module.lspec" as M;
+  embed "path/to/sql.lspec" as SQL;
   "/absolute/path/other.lspec" as Other;
 }
 ```
@@ -57,8 +58,19 @@ IMPORT {
 Rules:
 
 * Each entry uses a quoted file path and an alias: `"..." as Alias;`
+* Prefix an import with `embed` to mark it as an embedded-language module: `embed "..." as Alias;`
 * Alias names must be unique inside the file.
 * Imported symbols are referenced through the alias namespace (`M.<Name>`).
+
+### Embedded module imports
+
+`embed` imports are different from standard structural imports:
+
+* Their lexer artifacts are merged into the host with a namespaced prefix:
+  * states: `Alias::State` (for example `SQL::INITIAL`)
+  * tokens/roles: `Alias::Name`
+* They are intended for `embed Alias nest OpenTok CloseTok` parse statements.
+* `embed` parse statements must reference an alias declared with `embed`; using a standard import alias is invalid (`V_IMP009`).
 
 ### Exporting symbols from a module
 
@@ -384,6 +396,35 @@ To map matched tokens into the syntax tree, assign an output node kind using a c
 * **Predict:** `predict ( offset = TokIf, ... )` forces lookahead disambiguation.
 * **Nest (explicit delimiters):** `nest TokOpen TokClose [sync(Tokens)] { body };` matches `TokOpen`, then `body`, then `TokClose`.
 * **Nest (named pair):** `nest @PairName [sync(Tokens)] { body };` uses a **`pair`** declaration (§7.2) to supply the open and close lexer tokens. `PairName` is the identifier from the `pair` line.
+* **Embed (cross-module handoff):** `embed Alias nest TokOpen TokClose` switches lexer/parser ownership to the embedded module between host delimiters.
+
+### 7.1 Embed handoff (host -> embedded -> host)
+
+Embed syntax:
+
+```
+IMPORT {
+  embed "sql.lspec" as SQL;
+}
+
+PARSE {
+  rule EMBED_SQL -> NodeSQLBlock {
+    embed SQL nest TokKWSQL TokTripleBackticks
+  };
+}
+```
+
+Compile-time behavior:
+
+1. **Entry injection**: every host lex rule that emits `TokKWSQL` gets a push to `SQL::INITIAL`.
+2. **Exit injection**: the compiler synthesizes a max-priority rule in `SQL::INITIAL` that matches the host close-token pattern (`TokTripleBackticks`), emits that close token, and executes `pop(1)`.
+3. **Parser lowering**: the embed statement lowers to `open token -> embedded PROGRAM -> close token`.
+
+Validation guardrails:
+
+* `V_IMP009`: embed alias is not declared as an `embed` import.
+* `V_IMP010`: embed entry token does not exist in reachable host lexer rules.
+* `V_IMP011`: embed exit pattern can be shadowed inside embedded root lexer rules.
 
 ### 7.2 Pair declarations
 

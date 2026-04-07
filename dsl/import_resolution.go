@@ -16,6 +16,12 @@ type resolvedImportGraph struct {
 	diagnosticsN map[string]bool
 }
 
+type importDefinition struct {
+	Alias   string
+	Path    string
+	IsEmbed bool
+}
+
 func resolveImportGraph(compiler *LangSpecCompiler, sourceFile string, root *Node) (*resolvedImportGraph, error) {
 	graph := &resolvedImportGraph{
 		byAlias:      make(map[string]*semantics.ImportedModuleSymbols),
@@ -48,7 +54,9 @@ func resolveImportGraphRecursive(
 	visitedByPath[absSource] = true
 
 	imports := collectImportDefinitions(root)
-	for alias, rawPath := range imports {
+	for _, importDef := range imports {
+		alias := importDef.Alias
+		rawPath := importDef.Path
 		if alias == "" || rawPath == "" {
 			continue
 		}
@@ -66,7 +74,7 @@ func resolveImportGraphRecursive(
 		if importErr != nil {
 			return importErr
 		}
-		graph.byAlias[alias] = semantics.ImportedModuleSymbolsBuild(alias, absImport, importRoot)
+		graph.byAlias[alias] = semantics.ImportedModuleSymbolsBuild(alias, absImport, importRoot, importDef.IsEmbed)
 
 		if err := resolveImportGraphRecursive(compiler, absImport, importRoot, graph, visitedByPath); err != nil {
 			return err
@@ -75,12 +83,13 @@ func resolveImportGraphRecursive(
 	return nil
 }
 
-func collectImportDefinitions(root *Node) map[string]string {
-	out := make(map[string]string)
+func collectImportDefinitions(root *Node) []importDefinition {
+	var out []importDefinition
 	importSection := root.FindFirstKind(dslspec.NodeImportSection)
 	if importSection == nil {
 		return out
 	}
+	seenAliases := make(map[string]bool)
 	for _, imp := range importSection.FindAllKind(dslspec.NodeImportDefinition) {
 		pathNode := imp.FindFirstKind(dslspec.NodeImportPath)
 		aliasNode := imp.FindFirstKind(dslspec.NodeImportAlias)
@@ -95,7 +104,15 @@ func collectImportDefinitions(root *Node) map[string]string {
 		if alias == "" || pathValue == "" {
 			continue
 		}
-		out[alias] = pathValue
+		if seenAliases[alias] {
+			continue
+		}
+		seenAliases[alias] = true
+		out = append(out, importDefinition{
+			Alias:   alias,
+			Path:    pathValue,
+			IsEmbed: imp.FindFirstKind(dslspec.NodeImportEmbed) != nil,
+		})
 	}
 	return out
 }

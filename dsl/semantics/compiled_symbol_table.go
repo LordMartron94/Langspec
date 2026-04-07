@@ -131,6 +131,7 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 		ts[name] = struct{}{}
 	}
 	collectReferencedImportedSymbols(root, env, ts, nk)
+	collectEmbeddedImportSymbols(env, ts, rs)
 	ts[eofTokenName] = struct{}{}
 
 	if lex := root.FindFirstKind(NodeLexSection); lex != nil {
@@ -176,6 +177,32 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 	nk["ERROR_NODE"] = struct{}{}
 
 	return sortedStringKeys(ts), sortedStringKeys(rs), sortedStringKeys(nk)
+}
+
+func collectEmbeddedImportSymbols(env *SemanticEnv, ts map[string]struct{}, rs map[string]struct{}) {
+	if env == nil {
+		return
+	}
+	for alias, module := range env.Imports {
+		if module == nil || !module.IsEmbed {
+			continue
+		}
+		for tokenName := range module.Tokens {
+			ts[alias+"::"+tokenName] = struct{}{}
+		}
+		if module.Root == nil {
+			continue
+		}
+		if lex := module.Root.FindFirstKind(NodeLexSection); lex != nil {
+			for _, rule := range lex.FindAllKind(NodeLexRule) {
+				roleNode := rule.FindFirstKind(NodeLexRuleRole)
+				if roleNode == nil {
+					continue
+				}
+				rs[alias+"::"+NodeSingleTokenContent(roleNode)] = struct{}{}
+			}
+		}
+	}
 }
 
 func collectReferencedImportedTokens(root *Node, env *SemanticEnv, ts map[string]struct{}) {

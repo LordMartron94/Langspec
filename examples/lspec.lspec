@@ -82,6 +82,7 @@ PATTERN {
 	pat_TokKWExport : "export";
 	pat_TokKWAs : "as";
 	pat_TokKWUsing : "using";
+	pat_TokKWEmbed : "embed";
 	pat_TokTypeToken : "Token";
 	pat_TokTypeRule : "Rule";
 	pat_TokTypeNode : "Node";
@@ -105,6 +106,7 @@ LEX {
 	state INITIAL {
 		2 TokKWAs           -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWAs          ;
 		2 TokKWCall         -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWCall        ;
+		2 TokKWEmbed        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWEmbed       ;
 		2 TokKWExport       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWExport      ;
 		2 TokKWFalse        -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWFalse       ;
 		2 TokKWIgnore       -> LANG_SPEC_STRUCTURAL_ROLE : pat_TokKWIgnore      ;
@@ -214,10 +216,6 @@ PARSE {
 		)
 	};
 	
-	rule DUMMY_CHOICE_NEST -> transparent gr_DUMMY_CHOICE_NEST {
-		NodeParseExpressionReference : TokIdentifier | PARSE_NEST_BODY
-	};
-	
 	rule DUMMY_CHOICE_PARSE_BLOCK_CHOICE -> transparent gr_DUMMY_CHOICE_PARSE_BLOCK_CHOICE {
 		PARSE_RULE | PARSE_PAIR_DECLARATION | PARSE_TEMPLATE_DECLARATION
 	};
@@ -231,6 +229,10 @@ PARSE {
 	rule DUMMY_CHOICE_IDENT_MAP_BASE -> transparent gr_DUMMY_CHOICE_IDENT_MAP_BASE {
 		NodeParseSymbolReference : TokIdentifier
 		| NodeParseTemplateParameterReference : TokParameter
+	};
+	
+	rule DUMMY_CHOICE_NEST -> transparent gr_DUMMY_CHOICE_NEST {
+		NodeParseExpressionReference : TokIdentifier | PARSE_NEST_BODY
 	};
 	
 	rule DUMMY_CHOICE_VIRTUAL_MAPPING -> transparent gr_DUMMY_CHOICE_VIRTUAL_MAPPING {
@@ -253,6 +255,7 @@ PARSE {
 	};
 	
 	rule IMPORT_DEFINITION -> NodeImportDefinition sync (TokSemicolon) {
+		NodeImportEmbed : TokKWEmbed?
 		NodeImportPath : TokStringLiteral
 		virtual TokKWAs
 		NodeImportAlias : TokIdentifier
@@ -371,10 +374,23 @@ PARSE {
 		}
 	};
 	
+	rule NEST_OR_EMBED -> transparent gr_NEST_OR_EMBED {
+		PARSE_EMBED_STATEMENT_EMBED_NEST | PARSE_OP_NEST_STANDARD_NEST
+	};
+	
 	rule PARSE_BLOCK -> NodeParseBlock {
 		NodeExported : TokKWExport?
 		(
 			DUMMY_CHOICE_PARSE_BLOCK_CHOICE
+		)
+	};
+	
+	rule PARSE_EMBED_STATEMENT_EMBED_NEST -> NodeParseEmbedStatement {
+		virtual TokKWEmbed
+		NodeModuleReference : TokIdentifier
+		virtual TokKWNest
+		(
+			PARSE_OP_NEST_CHOICE
 		)
 	};
 	
@@ -437,19 +453,6 @@ PARSE {
 		nest @GenPair_TokBraceOpen_TokBraceClose PARSE_EXPRESSION
 	};
 	
-	rule PARSE_OP_NEST -> NodeParseOpNest {
-		virtual TokKWNest
-		(
-			PARSE_OP_NEST_CHOICE
-		)
-		(
-			RULE_MODIFIER_SYNC
-		)?
-		(
-			DUMMY_CHOICE_NEST
-		)
-	};
-	
 	rule PARSE_OP_NEST_CHOICE -> transparent gr_PARSE_OP_NEST_CHOICE {
 		PARSE_OP_NEST_EXPLICIT
 		| LEX_RULE_PATTERN_USING_NEST
@@ -460,6 +463,19 @@ PARSE {
 	rule PARSE_OP_NEST_EXPLICIT -> transparent gr_PARSE_OP_NEST_EXPLICIT {
 		NodeParseNestOpenToken : TokIdentifier
 		NodeParseNestCloseToken : TokIdentifier
+	};
+	
+	rule PARSE_OP_NEST_STANDARD_NEST -> NodeParseOpNest {
+		virtual TokKWNest
+		(
+			PARSE_OP_NEST_CHOICE
+		)
+		(
+			RULE_MODIFIER_SYNC
+		)?
+		(
+			DUMMY_CHOICE_NEST
+		)
 	};
 	
 	rule PARSE_OP_SUPPRESS -> NodeParseOpSuppress {
@@ -515,7 +531,7 @@ PARSE {
 	
 	rule PARSE_SEGMENT -> transparent gr_PARSE_SEGMENT {
 		PARSE_OP_SUPPRESS
-		| PARSE_OP_NEST
+		| NEST_OR_EMBED
 		| PARSE_GROUP
 		| LEX_RULE_PATTERN_USING_PARSE_SEGMENT
 		| PARSE_SEGMENT_TEMPLATE_CALL_SEGMENT

@@ -50,7 +50,8 @@ The editor layer receives a flat **`LexingRuleSet`**: each rule carries its **le
 
 **`editorLexRulesGroupedByState`** sorts rules per state by **priority (desc)** then **token id**, so “which rule wins for token *T* in state *S*” is deterministic and matches the usual lexer conflict resolution story.
 
-For imported grammars, this stage remains host-owned: imported parse symbols can impose lexical obligations, but imported lexer rules/states are not injected automatically. The generated syntax is built from the host `LEX` declarations after obligation validation.
+For standard imports, this stage remains host-owned: imported parse symbols can impose lexical obligations, but imported lexer rules/states are not injected automatically.  
+For `embed` imports, lexer states/rules are merged into the host with namespaced mode keys (`Alias::State`) before editor IR generation, so reachability and emitted `lex__*` contexts can include embedded modes.
 
 ---
 
@@ -63,6 +64,7 @@ The parser’s state graph does not carry the lexer’s mode stack. The editor t
 The simulation tracks an ordered list of **mode names** (strings), **bottom → top**, with these invariants:
 
 - The stack always contains at least **`INITIAL`** as the bottom logical frame, matching a `lexarch` session that starts with a bottom marker plus the lexer’s start state.
+- Embedded handoff rules can push namespaced states (for example `SQL::INITIAL`) onto this stack; the simulation treats them as ordinary lexer mode names.
 - **`push(A, B, …)`** appends targets in order (new top is the last target).
 - **`pop(k)`** removes up to *k* frames from the top but **never** removes below **`INITIAL`** (same clamping idea as `LexingSessionPop`).
 - **`set(targets…)`** is **`pop(1)`** then **`push(targets…)`**, consistent with `LexingSessionSet`.

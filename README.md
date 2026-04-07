@@ -89,6 +89,22 @@ Import behavior is intentionally strict:
   - `PRAGMA { lspec { library = true; } }`
   - this disables `PROGRAM`-required (`V_PAR004`) and unresolved-local-reference checks (`V_PAR002`, `V_PAT002`, `V_LEX006`) for that module, while keeping import/export contract checks active.
 
+### Embedded language handoff (`embed`)
+
+LangSpec also supports full cross-module language embedding:
+
+- Declare embedded modules in `IMPORT` via `embed "path/to/module.lspec" as Alias;`
+- Use parse-site handoff syntax: `embed Alias nest OpenToken CloseToken`
+- Compiler behavior:
+  - merges embedded lexer states/rules into host namespaces (`Alias::INITIAL`, `Alias::Tok...`)
+  - injects entry push on host open-token rules to `Alias::INITIAL`
+  - injects exit pop rule in embedded root matching host close-token pattern
+  - lowers parse statement to open -> embedded `PROGRAM` -> close
+- Validation diagnostics for embed-specific misuse:
+  - `V_IMP009` embed alias must be declared with `embed`
+  - `V_IMP010` entry token must be reachable in host lexer
+  - `V_IMP011` exit token pattern shadowed in embedded root rules
+
 ### 1. Header (Required)
 
 ```lspec

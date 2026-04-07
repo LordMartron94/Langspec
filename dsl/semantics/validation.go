@@ -94,14 +94,17 @@ const (
 
 	VALIDATION_SYMBOL_NAME_COLLISION ValidationCode = "V_SYM001"
 
-	VALIDATION_IMPORT_DUPLICATE_ALIAS          ValidationCode = "V_IMP001"
-	VALIDATION_IMPORT_MISSING_ALIAS            ValidationCode = "V_IMP002"
-	VALIDATION_IMPORT_UNRESOLVED_MODULE        ValidationCode = "V_IMP003"
-	VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL     ValidationCode = "V_IMP004"
-	VALIDATION_IMPORT_UNRESOLVED_EXPORT        ValidationCode = "V_IMP005"
-	VALIDATION_IMPORT_INVALID_USING_CALL       ValidationCode = "V_IMP006"
-	VALIDATION_IMPORT_MISSING_TOKEN_OBLIGATION ValidationCode = "V_IMP007"
-	VALIDATION_IMPORT_MISSING_STATE_OBLIGATION ValidationCode = "V_IMP008"
+	VALIDATION_IMPORT_DUPLICATE_ALIAS           ValidationCode = "V_IMP001"
+	VALIDATION_IMPORT_MISSING_ALIAS             ValidationCode = "V_IMP002"
+	VALIDATION_IMPORT_UNRESOLVED_MODULE         ValidationCode = "V_IMP003"
+	VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL      ValidationCode = "V_IMP004"
+	VALIDATION_IMPORT_UNRESOLVED_EXPORT         ValidationCode = "V_IMP005"
+	VALIDATION_IMPORT_INVALID_USING_CALL        ValidationCode = "V_IMP006"
+	VALIDATION_IMPORT_MISSING_TOKEN_OBLIGATION  ValidationCode = "V_IMP007"
+	VALIDATION_IMPORT_MISSING_STATE_OBLIGATION  ValidationCode = "V_IMP008"
+	VALIDATION_IMPORT_EMBED_ALIAS_REQUIRED      ValidationCode = "V_IMP009"
+	VALIDATION_IMPORT_EMBED_ENTRY_TOKEN_MISSING ValidationCode = "V_IMP010"
+	VALIDATION_IMPORT_EMBED_EXIT_TOKEN_SHADOWED ValidationCode = "V_IMP011"
 )
 
 /* String returns the code string (implements fmt.Stringer). */
@@ -191,10 +194,13 @@ func processSymbolBinding(ctx *ValidationCtx) {
 
 	validateSymbolNameCollisions(ctx, env)
 	validateImportDefinitions(ctx)
+	validateEmbedAliasDefinitions(ctx, env)
 	validateTemplateParameterScoping(ctx, env)
 	nodeKinds := collectDeclaredParseOutputNodeKinds(ctx.RootNode)
 	validateUsingReferences(ctx, env, nodeKinds)
 	validateImportLexicalObligations(ctx, env)
+	validateEmbedEntryTokenReachability(ctx, env)
+	validateEmbedExitTokenShadowing(ctx, env)
 	validateTemplateCallSites(ctx, env, nodeKinds)
 	validateTokenReferences(ctx, env)
 	validatePatternReferences(ctx, env)
@@ -371,6 +377,138 @@ func collectImportAliases(root *Node) map[string]bool {
 		out[alias] = true
 	}
 	return out
+}
+
+func collectEmbedImportAliases(root *Node) map[string]bool {
+	out := make(map[string]bool)
+	importSection := root.FindFirstKind(NodeImportSection)
+	if importSection == nil {
+		return out
+	}
+	for _, imp := range importSection.FindAllKind(NodeImportDefinition) {
+		if imp.FindFirstKind(NodeImportEmbed) == nil {
+			continue
+		}
+		aliasNode := imp.FindFirstKind(NodeImportAlias)
+		if aliasNode == nil {
+			continue
+		}
+		alias := IdentifierValue(aliasNode)
+		if alias != "" {
+			out[alias] = true
+		}
+	}
+	return out
+}
+
+func validateEmbedAliasDefinitions(ctx *ValidationCtx, env *SemanticEnv) {
+	if ctx == nil || env == nil {
+		return
+	}
+	embedAliases := collectEmbedImportAliases(ctx.RootNode)
+	for _, embedNode := range ctx.RootNode.FindAllKind(NodeParseEmbedStatement) {
+		moduleNode := embedNode.FindFirstKind(NodeModuleReference)
+		if moduleNode == nil {
+			continue
+		}
+		alias := IdentifierValue(moduleNode)
+		if alias == "" {
+			continue
+		}
+		if !embedAliases[alias] {
+			ctx.ReportError(
+				VALIDATION_IMPORT_EMBED_ALIAS_REQUIRED.String(),
+				fmt.Sprintf("embed statement alias '%s' must come from `embed \"...\" as %s` import", alias, alias),
+				moduleNode,
+			)
+			continue
+		}
+		module, ok := ResolveImportedModule(env, alias)
+		if !ok || module == nil || !module.IsEmbed {
+			ctx.ReportError(
+				VALIDATION_IMPORT_EMBED_ALIAS_REQUIRED.String(),
+				fmt.Sprintf("alias '%s' is not resolved as embed module", alias),
+				moduleNode,
+			)
+		}
+	}
+}
+
+func validateEmbedEntryTokenReachability(ctx *ValidationCtx, env *SemanticEnv) {
+	if ctx == nil || env == nil {
+		return
+	}
+	lexRules := collectLexRules(ctx.RootNode)
+	for _, embedNode := range ctx.RootNode.FindAllKind(NodeParseEmbedStatement) {
+		openNode := embedNode.FindFirstKind(NodeParseNestOpenToken)
+		if openNode == nil {
+			continue
+		}
+		openToken := IdentifierValue(openNode)
+		if openToken == "" {
+			continue
+		}
+		found := false
+		for _, rule := range lexRules {
+			if rule.tokenName == openToken {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ctx.ReportError(
+				VALIDATION_IMPORT_EMBED_ENTRY_TOKEN_MISSING.String(),
+				fmt.Sprintf("embed entry token '%s' is not emitted by any host lexer rule", openToken),
+				openNode,
+			)
+		}
+	}
+}
+
+func validateEmbedExitTokenShadowing(ctx *ValidationCtx, env *SemanticEnv) {
+	if ctx == nil || env == nil {
+		return
+	}
+	lexRules := collectLexRules(ctx.RootNode)
+	patternByToken := make(map[string]string, len(lexRules))
+	for _, rule := range lexRules {
+		if rule.patternKey == "" {
+			continue
+		}
+		if _, exists := patternByToken[rule.tokenName]; !exists {
+			patternByToken[rule.tokenName] = rule.patternKey
+		}
+	}
+	for _, embedNode := range ctx.RootNode.FindAllKind(NodeParseEmbedStatement) {
+		moduleNode := embedNode.FindFirstKind(NodeModuleReference)
+		closeNode := embedNode.FindFirstKind(NodeParseNestCloseToken)
+		if moduleNode == nil || closeNode == nil {
+			continue
+		}
+		moduleAlias := IdentifierValue(moduleNode)
+		closeToken := IdentifierValue(closeNode)
+		if moduleAlias == "" || closeToken == "" {
+			continue
+		}
+		module, ok := ResolveImportedModule(env, moduleAlias)
+		if !ok || module == nil {
+			continue
+		}
+		closePattern := patternByToken[closeToken]
+		if closePattern == "" || module.Root == nil {
+			continue
+		}
+		for _, embeddedRule := range collectLexRules(module.Root) {
+			if embeddedRule.patternKey == closePattern && embeddedRule.priority >= 0 {
+				ctx.ReportError(
+					VALIDATION_IMPORT_EMBED_EXIT_TOKEN_SHADOWED.String(),
+					fmt.Sprintf("embed exit token '%s' can be shadowed in '%s' root lexer by token '%s'", closeToken, moduleAlias, embeddedRule.tokenName),
+					closeNode,
+				)
+				break
+			}
+		}
+	}
 }
 
 func validateImportLexicalObligations(ctx *ValidationCtx, env *SemanticEnv) {

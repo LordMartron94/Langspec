@@ -75,16 +75,17 @@ func _() {
 	_ = x[TokKWExport-65]
 	_ = x[TokKWAs-66]
 	_ = x[TokKWUsing-67]
-	_ = x[TokTypeToken-68]
-	_ = x[TokTypeRule-69]
-	_ = x[TokTypePrattExpr-70]
-	_ = x[TokTypePair-71]
-	_ = x[TokTypeNode-72]
+	_ = x[TokKWEmbed-68]
+	_ = x[TokTypeToken-69]
+	_ = x[TokTypeRule-70]
+	_ = x[TokTypePrattExpr-71]
+	_ = x[TokTypePair-72]
+	_ = x[TokTypeNode-73]
 }
 
-const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokBracketOpenTokBracketCloseTokSemicolonTokDotTokChainSeparatorTokColonTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWTrueTokKWFalseTokKWLocalTokKWVirtualTokKWNestTokKWPrattTokKWPrimaryTokKWPrefixTokKWPostfixTokKWInfixTokKWImplicitTokKWPrecedenceTokKWTransparentTokKWSyncTokKWPredictTokKWIgnoreTokKWStateTokKWPushTokKWPopTokKWSetTokKWPairTokPairReferenceTokParameterTokKWRuleTokKWTemplateTokKWCallTokKWImportTokKWExportTokKWAsTokKWUsingTokTypeTokenTokTypeRuleTokTypePrattExprTokTypePairTokTypeNode"
+const _LangSpecLexerTokenType_name = "TokEOFTokWhitespaceTokLineCommentTokBlockCommentTokDashesTokBraceOpenTokBraceCloseTokParenOpenTokParenCloseTokBracketOpenTokBracketCloseTokSemicolonTokDotTokChainSeparatorTokColonTokEqualsOperatorTokMetaSectionTokCommaTokPipeTokRangeTokStarTokSeparatorTokNegationTokPlusTokOptionalTokStringLiteralTokRegexLiteralTokCharLiteralTokVersionTokIntegerTokIdentifierTokKWLSpecTokKWLexTokKWPatternTokKWPragmaTokKWToolTokKWParseTokKWTrueTokKWFalseTokKWLocalTokKWVirtualTokKWNestTokKWPrattTokKWPrimaryTokKWPrefixTokKWPostfixTokKWInfixTokKWImplicitTokKWPrecedenceTokKWTransparentTokKWSyncTokKWPredictTokKWIgnoreTokKWStateTokKWPushTokKWPopTokKWSetTokKWPairTokPairReferenceTokParameterTokKWRuleTokKWTemplateTokKWCallTokKWImportTokKWExportTokKWAsTokKWUsingTokKWEmbedTokTypeTokenTokTypeRuleTokTypePrattExprTokTypePairTokTypeNode"
 
-var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 69, 82, 94, 107, 121, 136, 148, 154, 171, 179, 196, 210, 218, 225, 233, 240, 252, 263, 270, 281, 297, 312, 326, 336, 346, 359, 369, 377, 389, 400, 409, 419, 428, 438, 448, 460, 469, 479, 491, 502, 514, 524, 537, 552, 568, 577, 589, 600, 610, 619, 627, 635, 644, 660, 672, 681, 694, 703, 714, 725, 732, 742, 754, 765, 781, 792, 803}
+var _LangSpecLexerTokenType_index = [...]uint16{0, 6, 19, 33, 48, 57, 69, 82, 94, 107, 121, 136, 148, 154, 171, 179, 196, 210, 218, 225, 233, 240, 252, 263, 270, 281, 297, 312, 326, 336, 346, 359, 369, 377, 389, 400, 409, 419, 428, 438, 448, 460, 469, 479, 491, 502, 514, 524, 537, 552, 568, 577, 589, 600, 610, 619, 627, 635, 644, 660, 672, 681, 694, 703, 714, 725, 732, 742, 752, 764, 775, 791, 802, 813}
 
 func (i LangSpecLexerTokenType) String() string {
 	idx := int(i) - 1

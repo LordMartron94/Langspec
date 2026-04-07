@@ -28,10 +28,11 @@ func ImportLexicalObligationClone(src *ImportLexicalObligation) *ImportLexicalOb
 	return dst
 }
 
-func ImportedModuleSymbolsBuild(alias, path string, root *Node) *ImportedModuleSymbols {
+func ImportedModuleSymbolsBuild(alias, path string, root *Node, isEmbed bool) *ImportedModuleSymbols {
 	module := &ImportedModuleSymbols{
 		Alias:                      alias,
 		Path:                       path,
+		IsEmbed:                    isEmbed,
 		Root:                       root,
 		Tokens:                     make(map[string]*Node),
 		ExportedPatterns:           make(map[string]*Node),

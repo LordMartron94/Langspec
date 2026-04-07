@@ -33,8 +33,9 @@ type SemanticEnv struct {
 }
 
 type ImportedModuleSymbols struct {
-	Alias string
-	Path  string
+	Alias   string
+	Path    string
+	IsEmbed bool
 
 	Root   *Node
 	Tokens map[string]*Node

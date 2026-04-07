@@ -102,6 +102,7 @@ const (
 	TokKWExport
 	TokKWAs
 	TokKWUsing
+	TokKWEmbed
 
 	TokTypeToken
 	TokTypeRule
@@ -314,6 +315,7 @@ const (
 	// IMPORT & EXPORT
 	NodeImportSection
 	NodeImportKeyword
+	NodeImportEmbed
 
 	NodeImportList
 	NodeImportDefinition
@@ -323,6 +325,7 @@ const (
 
 	NodeExported
 	NodeParseBlock
+	NodeParseEmbedStatement
 )
 
 // ----------------------------------------------------------- LEXER DEFINITION
@@ -397,6 +400,7 @@ func buildLanguageSpec(f *pattern.RegulaASTFactory[rune], t *pattern.RegulaTempl
 		{TokKWExport, "storage.modifier.export", "export", 2},
 		{TokKWAs, "keyword.control.import.as", "as", 2},
 		{TokKWUsing, "keyword.operator.using", "using", 2},
+		{TokKWEmbed, "keyword.operator.embed", "embed", 2},
 
 		// Types
 		{TokTypeToken, "support.type.token", "Token", 2},
@@ -639,6 +643,7 @@ func (b *dslGrammarBuilder) importDefinition() Rule {
 	definitionRule := b.g.sequence(
 		NodeImportDefinition, "",
 	).
+		optionalRule(b.g.expectToken(NodeImportEmbed, TokKWEmbed)).
 		expectToken(NodeImportPath, TokStringLiteral).
 		expectVirtualInRule(TokKWAs).
 		expectToken(NodeImportAlias, TokIdentifier).
@@ -1296,7 +1301,7 @@ func (b *dslGrammarBuilder) parseRuleExpr() Rule {
 func (b *dslGrammarBuilder) parseSegment() Rule {
 	return b.g.ChoiceByNode(NodeParseSegment,
 		b.virtualMapping(),
-		b.nestMapping(),
+		b.nestOrEmbedMapping(),
 		b.parseGroup(),
 		b.usingPattern("PARSE_SEGMENT"),
 		b.segmentExplicitTemplateCall(),
@@ -1384,23 +1389,27 @@ func (b *dslGrammarBuilder) virtualMapping() Rule {
 		build()
 }
 
-func (b *dslGrammarBuilder) nestMapping() Rule {
-	return b.g.sequence(NodeParseOpNest, "").
+func (b *dslGrammarBuilder) nestOrEmbedMapping() Rule {
+	// 1. Extract the shared delimiter resolution logic
+	delimitersChoice := b.g.rb.Rule.Choice(
+		LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "CHOICE"),
+		b.g.rb.Rule.TransparentSequence(
+			LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "EXPLICIT"),
+			b.g.expectToken(NodeParseNestOpenToken, TokIdentifier),
+			b.g.expectToken(NodeParseNestCloseToken, TokIdentifier),
+		),
+		b.usingPattern("NEST"),
+		b.g.expectToken(NodeParseNestPairRef, TokPairReference),
+		b.g.expectToken(NodeParseTemplateParameterReference, TokParameter),
+	)
+
+	// 2. Define the standard nest (requires a body, allows sync)
+	standardNest := b.g.sequence(NodeParseOpNest, "STANDARD_NEST").
 		expectVirtualInRule(TokKWNest).
-		rule(b.g.rb.Rule.Choice(
-			LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "CHOICE"),
-			b.g.rb.Rule.TransparentSequence(
-				LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "EXPLICIT"),
-				b.g.expectToken(NodeParseNestOpenToken, TokIdentifier),
-				b.g.expectToken(NodeParseNestCloseToken, TokIdentifier),
-			),
-			b.usingPattern("NEST"),
-			b.g.expectToken(NodeParseNestPairRef, TokPairReference),
-			b.g.expectToken(NodeParseTemplateParameterReference, TokParameter),
-		)).
+		rule(delimitersChoice).
 		optionalRule(b.syncModifier()).
 		rule(b.g.rb.Rule.Choice(
-			"DUMMY CHOICE NEST",
+			"DUMMY_CHOICE_NEST",
 			b.g.expectToken(NodeParseExpressionReference, TokIdentifier),
 			b.g.NestByNode(
 				NodeParseNestBody,
@@ -1412,6 +1421,17 @@ func (b *dslGrammarBuilder) nestMapping() Rule {
 				),
 			))).
 		build()
+
+	// 3. Define the embed nest (no body, no sync)
+	embedNest := b.g.sequence(NodeParseEmbedStatement, "EMBED_NEST").
+		expectVirtualInRule(TokKWEmbed).
+		expectToken(NodeModuleReference, TokIdentifier).
+		expectVirtualInRule(TokKWNest).
+		rule(delimitersChoice).
+		build()
+
+	// 4. Return them as a choice at the PARSE_SEGMENT level
+	return b.g.rb.Rule.Choice("NEST_OR_EMBED", embedNest, standardNest)
 }
 
 func (b *dslGrammarBuilder) parseGroup() Rule {
