@@ -65,7 +65,7 @@ func EditorIRFromStateGraph[
 
 	sanitizer := text.NewIdentifierSanitizer()
 
-	rulesByState, _ := editorLexRulesGroupedByState(lexingRuleset)
+	rulesByState, allLexerStates := editorLexRulesGroupedByState(lexingRuleset)
 	lexerReach, err := editorComputeLexerStackReachability(sg, rulesByState)
 	if err != nil {
 		return nil, err
@@ -234,6 +234,8 @@ func EditorIRFromStateGraph[
 		allStates = append(allStates, *delimitedStates[id])
 	}
 
+	lexerModeStates := buildLexerModeStates(allLexerStates, rulesByState, config, sanitizer)
+
 	return &EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]{
 		LanguageMeta: LanguageMeta{
 			LanguageName:    grammarPackage.Name,
@@ -243,9 +245,58 @@ func EditorIRFromStateGraph[
 			EditorStates:       allStates,
 			RootState:          rootOut,
 			AmbientTransitions: ambientTransitions,
-			LexerModeStates:    nil,
+			LexerModeStates:    lexerModeStates,
 		},
 	}, nil
+}
+
+func buildLexerModeStates[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+	TLexerState comparable,
+	TNodeKind comparable,
+	TContext any,
+](
+	allLexerStates []string,
+	rulesByState map[string][]LexingRule[TObservation, TToken, TTokenRole],
+	config *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
+	sanitizer *text.Sanitizer,
+) []EditorState[TObservation, TContext] {
+	if len(allLexerStates) == 0 {
+		return nil
+	}
+
+	states := make([]EditorState[TObservation, TContext], 0, len(allLexerStates))
+	for _, mode := range allLexerStates {
+		label := editorLexModeLabel(mode, sanitizer)
+		state := EditorState[TObservation, TContext]{
+			ID:    label,
+			Label: label,
+		}
+
+		for _, rule := range rulesByState[mode] {
+			token := rule.Token
+			role := rule.Role
+			edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
+				Token:     &token,
+				TokenRole: &role,
+			}
+			tr := EditorTransition[TObservation, TContext]{
+				OnPattern:    rule.Pattern,
+				MatchContext: config.contextProducer(edCtx),
+				Operation:    STACK_NONE,
+			}
+			copyLexStackFromLexingRule(&tr, rule)
+			state.Transitions = append(state.Transitions, tr)
+		}
+		states = append(states, state)
+	}
+	return states
+}
+
+func editorLexModeLabel(mode string, sanitizer *text.Sanitizer) string {
+	return "lex__" + sanitizer.Sanitize(mode)
 }
 
 func buildEditorTransitionsFromGeneric[

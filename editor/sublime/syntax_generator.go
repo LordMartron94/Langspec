@@ -239,7 +239,13 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 		contextsMap["prototype"] = buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
 	}
 
+	lexModeContexts := buildLexModeContexts(machine.LexerModeStates, config)
+	for name, entries := range lexModeContexts {
+		contextsMap[name] = entries
+	}
+
 	pruneUnreachableContexts(contextsMap, pruneWarnings)
+	validateContextReferences(contextsMap)
 
 	return contextsMap
 }
@@ -639,6 +645,14 @@ func applyLexModeStack[TObservation cmp.Ordered, TContext any](
 	t editor.EditorTransition[TObservation, TContext],
 	labelToRepresentative map[string]string,
 ) {
+	_ = labelToRepresentative
+	// Sublime has a single context stack; combining parse stack ops (push/set/pop)
+	// with lex-mode stack ops on the same rule can desynchronize parse progression.
+	// Keep parse control-flow authoritative when present.
+	if entry.Push != nil || entry.Set != nil || entry.Pop != nil {
+		return
+	}
+
 	if t.LexPopAmount > 0 {
 		if cur, ok := entry.Pop.(int); ok {
 			entry.Pop = cur + t.LexPopAmount
@@ -656,9 +670,6 @@ func applyLexModeStack[TObservation cmp.Ordered, TContext any](
 	}
 	for _, s := range t.LexPushStates {
 		lab := lexModeSublimeLabel(s)
-		if rep, ok := labelToRepresentative[lab]; ok {
-			lab = rep
-		}
 		curPush = append(curPush, lab)
 	}
 	if len(curPush) > 0 {
@@ -669,12 +680,59 @@ func applyLexModeStack[TObservation cmp.Ordered, TContext any](
 		set := make([]string, 0, len(t.LexSetStates))
 		for _, s := range t.LexSetStates {
 			lab := lexModeSublimeLabel(s)
-			if rep, ok := labelToRepresentative[lab]; ok {
-				lab = rep
-			}
 			set = append(set, lab)
 		}
 		entry.Set = set
+	}
+}
+
+func buildLexModeContexts[TObservation cmp.Ordered, TContext any](
+	lexerModeStates []editor.EditorState[TObservation, TContext],
+	config ExtractionConfig[TContext],
+) map[string][]contextEntry {
+	if len(lexerModeStates) == 0 {
+		return nil
+	}
+	contexts := make(map[string][]contextEntry, len(lexerModeStates))
+	for _, state := range lexerModeStates {
+		label := determineContextLabel(state.Label)
+		entries := buildTransitionsRemapped(state.Transitions, config, map[string]string{})
+		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
+			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
+		}
+		if state.HasFallthroughPop {
+			popAmount := 1
+			if state.FallthroughPopAmount > 0 {
+				popAmount = state.FallthroughPopAmount
+			}
+			entries = append(entries, contextEntry{
+				Match: stringPtr(`(?=\S)`),
+				Pop:   popAmount,
+			})
+		}
+		if state.HasFallbackInvalid {
+			if scope := config.ExtractScope(state.FallbackInvalidContext); scope != "" {
+				entries = append(entries, contextEntry{
+					Match: stringPtr(`\S`),
+					Scope: scope,
+				})
+			}
+		}
+		contexts[label] = entries
+	}
+	return contexts
+}
+
+func validateContextReferences(contextsMap map[string][]contextEntry) {
+	for source, entries := range contextsMap {
+		for _, ent := range entries {
+			for _, target := range contextEntryReferencedContexts(ent) {
+				if _, ok := contextsMap[target]; ok {
+					continue
+				}
+				panic(fmt.Errorf("langspec sublime: context %q references missing context %q", source, target))
+			}
+		}
 	}
 }
 
