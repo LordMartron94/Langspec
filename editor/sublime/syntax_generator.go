@@ -141,7 +141,7 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 
 	for _, label := range repLabels {
 		state := representatives[label]
-		baseEntries := buildTransitionsRemapped(state.Transitions, config, labelToRepresentative)
+		baseEntries := buildTransitionsRemapped(state.Transitions, config, labelToRepresentative, label)
 		baseEntriesByLabel[label] = baseEntries
 
 		sig := generateEntriesSignature(baseEntries)
@@ -201,6 +201,8 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 		}
 
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
+			mergedMeta := mergeInheritedSetChainMetaScope(metaScope, incomingMetaEdges[label])
+			metaScope = mergedMeta
 			if shouldSuppressContextMetaScopeForSetChain(metaScope, incomingMetaEdges[label]) {
 			} else {
 				entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
@@ -240,7 +242,7 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	}
 
 	if len(machine.AmbientTransitions) > 0 {
-		prototypeEntries := buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
+		prototypeEntries := buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative, "prototype")
 		contextsMap["prototype"] = prototypeEntries
 	}
 
@@ -601,10 +603,11 @@ func buildTransitionsRemapped[TObservation cmp.Ordered, TContext any](
 	transitions []editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
 	labelToRepresentative map[string]string,
+	sourceLabel string,
 ) []contextEntry {
 	entries := make([]contextEntry, 0, len(transitions))
 	for _, t := range transitions {
-		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative))
+		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative, sourceLabel))
 	}
 	return entries
 }
@@ -613,6 +616,7 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
 	t editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
 	labelToRepresentative map[string]string,
+	sourceLabel string,
 ) contextEntry {
 	var regexStr string
 	if t.RegexPattern != nil {
@@ -636,6 +640,9 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
 	}
 
 	applyStackOperationRemapped(&entry, t, config, labelToRepresentative)
+	if onlySetTargetIsSource(entry.Set, sourceLabel) {
+		entry.Set = nil
+	}
 	applyLexModeStack(&entry, t, labelToRepresentative)
 	return entry
 }
@@ -707,7 +714,7 @@ func buildLexModeContexts[TObservation cmp.Ordered, TContext any](
 	contexts := make(map[string][]contextEntry, len(lexerModeStates))
 	for _, state := range lexerModeStates {
 		label := determineContextLabel(state.Label)
-		entries := buildTransitionsRemapped(state.Transitions, config, map[string]string{})
+		entries := buildTransitionsRemapped(state.Transitions, config, map[string]string{}, label)
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}
@@ -732,6 +739,20 @@ func buildLexModeContexts[TObservation cmp.Ordered, TContext any](
 		contexts[label] = entries
 	}
 	return contexts
+}
+
+func onlySetTargetIsSource(v any, sourceLabel string) bool {
+	if sourceLabel == "" || v == nil {
+		return false
+	}
+	switch x := v.(type) {
+	case string:
+		return x == sourceLabel
+	case []string:
+		return len(x) == 1 && x[0] == sourceLabel
+	default:
+		return false
+	}
 }
 
 func validateContextReferences(contextsMap map[string][]contextEntry) {
@@ -789,6 +810,32 @@ func shouldSuppressContextMetaScopeForSetChain(metaScope string, edges []incomin
 		}
 	}
 	return true
+}
+
+func mergeInheritedSetChainMetaScope(metaScope string, edges []incomingMetaEdge) string {
+	if metaScope == "" || len(edges) == 0 {
+		return metaScope
+	}
+	inherited := ""
+	for _, edge := range edges {
+		if edge.Operation != editor.STACK_SET {
+			return metaScope
+		}
+		if edge.SourceMeta == "" {
+			return metaScope
+		}
+		if inherited == "" {
+			inherited = edge.SourceMeta
+			continue
+		}
+		if inherited != edge.SourceMeta {
+			return metaScope
+		}
+	}
+	if inherited == "" || inherited == metaScope {
+		return metaScope
+	}
+	return inherited + " " + metaScope
 }
 
 func applyStackOperationRemapped[TObservation cmp.Ordered, TContext any](
