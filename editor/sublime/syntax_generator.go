@@ -236,7 +236,8 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	}
 
 	if len(machine.AmbientTransitions) > 0 {
-		contextsMap["prototype"] = buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
+		prototypeEntries := buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative)
+		contextsMap["prototype"] = prototypeEntries
 	}
 
 	lexModeContexts := buildLexModeContexts(machine.LexerModeStates, config)

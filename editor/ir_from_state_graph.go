@@ -684,6 +684,11 @@ func getSortedAmbientCandidates[
 	bestAmbient := make(map[lexarch.TokenKind]LexingRule[TObservation, TToken, TTokenRole])
 	bestAmbientIdx := make(map[lexarch.TokenKind]int)
 	for i, rule := range LexingRuleSetGetRules(lexingRuleset) {
+		if rule.LexerState != "" && rule.LexerState != "INITIAL" {
+			// Ambient transitions map to Sublime "prototype" (global scope).
+			// Non-root lexer states are context-dependent and must not be global.
+			continue
+		}
 		tok := lexarch.TokenKind(rule.Token)
 		if grammarTokens[tok] {
 			continue
