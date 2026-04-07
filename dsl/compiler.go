@@ -8,6 +8,7 @@ import (
 	"langspec/dsl/semantics"
 	dslspec "langspec/dsl/spec"
 	"lexarch"
+	"sort"
 	"strconv"
 	"strings"
 	"syntaxa"
@@ -64,12 +65,13 @@ into Regula ASTs. Passed through instead of (c *compiler, patternTable, env) on 
 variables is the running map during pattern compilation; patternTable is the exported result.
 */
 type patternCompileCtx struct {
-	c            *compiler
-	rootNode     *Node
-	patternTable map[string]pattern.RegulaAST[rune]
-	env          *SemanticEnv
-	variables    map[string]pattern.RegulaAST[rune]
-	sym          *semantics.CompiledSymbolTable
+	c              *compiler
+	rootNode       *Node
+	patternTable   map[string]pattern.RegulaAST[rune]
+	env            *SemanticEnv
+	compiledByName map[string]pattern.RegulaAST[rune]
+	inProgress     map[string]bool
+	sym            *semantics.CompiledSymbolTable
 }
 
 /*
@@ -595,39 +597,69 @@ func resolveSymbolTokenIDForAlias(sym *semantics.CompiledSymbolTable, alias stri
 
 func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
 	out := make(map[string]pattern.RegulaAST[rune])
-	temp := make(map[string]pattern.RegulaAST[rune])
 	ctx.patternTable = out
-	ctx.variables = temp
+	ctx.compiledByName = make(map[string]pattern.RegulaAST[rune])
+	ctx.inProgress = make(map[string]bool)
 
-	patternSection := ctx.rootNode.FindFirstKind(dslspec.NodePatternSection)
-	definitions := patternSection.FindAllKind(dslspec.NodePatternDefinition)
-
-	for _, definition := range definitions {
-		defName := lexemeRawContent(definition.FindFirstKind(dslspec.NodePatternDefName).Tokens()[0])
-
-		var exprNode *Node
-		for _, child := range definition.ChildrenUnsafe() {
-			kind := child.Kind()
-			if kind == dslspec.NodePatternDefName || kind == dslspec.NodeLocalVariable || kind == dslspec.NodeExported {
-				continue
-			}
-			exprNode = child
-			break
-		}
-
-		if exprNode == nil {
-			panic(fmt.Sprintf("invariant violated: definition '%s' has no expression", defName))
-		}
-
-		pat := compilePatternExpression(ctx, exprNode)
-
-		temp[defName] = pat
+	if ctx.env == nil {
+		return
+	}
+	for _, defName := range sortedPatternNamesFromEnv(ctx.env) {
+		pat := compilePatternDefinitionByName(ctx, defName)
 		if !ctx.env.LocalPatterns[defName] {
 			out[defName] = pat
 		}
 	}
 
-	ctx.variables = nil
+	ctx.compiledByName = nil
+	ctx.inProgress = nil
+}
+
+func sortedPatternNamesFromEnv(env *SemanticEnv) []string {
+	if env == nil {
+		return nil
+	}
+	out := make([]string, 0, len(env.Patterns))
+	for name := range env.Patterns {
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func compilePatternDefinitionByName(ctx *patternCompileCtx, defName string) pattern.RegulaAST[rune] {
+	if ctx == nil || defName == "" {
+		panic("compiler error: pattern compile called with empty name")
+	}
+	if pat, ok := ctx.compiledByName[defName]; ok {
+		return pat
+	}
+	if ctx.inProgress[defName] {
+		panic(fmt.Errorf("compiler error: cyclic pattern reference while compiling '%s'", defName))
+	}
+	defNode := ctx.env.Patterns[defName]
+	if defNode == nil {
+		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", defName))
+	}
+	var exprNode *Node
+	for _, child := range defNode.ChildrenUnsafe() {
+		kind := child.Kind()
+		if kind == dslspec.NodePatternDefName || kind == dslspec.NodeLocalVariable || kind == dslspec.NodeExported {
+			continue
+		}
+		exprNode = child
+		break
+	}
+	if exprNode == nil {
+		panic(fmt.Sprintf("invariant violated: definition '%s' has no expression", defName))
+	}
+	ctx.inProgress[defName] = true
+	pat := compilePatternExpression(ctx, exprNode)
+	delete(ctx.inProgress, defName)
+	ctx.compiledByName[defName] = pat
+	return pat
 }
 
 func compilePatternExpression(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[rune] {
@@ -893,12 +925,7 @@ func patternRefToPattern(ctx *patternCompileCtx, node *Node) pattern.RegulaAST[r
 	if ctx.env.Patterns[targetName] == nil {
 		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
 	}
-	targetPattern, ok := ctx.variables[targetName]
-	if !ok {
-		panic(fmt.Errorf("error: pattern '%s' cannot be resolved", targetName))
-	}
-
-	return targetPattern
+	return compilePatternDefinitionByName(ctx, targetName)
 }
 
 func grammarSubLabel(ruleName string, role string, counts map[string]int) syntaxa.GrammarLabel {
