@@ -647,6 +647,12 @@ func applyLexModeStack[TObservation cmp.Ordered, TContext any](
 	labelToRepresentative map[string]string,
 ) {
 	_ = labelToRepresentative
+	// Embed transitions are handled by the client machine selected via `embed`.
+	// Applying additional lex-mode stack operations here is redundant and can
+	// generate conflicting push/set directives in Sublime YAML.
+	if entry.Embed != "" {
+		return
+	}
 	// Sublime has a single context stack; combining parse stack ops (push/set/pop)
 	// with lex-mode stack ops on the same rule can desynchronize parse progression.
 	// Keep parse control-flow authoritative when present.
