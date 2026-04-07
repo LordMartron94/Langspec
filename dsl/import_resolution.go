@@ -70,13 +70,16 @@ func resolveImportGraphRecursive(
 		}
 		absImport = filepath.Clean(absImport)
 
-		importRoot, importErr := parseAndValidateImportModule(compiler, alias, absImport, graph)
+		importRoot, importErr := parseImportModule(compiler, alias, absImport, graph)
 		if importErr != nil {
 			return importErr
 		}
 		graph.byAlias[alias] = semantics.ImportedModuleSymbolsBuild(alias, absImport, importRoot, importDef.IsEmbed)
 
 		if err := resolveImportGraphRecursive(compiler, absImport, importRoot, graph, visitedByPath); err != nil {
+			return err
+		}
+		if err := validateImportModule(compiler, alias, absImport, importRoot, graph); err != nil {
 			return err
 		}
 	}
@@ -117,14 +120,14 @@ func collectImportDefinitions(root *Node) []importDefinition {
 	return out
 }
 
-func parseAndValidateImportModule(
+func parseImportModule(
 	compiler *LangSpecCompiler,
 	alias string,
 	sourceFile string,
 	graph *resolvedImportGraph,
 ) (*Node, error) {
 	session := langspec.LangParserSessionCreate[rune](sourceFile, nil)
-	contentRune, root, syntaxErrors, err := langspec.LangParserParseFile(compiler.parser, session, nil)
+	_, root, syntaxErrors, err := langspec.LangParserParseFile(compiler.parser, session, nil)
 	if err != nil {
 		if syntaxErrors != nil {
 			for _, e := range syntaxErrors.Errors {
@@ -160,6 +163,16 @@ func parseAndValidateImportModule(
 		return nil, fmt.Errorf("import '%s' (%s) has syntax errors", alias, sourceFile)
 	}
 
+	return root, nil
+}
+
+func validateImportModule(
+	compiler *LangSpecCompiler,
+	alias string,
+	sourceFile string,
+	root *Node,
+	graph *resolvedImportGraph,
+) error {
 	opts := extractCompileOptions(root)
 	preValidationState := &semantics.GrammarValidationState{
 		ImportedModules: graph.byAlias,
@@ -180,7 +193,7 @@ func parseAndValidateImportModule(
 			Code:    "IMPORT_VALIDATE",
 			Message: validationErr.Error(),
 		})
-		return nil, validationErr
+		return validationErr
 	}
 	if validationEntries != nil {
 		for _, stage := range validationEntries.Results {
@@ -195,10 +208,9 @@ func parseAndValidateImportModule(
 		}
 	}
 	if hasCriticalValidationErrors(validationEntries) {
-		_ = contentRune
-		return nil, fmt.Errorf("import '%s' (%s) failed validation", alias, sourceFile)
+		return fmt.Errorf("import '%s' (%s) failed validation", alias, sourceFile)
 	}
-	return root, nil
+	return nil
 }
 
 func (g *resolvedImportGraph) appendDiagnostic(diag ImportedModuleDiagnostic) {

@@ -3,6 +3,7 @@ package semantics
 import (
 	"sort"
 	"strconv"
+	"strings"
 
 	. "langspec/dsl/spec"
 	dslspec "langspec/dsl/spec"
@@ -132,6 +133,8 @@ func CollectCompiledSymbolStrings(root *Node, env *SemanticEnv, eofTokenName str
 	}
 	collectReferencedImportedSymbols(root, env, ts, nk)
 	collectEmbeddedImportSymbols(env, ts, rs)
+	collectImportedTokens(env, ts)
+	collectImportedNodeKinds(env, nk)
 	ts[eofTokenName] = struct{}{}
 
 	if lex := root.FindFirstKind(NodeLexSection); lex != nil {
@@ -188,7 +191,7 @@ func collectEmbeddedImportSymbols(env *SemanticEnv, ts map[string]struct{}, rs m
 			continue
 		}
 		for tokenName := range module.Tokens {
-			ts[alias+"::"+tokenName] = struct{}{}
+			ts[alias+"__"+tokenName] = struct{}{}
 		}
 		if module.Root == nil {
 			continue
@@ -199,9 +202,119 @@ func collectEmbeddedImportSymbols(env *SemanticEnv, ts map[string]struct{}, rs m
 				if roleNode == nil {
 					continue
 				}
-				rs[alias+"::"+NodeSingleTokenContent(roleNode)] = struct{}{}
+				rs[alias+"__"+NodeSingleTokenContent(roleNode)] = struct{}{}
 			}
 		}
+	}
+}
+
+func collectImportedNodeKinds(env *SemanticEnv, nk map[string]struct{}) {
+	if env == nil || nk == nil {
+		return
+	}
+	for _, alias := range collectDirectImportAliases(env) {
+		collectImportedNodeKindsRecursive(env, env.Imports[alias], alias, nk, map[string]bool{})
+	}
+}
+
+func collectImportedTokens(env *SemanticEnv, ts map[string]struct{}) {
+	if env == nil || ts == nil {
+		return
+	}
+	for _, alias := range collectDirectImportAliases(env) {
+		collectImportedTokensRecursive(env, env.Imports[alias], alias, ts, map[string]bool{})
+	}
+}
+
+func collectDirectImportAliases(env *SemanticEnv) []string {
+	if env == nil {
+		return nil
+	}
+	out := make([]string, 0, len(env.Imports))
+	for alias := range env.Imports {
+		if alias == "" || strings.Contains(alias, "__") {
+			continue
+		}
+		out = append(out, alias)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func collectImportAliasesFromRoot(root *Node) []string {
+	if root == nil {
+		return nil
+	}
+	importSection := root.FindFirstKind(NodeImportSection)
+	if importSection == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, imp := range importSection.FindAllKind(NodeImportDefinition) {
+		aliasNode := imp.FindFirstKind(NodeImportAlias)
+		if aliasNode == nil {
+			continue
+		}
+		alias := IdentifierValue(aliasNode)
+		if alias == "" || seen[alias] {
+			continue
+		}
+		seen[alias] = true
+		out = append(out, alias)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func collectImportedTokensRecursive(env *SemanticEnv, module *ImportedModuleSymbols, prefix string, ts map[string]struct{}, seen map[string]bool) {
+	if env == nil || module == nil || module.Root == nil || prefix == "" {
+		return
+	}
+	key := module.Path + "|" + prefix
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+
+	moduleEnv := BuildSemanticEnvWithImports(module.Root, env.Imports, nil)
+	for tokName := range moduleEnv.Tokens {
+		ts[prefix+"__"+tokName] = struct{}{}
+	}
+	for _, childAlias := range collectImportAliasesFromRoot(module.Root) {
+		child := env.Imports[childAlias]
+		if child == nil {
+			continue
+		}
+		collectImportedTokensRecursive(env, child, prefix+"__"+childAlias, ts, seen)
+	}
+}
+
+func collectImportedNodeKindsRecursive(env *SemanticEnv, module *ImportedModuleSymbols, prefix string, nk map[string]struct{}, seen map[string]bool) {
+	if env == nil || module == nil || module.Root == nil || prefix == "" {
+		return
+	}
+	key := module.Path + "|" + prefix
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+
+	moduleEnv := BuildSemanticEnvWithImports(module.Root, env.Imports, nil)
+	for _, ruleNode := range moduleEnv.Rules {
+		if ruleNode == nil {
+			continue
+		}
+		if nodeNameNode := ruleNode.FindFirstKind(NodeParseNodeName); nodeNameNode != nil {
+			nk[prefix+"__"+NodeSingleTokenContent(nodeNameNode)] = struct{}{}
+		}
+	}
+	for _, childAlias := range collectImportAliasesFromRoot(module.Root) {
+		child := env.Imports[childAlias]
+		if child == nil {
+			continue
+		}
+		collectImportedNodeKindsRecursive(env, child, prefix+"__"+childAlias, nk, seen)
 	}
 }
 
@@ -231,7 +344,7 @@ func collectReferencedImportedSymbols(root *Node, env *SemanticEnv, ts map[strin
 			continue
 		}
 		if ruleNode := module.ExportedRules[symbolName]; ruleNode != nil {
-			localModuleEnv := BuildSemanticEnv(module.Root, nil)
+			localModuleEnv := BuildSemanticEnvWithImports(module.Root, env.Imports, nil)
 			if nk != nil {
 				if nodeNameNode := ruleNode.FindFirstKind(NodeParseNodeName); nodeNameNode != nil {
 					nk[moduleName+"__"+NodeSingleTokenContent(nodeNameNode)] = struct{}{}
@@ -246,7 +359,7 @@ func collectReferencedImportedSymbols(root *Node, env *SemanticEnv, ts map[strin
 		if tplDecl := module.ExportedTemplates[symbolName]; tplDecl != nil && tplDecl.Node != nil {
 			body := tplDecl.Node.FindFirstKind(NodeParseTemplateBody)
 			if body != nil {
-				localModuleEnv := BuildSemanticEnv(module.Root, nil)
+				localModuleEnv := BuildSemanticEnvWithImports(module.Root, env.Imports, nil)
 				collectTokenAndNodeRefsFromParseNodeWithAlias(body, localModuleEnv, moduleName, ts, nk)
 			}
 		}
@@ -261,6 +374,9 @@ func collectTokenAndNodeRefsFromParseNodeWithAlias(node *Node, env *SemanticEnv,
 
 	for tokenName := range localTokens {
 		ts[tokenName] = struct{}{}
+		if moduleAlias != "" {
+			ts[moduleAlias+"__"+tokenName] = struct{}{}
+		}
 	}
 	if nk == nil {
 		return

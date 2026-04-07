@@ -91,6 +91,9 @@ type parseCompileCtx struct {
 	importAlias string
 
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
+
+	importedRuleLabels    map[string]syntaxa.GrammarLabel
+	compilingImportedRule map[string]bool
 }
 
 const embedNamespaceSeparator = "::"
@@ -580,19 +583,29 @@ func namespaceTokenName(prefix string, tokenName string) string {
 	if prefix == "" || tokenName == "" {
 		return tokenName
 	}
-	return prefix + embedNamespaceSeparator + tokenName
+	return prefix + "__" + tokenName
 }
 
 func resolveSymbolTokenIDForAlias(sym *semantics.CompiledSymbolTable, alias string, tokenName string) uint32 {
 	if sym == nil {
 		return 0
 	}
+	aliasedName := alias + "__" + tokenName
+	aliasedID := uint32(0)
+	embedAliasedName := alias + embedNamespaceSeparator + tokenName
+	embedAliasedID := uint32(0)
 	if alias != "" {
-		if id := sym.TokenID(alias + "__" + tokenName); id != 0 {
-			return id
+		aliasedID = sym.TokenID(aliasedName)
+		if aliasedID != 0 {
+			return aliasedID
+		}
+		embedAliasedID = sym.TokenID(embedAliasedName)
+		if embedAliasedID != 0 {
+			return embedAliasedID
 		}
 	}
-	return sym.TokenID(tokenName)
+	plainID := sym.TokenID(tokenName)
+	return plainID
 }
 
 func (c *compiler) compilePatterns(ctx *patternCompileCtx) {
@@ -1032,12 +1045,12 @@ func getParserSpecInfo(
 	}
 
 	rootGrammar := entryRule.GetGrammar()
-
+	defined := ruleBuilder.GetDefinedGrammars()
 	entryRulePtr := new(CompiledRule)
 	*entryRulePtr = entryRule
 	grammarPackage := syntaxa.ProducePackage(
 		rootGrammar,
-		ruleBuilder.GetDefinedGrammars(),
+		defined,
 		langName,
 		langVersion,
 		entryRulePtr,
@@ -1319,6 +1332,9 @@ func compileEmbedStatement(ctx *parseCompileCtx, node *Node) CompiledRule {
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	subCtx.importAlias = moduleAlias
+	// Compile embedded PROGRAM in the embedded module's own semantic environment
+	// so local references (e.g. PROGRAM -> BLOCK) resolve against that module.
+	subCtx.env = semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
 	innerRule := compileParseExpression(&subCtx, rootExpr)
 	importedLabel := parseCtxLabel(&subCtx, "EMBED_PROGRAM_"+moduleAlias)
 	importedNodeKindNode := programRule.FindFirstKind(dslspec.NodeParseNodeName)
@@ -1700,6 +1716,8 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 		subCtx := *ctx
 		subCtx.rootLevel = false
 		subCtx.importAlias = moduleName
+		// Compile imported rule body in imported module scope for internal references.
+		subCtx.env = semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
 		compiledImportedBody := compileParseExpression(&subCtx, rootExpr)
 
 		// Preserve imported rule ownership in grammar IR so downstream tooling (e.g. editor IR
@@ -1712,7 +1730,8 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 			if importedNodeNameNode == nil {
 				panic(fmt.Errorf("compiler error: imported rule '%s.%s' has no output node kind", moduleName, symbolName))
 			}
-			importedNodeKind := resolveSymbolNodeKindIDForAlias(ctx.sym, moduleName, dslspec.NodeSingleTokenContent(importedNodeNameNode))
+			importedNodeName := dslspec.NodeSingleTokenContent(importedNodeNameNode)
+			importedNodeKind := resolveSymbolNodeKindIDForAlias(ctx.sym, moduleName, importedNodeName)
 			if importedNodeKind == 0 {
 				panic(fmt.Errorf("compiler error: unresolved imported node kind '%s.%s'", moduleName, dslspec.NodeSingleTokenContent(importedNodeNameNode)))
 			}
@@ -1733,6 +1752,8 @@ func compileExternalUsingSegment(ctx *parseCompileCtx, usingRef *Node) CompiledR
 		subCtx := *ctx
 		subCtx.rootLevel = false
 		subCtx.importAlias = moduleName
+		// Compile imported template body in imported module scope for internal references.
+		subCtx.env = semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
 		return wrapRootRule(compileParseExpression(&subCtx, body))
 	}
 	if _, ok := module.ExportedPratt[symbolName]; ok {
@@ -1773,6 +1794,8 @@ func compileExternalUsingTemplateCall(
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	subCtx.importAlias = moduleName
+	// Compile substituted imported template in imported module scope.
+	subCtx.env = semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
 	compiled := compileParseExpression(&subCtx, substituted)
 	if g := compiled.GetGrammar(); g != nil && ctx.sourceMap != nil {
 		ctx.sourceMap[g] = anchor
@@ -1800,7 +1823,6 @@ func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 	_, isToken := ctx.env.Tokens[targetName]
 	_, isRule := ctx.env.Rules[targetName]
 	_, isPratt := ctx.env.Pratt[targetName]
-
 	if isToken {
 		return compileTokenMatch(ctx, node)
 	}
@@ -1811,6 +1833,10 @@ func compileReference(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName string) CompiledRule {
+	if importedRef := compileImportedModuleRuleReference(ctx, targetRuleName); importedRef != nil {
+		return *importedRef
+	}
+
 	targetGrammarID := syntaxa.GrammarLabel(targetRuleName)
 	refRule := ctx.builder.Rule.Reference(parseCtxLabel(ctx, "REF"), targetGrammarID)
 
@@ -1822,6 +1848,62 @@ func compileRuleReference(ctx *parseCompileCtx, node *Node, targetRuleName strin
 	}
 
 	return refRule
+}
+
+func compileImportedModuleRuleReference(ctx *parseCompileCtx, targetRuleName string) *CompiledRule {
+	if ctx == nil || ctx.importAlias == "" || targetRuleName == "" {
+		return nil
+	}
+	module, ok := semantics.ResolveImportedModule(ctx.env, ctx.importAlias)
+	if !ok || module == nil || module.Root == nil {
+		return nil
+	}
+	moduleEnv := semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
+	ruleNode := moduleEnv.Rules[targetRuleName]
+	if ruleNode == nil {
+		return nil
+	}
+	if ctx.importedRuleLabels == nil {
+		ctx.importedRuleLabels = make(map[string]syntaxa.GrammarLabel)
+	}
+	if ctx.compilingImportedRule == nil {
+		ctx.compilingImportedRule = make(map[string]bool)
+	}
+
+	key := ctx.importAlias + embedNamespaceSeparator + targetRuleName
+	targetLabel, known := ctx.importedRuleLabels[key]
+	if !known {
+		targetLabel = syntaxa.GrammarLabel(key)
+		ctx.importedRuleLabels[key] = targetLabel
+	}
+
+	if !ctx.compilingImportedRule[key] {
+		ctx.compilingImportedRule[key] = true
+		defer delete(ctx.compilingImportedRule, key)
+
+		importedCtx := *ctx
+		importedCtx.env = moduleEnv
+		importedCtx.grammarID = targetLabel
+		importedCtx.ruleName = targetRuleName
+		importedCtx.rootLevel = true
+		importedCtx.transparent = ruleNode.FindFirstKind(dslspec.NodeRuleModifierTransparent) != nil
+		if importedNodeKindNode := ruleNode.FindFirstKind(dslspec.NodeParseNodeName); importedNodeKindNode != nil {
+			importedCtx.nodeKind = resolveSymbolNodeKindIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(importedNodeKindNode))
+		}
+		compiled, _ := compileParseRuleDefinition(&importedCtx, ruleNode)
+		ctx.builder.Rule.Define(compiled)
+	}
+
+	refRule := ctx.builder.Rule.Reference(parseCtxLabel(ctx, "REF_IMPORTED"), targetLabel)
+	if ctx.rootLevel {
+		if ctx.transparent {
+			wrapped := ctx.builder.Rule.TransparentSequence(ctx.grammarID, refRule)
+			return &wrapped
+		}
+		wrapped := ctx.builder.Rule.Sequence(ctx.grammarID, ctx.nodeKind, refRule)
+		return &wrapped
+	}
+	return &refRule
 }
 
 // compileGroup compiles a parse group. Uses Unwrap so nested groups (e.g. ( ( expr ) )) yield the innermost expression.
@@ -1845,12 +1927,22 @@ func resolveSymbolNodeKindIDForAlias(sym *semantics.CompiledSymbolTable, alias s
 	if sym == nil {
 		return 0
 	}
+	aliasedName := alias + "__" + nodeName
+	aliasedID := uint32(0)
+	embedAliasedName := alias + embedNamespaceSeparator + nodeName
+	embedAliasedID := uint32(0)
 	if alias != "" {
-		if id := sym.NodeKindID(alias + "__" + nodeName); id != 0 {
-			return id
+		aliasedID = sym.NodeKindID(aliasedName)
+		if aliasedID != 0 {
+			return aliasedID
+		}
+		embedAliasedID = sym.NodeKindID(embedAliasedName)
+		if embedAliasedID != 0 {
+			return embedAliasedID
 		}
 	}
-	return sym.NodeKindID(nodeName)
+	plainID := sym.NodeKindID(nodeName)
+	return plainID
 }
 
 func compilePrattExprDef(

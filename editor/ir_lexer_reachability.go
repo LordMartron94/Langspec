@@ -302,6 +302,7 @@ func editorResolveLexingRuleForParseTransition[
 	var first LexingRule[TObservation, TToken, TTokenRole]
 	var firstKey string
 	var have bool
+	candidates := make([]LexingRule[TObservation, TToken, TTokenRole], 0)
 
 	for sk := range stacks {
 		stack := editorLexerStackDecode(sk)
@@ -321,17 +322,57 @@ func editorResolveLexingRuleForParseTransition[
 			first = rule
 			firstKey = key
 			have = true
+			candidates = append(candidates, rule)
 			continue
 		}
 		if key != firstKey {
+			candidates = append(candidates, rule)
+			// If all candidates share identical regex, prefer highest-priority rule.
+			// This covers embed close-token handoff where mode-specific stack metadata differs.
+			sameRegex, picked, okPick := editorPickHighestPrioritySameRegex(candidates)
+			if sameRegex && okPick {
+				return picked, true, nil
+			}
 			return LexingRule[TObservation, TToken, TTokenRole]{}, false, fmt.Errorf(
 				"langspec editor: ambiguous lex rule for parse context %q token kind %v: reachable lexer stacks that can lex this token disagree on pattern or stack metadata",
 				ctxID, tok,
 			)
 		}
+		candidates = append(candidates, rule)
 	}
 	if !have {
 		return LexingRule[TObservation, TToken, TTokenRole]{}, false, nil
 	}
 	return first, true, nil
+}
+
+func editorPickHighestPrioritySameRegex[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+](rules []LexingRule[TObservation, TToken, TTokenRole]) (bool, LexingRule[TObservation, TToken, TTokenRole], bool) {
+	if len(rules) == 0 {
+		return false, LexingRule[TObservation, TToken, TTokenRole]{}, false
+	}
+	var regex0 string
+	for i, r := range rules {
+		re, err := r.Pattern.ToRegEx()
+		if err != nil {
+			return false, LexingRule[TObservation, TToken, TTokenRole]{}, false
+		}
+		if i == 0 {
+			regex0 = re
+			continue
+		}
+		if re != regex0 {
+			return false, LexingRule[TObservation, TToken, TTokenRole]{}, false
+		}
+	}
+	best := rules[0]
+	for i := 1; i < len(rules); i++ {
+		if rules[i].Priority > best.Priority {
+			best = rules[i]
+		}
+	}
+	return true, best, true
 }
