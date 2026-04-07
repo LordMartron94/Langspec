@@ -127,6 +127,7 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	pruneWarnings io.Writer,
 ) map[string][]contextEntry {
 	representatives, labelToRepresentative := minimizeStatesForEmission(machine, config)
+	incomingMetaEdges := buildIncomingMetaEdges(representatives, labelToRepresentative, config)
 
 	contextsMap := make(map[string][]contextEntry)
 	baseEntriesByLabel := make(map[string][]contextEntry)
@@ -200,7 +201,10 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 		}
 
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
-			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
+			if shouldSuppressContextMetaScopeForSetChain(metaScope, incomingMetaEdges[label]) {
+			} else {
+				entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
+			}
 		}
 
 		if state.HasFallthroughPop {
@@ -741,6 +745,50 @@ func validateContextReferences(contextsMap map[string][]contextEntry) {
 			}
 		}
 	}
+}
+
+type incomingMetaEdge struct {
+	SourceMeta string
+	Operation  editor.StackOperation
+}
+
+func buildIncomingMetaEdges[TObservation cmp.Ordered, TContext any](
+	representatives map[string]editor.EditorState[TObservation, TContext],
+	labelToRepresentative map[string]string,
+	config ExtractionConfig[TContext],
+) map[string][]incomingMetaEdge {
+	incoming := make(map[string][]incomingMetaEdge)
+	for _, sourceState := range representatives {
+		sourceMeta := config.ExtractMetaScope(sourceState.Context)
+		for _, tr := range sourceState.Transitions {
+			for _, target := range tr.Targets {
+				targetLabel := determineContextLabel(target.Label)
+				if remapped, ok := labelToRepresentative[targetLabel]; ok {
+					targetLabel = remapped
+				}
+				incoming[targetLabel] = append(incoming[targetLabel], incomingMetaEdge{
+					SourceMeta: sourceMeta,
+					Operation:  tr.Operation,
+				})
+			}
+		}
+	}
+	return incoming
+}
+
+func shouldSuppressContextMetaScopeForSetChain(metaScope string, edges []incomingMetaEdge) bool {
+	if metaScope == "" || len(edges) == 0 {
+		return false
+	}
+	for _, edge := range edges {
+		if edge.Operation != editor.STACK_SET {
+			return false
+		}
+		if edge.SourceMeta == "" || edge.SourceMeta != metaScope {
+			return false
+		}
+	}
+	return true
 }
 
 func applyStackOperationRemapped[TObservation cmp.Ordered, TContext any](
