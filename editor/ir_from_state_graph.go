@@ -112,9 +112,16 @@ func EditorIRFromStateGraph[
 	}
 
 	for id, s := range stateByID {
+		var ownerNodeKind *TNodeKind
+		if sg.ContextOwnerNodeKind != nil {
+			if nk, ok := sg.ContextOwnerNodeKind[id]; ok {
+				k := nk
+				ownerNodeKind = &k
+			}
+		}
 		if label, isNest := nestLabelByContextID[id]; isNest {
 			edCtx := &EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{
-				IsNest: true, NestLabel: label,
+				IsNest: true, NestLabel: label, NodeKind: ownerNodeKind,
 			}
 			// Opening-production kind from lowering: manifest MetaScope on that node
 			// replaces auto nestLabelToMetaScope ".body" for this wrapper (see toolchain).
@@ -126,7 +133,9 @@ func EditorIRFromStateGraph[
 			}
 			s.Context = config.contextProducer(edCtx)
 		} else if id == sg.RootContextID {
-			s.Context = config.contextProducer(&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{})
+			s.Context = config.contextProducer(&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{NodeKind: ownerNodeKind})
+		} else {
+			s.Context = config.contextProducer(&EditorCtx[TObservation, TToken, TTokenRole, TLexerState, TNodeKind]{NodeKind: ownerNodeKind})
 		}
 	}
 

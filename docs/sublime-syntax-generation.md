@@ -50,6 +50,8 @@ The editor layer receives a flat **`LexingRuleSet`**: each rule carries its **le
 
 **`editorLexRulesGroupedByState`** sorts rules per state by **priority (desc)** then **token id**, so “which rule wins for token *T* in state *S*” is deterministic and matches the usual lexer conflict resolution story.
 
+For imported grammars, this stage remains host-owned: imported parse symbols can impose lexical obligations, but imported lexer rules/states are not injected automatically. The generated syntax is built from the host `LEX` declarations after obligation validation.
+
 ---
 
 ## 4. Correlating parse contexts with lexer stacks

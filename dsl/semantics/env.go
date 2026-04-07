@@ -39,11 +39,12 @@ type ImportedModuleSymbols struct {
 	Root   *Node
 	Tokens map[string]*Node
 
-	ExportedPatterns  map[string]*Node
-	ExportedRules     map[string]*Node
-	ExportedPairs     map[string]*PairDecl
-	ExportedTemplates map[string]*TemplateDecl
-	ExportedPratt     map[string]*Node
+	ExportedPatterns           map[string]*Node
+	ExportedRules              map[string]*Node
+	ExportedPairs              map[string]*PairDecl
+	ExportedTemplates          map[string]*TemplateDecl
+	ExportedPratt              map[string]*Node
+	ExportedLexicalObligations map[string]*ImportLexicalObligation
 
 	IgnoreRoles map[string]bool
 }

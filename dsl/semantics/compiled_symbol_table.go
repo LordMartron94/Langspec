@@ -199,8 +199,8 @@ func collectReferencedImportedSymbols(root *Node, env *SemanticEnv, ts map[strin
 			continue
 		}
 		if pairDecl := module.ExportedPairs[symbolName]; pairDecl != nil {
-			ts[moduleName+"__"+pairDecl.OpenToken] = struct{}{}
-			ts[moduleName+"__"+pairDecl.CloseToken] = struct{}{}
+			ts[pairDecl.OpenToken] = struct{}{}
+			ts[pairDecl.CloseToken] = struct{}{}
 			continue
 		}
 		if ruleNode := module.ExportedRules[symbolName]; ruleNode != nil {
@@ -233,7 +233,7 @@ func collectTokenAndNodeRefsFromParseNodeWithAlias(node *Node, env *SemanticEnv,
 	walkParseTreeForSymbols(node, env, localTokens, localNodeKinds)
 
 	for tokenName := range localTokens {
-		ts[moduleAlias+"__"+tokenName] = struct{}{}
+		ts[tokenName] = struct{}{}
 	}
 	if nk == nil {
 		return

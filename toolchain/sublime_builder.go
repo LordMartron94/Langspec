@@ -250,7 +250,9 @@ func executeSublimeToolchain(
 	}
 
 	err := RunSublimeGenerator(runnerCfg)
-	for _, w := range UnusedManifestScopeWarningsFromStringManifest(compileResult.CompiledSymbols, manifest, scopeCov, UnusedManifestScopeOpts{}) {
+	for _, w := range UnusedManifestScopeWarningsFromStringManifest(compileResult.CompiledSymbols, manifest, scopeCov, UnusedManifestScopeOpts{
+		WarnUnusedBaseTokenScopes: true,
+	}) {
 		fmt.Fprintln(os.Stderr, "langspec sublime:", w)
 	}
 	return err

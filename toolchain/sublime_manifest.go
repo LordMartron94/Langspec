@@ -134,6 +134,7 @@ type NodeBindingUsage struct {
 type ManifestScopeCoverage[TToken, TNodeKind comparable] struct {
 	NodeBinding map[TNodeKind]*NodeBindingUsage
 	BaseToken   map[TToken]struct{}
+	NodeToken   map[TToken]struct{}
 	InvalidHit  bool
 }
 
@@ -286,8 +287,15 @@ func UnusedManifestScopeWarnings[
 				continue
 			}
 			if !manifestScopeCoverageBaseTokenHit(cov, tok) {
+				if manifestScopeCoverageNodeTokenHit(cov, tok) {
+					out = append(out, fmt.Sprintf(
+						"base_token_scopes[%q]: unused — covered by node_bindings for all observed contexts",
+						nameToken(tok),
+					))
+					continue
+				}
 				out = append(out, fmt.Sprintf(
-					"base_token_scopes[%q]: unused — no transition fell back to this base scope (node_bindings may cover these tokens)",
+					"base_token_scopes[%q]: unused — no transition matched this token in base scope or node_bindings (possible unreachable token or manifest key mismatch)",
 					nameToken(tok),
 				))
 			}
@@ -331,10 +339,13 @@ func UnusedManifestScopeWarningsFromStringManifest(
 		}
 	}
 	nameTok := func(id uint32) string {
+		if resolved := sym.TokenName(id); strings.TrimSpace(resolved) != "" {
+			return resolved
+		}
 		if s, ok := idToTokName[id]; ok {
 			return s
 		}
-		return sym.TokenName(id)
+		return strconv.FormatUint(uint64(id), 10)
 	}
 	remapped := SemanticManifestRemapFromStrings(sym, manifest)
 	return UnusedManifestScopeWarnings(remapped, cov, nameNode, nameTok, opts)
@@ -383,6 +394,16 @@ func manifestScopeCoverageRecordResolve[TToken, TNodeKind comparable](cov *Manif
 	}
 }
 
+func manifestScopeCoverageRecordNodeToken[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], tok TToken) {
+	if cov == nil {
+		return
+	}
+	if cov.NodeToken == nil {
+		cov.NodeToken = make(map[TToken]struct{})
+	}
+	cov.NodeToken[tok] = struct{}{}
+}
+
 func manifestScopeCoverageRecordBaseToken[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], tok TToken) {
 	if cov == nil {
 		return
@@ -398,6 +419,14 @@ func manifestScopeCoverageBaseTokenHit[TToken, TNodeKind comparable](cov *Manife
 		return false
 	}
 	_, ok := cov.BaseToken[tok]
+	return ok
+}
+
+func manifestScopeCoverageNodeTokenHit[TToken, TNodeKind comparable](cov *ManifestScopeCoverage[TToken, TNodeKind], tok TToken) bool {
+	if cov == nil || cov.NodeToken == nil {
+		return false
+	}
+	_, ok := cov.NodeToken[tok]
 	return ok
 }
 
@@ -445,6 +474,7 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 		if ts, match := binding.TokenScopes[*token]; match && len(ts) > 0 {
 			ctx.Scope = joinSublimeScopes(ts)
 			manifestScopeCoverageRecordResolve(cov, nodeKind, false, true)
+			manifestScopeCoverageRecordNodeToken(cov, *token)
 			return ctx, true
 		}
 	}
@@ -452,11 +482,17 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 	if len(binding.Scopes) > 0 {
 		ctx.Scope = joinSublimeScopes(binding.Scopes)
 		manifestScopeCoverageRecordResolve(cov, nodeKind, true, false)
+		if token != nil {
+			manifestScopeCoverageRecordNodeToken(cov, *token)
+		}
 		return ctx, true
 	}
 
 	if ctx.MetaScope != "" {
 		manifestScopeCoverageRecordResolve(cov, nodeKind, false, false)
+		if token != nil {
+			manifestScopeCoverageRecordNodeToken(cov, *token)
+		}
 		return ctx, true
 	}
 

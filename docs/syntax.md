@@ -108,13 +108,17 @@ Validation codes related to import/export misuse include:
 * `V_IMP005`: unresolved import/export symbol (alias or exported name not found).
 * `V_IMP006`: invalid import `using` category/shape (for example, missing template call syntax or calling a non-template as a template).
 
-### Imported lexer symbols (including patterns)
+### Imported lexical obligations
 
-Imported lexer symbols are intentionally strict:
+Imported parse symbols are treated as **lexical contracts**:
 
-* Only imported lexer symbols that are actually referenced are pulled into the compiled output (including imported patterns/tokens/states as applicable).
-* Imported lexer states are namespaced in generated artifacts (for example `M__INITIAL`) to avoid collisions.
-* For generated Go bindings, imported tokens and node kinds are namespaced with the importer alias (for example `M__TokWord`, `M__ItemNode`) to avoid cross-module collisions.
+* `using Alias.Rule`, `using Alias.Template(...)`, and `nest using Alias.Pair` can require host tokens used by that exported symbol.
+* The host must declare required tokens in its own `LEX` section; imported token rules are not auto-materialized.
+* If an imported symbol implies stack transitions, the host must also declare required lexer states.
+* Missing requirements fail validation with explicit import diagnostics:
+  * `V_IMP007`: missing host token obligation.
+  * `V_IMP008`: missing host lexer-state obligation.
+* `using Alias.Pattern` in `LEX` is still supported as pattern reuse, but priority/role/state behavior remains host-owned.
 
 ### Library module pragma (`lspec`)
 

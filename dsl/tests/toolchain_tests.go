@@ -91,6 +91,7 @@ IMPORT {
 LEX {
 	state INITIAL {
 		TokMain -> word: ` + "`[a-zA-Z]+`" + `;
+		TokShared -> word: ` + "`[a-zA-Z]+`" + `;
 	}
 }
 PARSE {
@@ -125,8 +126,11 @@ PARSE {
 		t.Fatalf("read generated bindings: %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, "A__TokShared") || !strings.Contains(text, "B__TokShared") {
-		t.Fatalf("generated bindings missing namespaced imported token constants")
+	if !strings.Contains(text, "TokShared") {
+		t.Fatalf("generated bindings missing host token constant TokShared")
+	}
+	if strings.Contains(text, "A__TokShared") || strings.Contains(text, "B__TokShared") {
+		t.Fatalf("generated bindings should not include namespaced imported token constants")
 	}
 	if !strings.Contains(text, "A__SharedNode") || !strings.Contains(text, "B__SharedNode") {
 		t.Fatalf("generated bindings missing namespaced imported node constants")

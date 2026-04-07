@@ -94,12 +94,14 @@ const (
 
 	VALIDATION_SYMBOL_NAME_COLLISION ValidationCode = "V_SYM001"
 
-	VALIDATION_IMPORT_DUPLICATE_ALIAS      ValidationCode = "V_IMP001"
-	VALIDATION_IMPORT_MISSING_ALIAS        ValidationCode = "V_IMP002"
-	VALIDATION_IMPORT_UNRESOLVED_MODULE    ValidationCode = "V_IMP003"
-	VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL ValidationCode = "V_IMP004"
-	VALIDATION_IMPORT_UNRESOLVED_EXPORT    ValidationCode = "V_IMP005"
-	VALIDATION_IMPORT_INVALID_USING_CALL   ValidationCode = "V_IMP006"
+	VALIDATION_IMPORT_DUPLICATE_ALIAS          ValidationCode = "V_IMP001"
+	VALIDATION_IMPORT_MISSING_ALIAS            ValidationCode = "V_IMP002"
+	VALIDATION_IMPORT_UNRESOLVED_MODULE        ValidationCode = "V_IMP003"
+	VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL     ValidationCode = "V_IMP004"
+	VALIDATION_IMPORT_UNRESOLVED_EXPORT        ValidationCode = "V_IMP005"
+	VALIDATION_IMPORT_INVALID_USING_CALL       ValidationCode = "V_IMP006"
+	VALIDATION_IMPORT_MISSING_TOKEN_OBLIGATION ValidationCode = "V_IMP007"
+	VALIDATION_IMPORT_MISSING_STATE_OBLIGATION ValidationCode = "V_IMP008"
 )
 
 /* String returns the code string (implements fmt.Stringer). */
@@ -192,6 +194,7 @@ func processSymbolBinding(ctx *ValidationCtx) {
 	validateTemplateParameterScoping(ctx, env)
 	nodeKinds := collectDeclaredParseOutputNodeKinds(ctx.RootNode)
 	validateUsingReferences(ctx, env, nodeKinds)
+	validateImportLexicalObligations(ctx, env)
 	validateTemplateCallSites(ctx, env, nodeKinds)
 	validateTokenReferences(ctx, env)
 	validatePatternReferences(ctx, env)
@@ -370,6 +373,72 @@ func collectImportAliases(root *Node) map[string]bool {
 	return out
 }
 
+func validateImportLexicalObligations(ctx *ValidationCtx, env *SemanticEnv) {
+	if ctx == nil || env == nil {
+		return
+	}
+	definedStates := collectDefinedLexerStates(ctx.RootNode)
+	for _, usingRef := range ctx.RootNode.FindAllKind(NodeLexRulePatternUsing) {
+		if nodeHasAncestorKind(usingRef, NodeLexRule) {
+			continue
+		}
+		moduleName, symbolName := usingRuleReferenceParts(usingRef)
+		if moduleName == "" || symbolName == "" {
+			continue
+		}
+		module, ok := ResolveImportedModule(env, moduleName)
+		if !ok || module == nil {
+			continue
+		}
+		obligation := module.ExportedLexicalObligations[symbolName]
+		if obligation == nil {
+			continue
+		}
+		for tokenName := range obligation.RequiredTokens {
+			if env.Tokens[tokenName] != nil {
+				continue
+			}
+			ctx.ReportError(
+				VALIDATION_IMPORT_MISSING_TOKEN_OBLIGATION.String(),
+				fmt.Sprintf("imported symbol '%s.%s' requires host token '%s' in LEX", moduleName, symbolName, tokenName),
+				usingRef,
+			)
+		}
+		for stateName := range obligation.RequiredStates {
+			if definedStates[stateName] {
+				continue
+			}
+			ctx.ReportError(
+				VALIDATION_IMPORT_MISSING_STATE_OBLIGATION.String(),
+				fmt.Sprintf("imported symbol '%s.%s' requires host lexer state '%s'", moduleName, symbolName, stateName),
+				usingRef,
+			)
+		}
+	}
+}
+
+func collectDefinedLexerStates(root *Node) map[string]bool {
+	out := make(map[string]bool)
+	lex := root.FindFirstKind(NodeLexSection)
+	if lex == nil {
+		return out
+	}
+	for _, stateList := range lex.FindAllKind(NodeStateList) {
+		list := stateList.FindFirstKind(NodeStateDefinitionList)
+		if list == nil {
+			continue
+		}
+		for _, stateDef := range list.FindAllKind(NodeStateDefinition) {
+			stateName := NodeSingleTokenContent(stateDef)
+			if stateName == "" {
+				continue
+			}
+			out[stateName] = true
+		}
+	}
+	return out
+}
+
 // validateSymbolNameCollisions ensures no name is declared in more than one symbol table
 // (tokens, patterns, parse rules, pairs, pratt). Order for "first" declaration follows SemanticSymbolKind iota.
 func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
@@ -470,7 +539,36 @@ func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	markExplicitTokenReferences(ctx, env, used)
 	markNestTokenReferences(ctx, env, used)
 	markPrattOperatorTargetReferences(ctx, env, used)
+	markImportedLexicalObligationTokenReferences(ctx, env, used)
 	reportUnusedTokens(ctx, env, used, ignoredRoles)
+}
+
+func markImportedLexicalObligationTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+	if ctx == nil || env == nil {
+		return
+	}
+	for _, usingRef := range ctx.RootNode.FindAllKind(NodeLexRulePatternUsing) {
+		if usingRef == nil || nodeHasAncestorKind(usingRef, NodeLexRule) {
+			continue
+		}
+		moduleName, symbolName := usingRuleReferenceParts(usingRef)
+		if moduleName == "" || symbolName == "" {
+			continue
+		}
+		module, ok := ResolveImportedModule(env, moduleName)
+		if !ok || module == nil {
+			continue
+		}
+		obligation := module.ExportedLexicalObligations[symbolName]
+		if obligation == nil {
+			continue
+		}
+		for tokenName := range obligation.RequiredTokens {
+			if _, exists := env.Tokens[tokenName]; exists {
+				used[tokenName] = true
+			}
+		}
+	}
 }
 
 func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {

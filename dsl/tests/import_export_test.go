@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"langspec"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,16 +81,10 @@ LEX {
 		t.Fatalf("strict import token filtering failed: TokUnused should not be in compiled symbols")
 	}
 
-	states := res.CompiledLexerSpec.SortedStateKeys()
-	foundImportedState := false
-	for _, state := range states {
+	for _, state := range res.CompiledLexerSpec.SortedStateKeys() {
 		if state == "M__INITIAL" {
-			foundImportedState = true
-			break
+			t.Fatalf("host lexer should not auto-materialize imported lexer states")
 		}
-	}
-	if !foundImportedState {
-		t.Fatalf("expected imported lexer state M__INITIAL to be generated")
 	}
 }
 
@@ -651,7 +644,8 @@ IMPORT {
 }
 LEX {
 	state INITIAL {
-		TokMain -> word: ` + "`[a-zA-Z]+`" + `;
+		TokMain -> word: ` + "`[0-9]+`" + `;
+		TokTplWord -> word: ` + "`[a-zA-Z]+`" + `;
 	}
 }
 PARSE {
@@ -677,14 +671,16 @@ PARSE {
 		t.Fatalf("compile result missing lowered artifacts")
 	}
 
-	importedTok := res.CompiledSymbols.TokenID("M__TokTplWord")
-	if importedTok == 0 {
-		t.Fatalf("expected namespaced imported template token M__TokTplWord in compiled symbols")
+	if res.CompiledSymbols.TokenID("TokTplWord") == 0 {
+		t.Fatalf("expected host token TokTplWord in compiled symbols")
 	}
-
-	rs := res.CompiledLexerSpec.Ruleset("M__INITIAL")
-	if len(langspec.LexerRulesetGetRules(rs)) == 0 {
-		t.Fatalf("expected namespaced imported lexer ruleset M__INITIAL to contain template token rules")
+	if res.CompiledSymbols.TokenID("M__TokTplWord") != 0 {
+		t.Fatalf("imported namespaced token should not be materialized")
+	}
+	for _, state := range res.CompiledLexerSpec.SortedStateKeys() {
+		if state == "M__INITIAL" {
+			t.Fatalf("imported lexer state should not be generated")
+		}
 	}
 }
 
@@ -735,7 +731,8 @@ IMPORT {
 }
 LEX {
 	state INITIAL {
-		TokMain -> word: ` + "`[a-zA-Z]+`" + `;
+		TokMain -> word: ` + "`[0-9]+`" + `;
+		TokShared -> word: ` + "`[a-zA-Z]+`" + `;
 	}
 }
 PARSE {
@@ -765,10 +762,11 @@ PARSE {
 		t.Fatalf("compile result missing compiled symbols")
 	}
 
-	aTok := res.CompiledSymbols.TokenID("A__TokShared")
-	bTok := res.CompiledSymbols.TokenID("B__TokShared")
-	if aTok == 0 || bTok == 0 || aTok == bTok {
-		t.Fatalf("expected non-colliding namespaced imported tokens A__TokShared and B__TokShared")
+	if res.CompiledSymbols.TokenID("TokShared") == 0 {
+		t.Fatalf("expected host-owned token TokShared to be compiled")
+	}
+	if res.CompiledSymbols.TokenID("A__TokShared") != 0 || res.CompiledSymbols.TokenID("B__TokShared") != 0 {
+		t.Fatalf("imported namespaced tokens should not be materialized")
 	}
 
 	aNode := res.CompiledSymbols.NodeKindID("A__SharedNode")
@@ -825,11 +823,17 @@ IMPORT {
 LEX {
 	state INITIAL {
 		TokOwnWhitespace -> own: ` + "`\\s+`" + `;
+		TokKWGodebug -> structural: using M.pat_TokKWGodebug;
+		TokIdent -> structural: using M.pat_TokIdent;
+		TokEquals -> structural: using M.pat_Equals;
 	}
 }
 PARSE {
 	IGNORE { own };
 	rule PROGRAM -> ProgramNode {
+		(virtual TokKWGodebug)?
+		(virtual TokIdent)?
+		(virtual TokEquals)?
 		GODEBUG_STATEMENT*
 		GODEBUG_REFERENCE*
 	};
@@ -853,7 +857,10 @@ PARSE {
 		t.Fatalf("compile result missing compiled artifacts")
 	}
 
-	if res.CompiledSymbols.TokenID("M__TokKWGodebug") == 0 || res.CompiledSymbols.TokenID("M__TokIdent") == 0 {
-		t.Fatalf("expected imported tokens for namespaced module symbols")
+	if res.CompiledSymbols.TokenID("TokKWGodebug") == 0 || res.CompiledSymbols.TokenID("TokIdent") == 0 || res.CompiledSymbols.TokenID("TokEquals") == 0 {
+		t.Fatalf("expected host tokens to satisfy imported rule lexical obligations")
+	}
+	if res.CompiledSymbols.TokenID("M__TokKWGodebug") != 0 || res.CompiledSymbols.TokenID("M__TokIdent") != 0 {
+		t.Fatalf("imported namespaced tokens should not be materialized")
 	}
 }
