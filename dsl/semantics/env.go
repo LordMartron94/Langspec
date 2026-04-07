@@ -105,11 +105,7 @@ func buildEnvTokens(root *Node, env *SemanticEnv, onDuplicate OnDuplicateFunc) {
 	}
 	for _, tokenNode := range lex.FindAllKind(NodeLexRuleTokenName) {
 		name := IdentifierValue(tokenNode)
-		if _, exists := env.Tokens[name]; exists {
-			if onDuplicate != nil {
-				onDuplicate(SymbolKindToken, name, tokenNode)
-			}
-		} else {
+		if _, exists := env.Tokens[name]; !exists {
 			env.Tokens[name] = tokenNode
 		}
 	}
