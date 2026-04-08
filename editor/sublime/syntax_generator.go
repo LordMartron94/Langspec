@@ -250,7 +250,6 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	for name, entries := range lexModeContexts {
 		contextsMap[name] = entries
 	}
-
 	pruneUnreachableContexts(contextsMap, pruneWarnings)
 	validateContextReferences(contextsMap)
 
@@ -412,7 +411,6 @@ func minimizeStatesForEmission[TObservation cmp.Ordered, TContext any](
 		rep := repByPartition[partitions[label]]
 		labelToRepresentative[label] = rep
 	}
-
 	for _, rep := range repByPartition {
 		representatives[rep] = stateByLabel[rep]
 	}

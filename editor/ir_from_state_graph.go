@@ -157,20 +157,29 @@ func EditorIRFromStateGraph[
 		type pair struct {
 			priority int
 			tr       lowering.Transition[TNodeKind]
+			order    int
 		}
 		pairs := make([]pair, 0, len(transList))
-		addedTokens := make(map[lexarch.TokenKind]bool)
-
-		for _, tr := range transList {
-			if !addedTokens[tr.Token] {
-				pairs = append(pairs, pair{priority: tokenToPriority[tr.Token], tr: tr})
-				addedTokens[tr.Token] = true
-			}
+		for i, tr := range transList {
+			pairs = append(pairs, pair{
+				priority: tokenToPriority[tr.Token],
+				tr:       tr,
+				order:    i,
+			})
 		}
 
 		sort.SliceStable(pairs, func(i, j int) bool {
 			if pairs[i].priority != pairs[j].priority {
 				return pairs[i].priority > pairs[j].priority
+			}
+			// For the same token, preserve consuming parse transitions before
+			// recovery lookahead pops so boundary ownership stays deterministic.
+			if pairs[i].tr.Token == pairs[j].tr.Token && pairs[i].tr.IsRecoveryTransition != pairs[j].tr.IsRecoveryTransition {
+				return !pairs[i].tr.IsRecoveryTransition
+			}
+			// Absolute deterministic tie-breaker within same priority/token class.
+			if pairs[i].order != pairs[j].order {
+				return pairs[i].order < pairs[j].order
 			}
 			// Absolute deterministic tie-breaker
 			return tokenToRuleIndex[pairs[i].tr.Token] < tokenToRuleIndex[pairs[j].tr.Token]
