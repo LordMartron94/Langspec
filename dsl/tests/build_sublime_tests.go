@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"langspec/dsl/editor"
 	"os"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
@@ -33,9 +34,10 @@ func assertSublimeContextReferencesExist(path string) error {
 	if err != nil {
 		return fmt.Errorf("read syntax file: %w", err)
 	}
+	normalizedContent := normalizeYAMLForGoParser(content)
 
 	var syntax sublimeSyntaxFixture
-	if err := yaml.Unmarshal(content, &syntax); err != nil {
+	if err := yaml.Unmarshal(normalizedContent, &syntax); err != nil {
 		return fmt.Errorf("parse syntax yaml: %w", err)
 	}
 
@@ -50,6 +52,23 @@ func assertSublimeContextReferencesExist(path string) error {
 		}
 	}
 	return nil
+}
+
+func normalizeYAMLForGoParser(content []byte) []byte {
+	// go.yaml.in/yaml/v4 rejects %YAML 1.2 directives as "incompatible YAML document".
+	// This test only validates context-graph wiring and does not depend on directives.
+	if len(content) == 0 {
+		return content
+	}
+	lines := strings.Split(string(content), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "%YAML ") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return []byte(strings.Join(out, "\n"))
 }
 
 func collectContextReferences(entry map[string]any) []string {
