@@ -221,14 +221,48 @@ func validateTemplateCallSites(ctx *ValidationCtx, env *SemanticEnv, nodeKinds m
 				callArgs)
 			return false, false
 		}
+		callerParamTypes := templateParamTypesForCallSite(n)
 		for i, p := range decl.Params {
-			validateTemplateCallArg(ctx, env, nodeKinds, p.Type, args[i])
+			validateTemplateCallArg(ctx, env, nodeKinds, p.Type, args[i], callerParamTypes)
 		}
 		return false, false
 	})
 }
 
-func validateTemplateCallArg(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}, pty TemplateParamType, arg *Node) {
+func templateParamTypeName(ty TemplateParamType) string {
+	switch ty {
+	case TemplateParamToken:
+		return "Token"
+	case TemplateParamNode:
+		return "Node"
+	case TemplateParamRule:
+		return "Rule"
+	case TemplateParamPair:
+		return "Pair"
+	case TemplateParamPrattExpr:
+		return "PrattExpr"
+	default:
+		return "Unknown"
+	}
+}
+
+func templateParamTypesForCallSite(callSegment *Node) map[string]TemplateParamType {
+	tpl := enclosingParseTemplate(callSegment)
+	if tpl == nil {
+		return nil
+	}
+	decl, ok := ExtractTemplateDeclaration(tpl)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]TemplateParamType, len(decl.Params))
+	for _, p := range decl.Params {
+		out[p.Name] = p.Type
+	}
+	return out
+}
+
+func validateTemplateCallArg(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}, pty TemplateParamType, arg *Node, callerParamTypes map[string]TemplateParamType) {
 	if arg == nil {
 		return
 	}
@@ -239,6 +273,29 @@ func validateTemplateCallArg(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map
 	}
 	raw := toks[0].Raw
 	tt := LangSpecLexerTokenType(toks[0].Token)
+
+	if tt == TokParameter {
+		pname := NormalizeTemplateParamName(string(raw))
+		actual, ok := callerParamTypes[pname]
+		if !ok {
+			ctx.ReportError(VALIDATION_TEMPLATE_CALL_ARG_TYPE.String(),
+				fmt.Sprintf("template argument parameter '$%s' is not declared in the calling template", pname), arg)
+			return
+		}
+		if actual != pty {
+			ctx.ReportError(
+				VALIDATION_TEMPLATE_CALL_ARG_TYPE.String(),
+				fmt.Sprintf(
+					"template argument parameter '$%s' has type %s but callee expects %s",
+					pname,
+					templateParamTypeName(actual),
+					templateParamTypeName(pty),
+				),
+				arg,
+			)
+		}
+		return
+	}
 
 	switch pty {
 	case TemplateParamToken:

@@ -2,12 +2,14 @@ package dsl
 
 import (
 	"fmt"
+	"foundation/system"
 	"path/filepath"
 
 	"langspec"
 	"langspec/dsl/semantics"
 	dslspec "langspec/dsl/spec"
 	"langspec/validation"
+	"syntaxa"
 )
 
 type resolvedImportGraph struct {
@@ -173,6 +175,8 @@ func validateImportModule(
 	root *Node,
 	graph *resolvedImportGraph,
 ) error {
+	sourceRunes, _ := system.FileReadAllRunes(sourceFile)
+	sourceText := string(sourceRunes)
 	opts := extractCompileOptions(root)
 	preValidationState := &semantics.GrammarValidationState{
 		ImportedModules: graph.byAlias,
@@ -198,11 +202,21 @@ func validateImportModule(
 	if validationEntries != nil {
 		for _, stage := range validationEntries.Results {
 			for _, entry := range stage.Entries {
+				startLine := 0
+				startColumn := 0
+				if entry.Node != nil && sourceText != "" {
+					if sl, sc, _, _, ok := syntaxa.LSTNodeLineSpanForDiagnostics(entry.Node, sourceText, 4); ok {
+						startLine = sl
+						startColumn = sc
+					}
+				}
 				graph.appendDiagnostic(ImportedModuleDiagnostic{
-					Alias:   alias,
-					Path:    sourceFile,
-					Code:    entry.Code,
-					Message: entry.Message,
+					Alias:       alias,
+					Path:        sourceFile,
+					Code:        entry.Code,
+					Message:     entry.Message,
+					StartLine:   startLine,
+					StartColumn: startColumn,
 				})
 			}
 		}

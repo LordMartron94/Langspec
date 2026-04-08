@@ -322,7 +322,7 @@ func validateUsingReferences(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map
 						ctx.ReportError(VALIDATION_IMPORT_UNSUPPORTED_EXTERNAL.String(), fmt.Sprintf("external template '%s.%s' cannot use PrattExpr parameter currently", moduleName, symbolName), usingRef)
 						break
 					}
-					validateTemplateCallArg(ctx, env, nodeKinds, p.Type, args[i])
+					validateTemplateCallArg(ctx, env, nodeKinds, p.Type, args[i], nil)
 				}
 				continue
 			}
@@ -1090,7 +1090,7 @@ func processLexerStateSemantics(ctx *ValidationCtx) {
 		}
 	}
 
-	if _, hasInitial := defined["INITIAL"]; !hasInitial {
+	if _, hasInitial := defined["INITIAL"]; !hasInitial && !isLibraryMode(ctx) {
 		ctx.ReportError(VALIDATION_LEX_INITIAL_STATE_MISSING.String(), "lexer must declare state INITIAL", lex)
 	}
 

@@ -317,11 +317,16 @@ func LangSpecCompilerCompile(
 	if importResolveErr != nil {
 		if len(result.ImportedDiagnostics) > 0 {
 			for _, d := range result.ImportedDiagnostics {
+				locationSuffix := ""
+				if d.StartLine > 0 && d.StartColumn > 0 {
+					locationSuffix = fmt.Sprintf(" (%d:%d)", d.StartLine, d.StartColumn)
+				}
 				fmt.Fprintf(
 					compiler.diagnosticWriter,
-					"import '%s' (%s): %s %s\n",
+					"import '%s' (%s%s): %s %s\n",
 					d.Alias,
 					d.Path,
+					locationSuffix,
 					d.Code,
 					d.Message,
 				)
