@@ -719,6 +719,26 @@ func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[
 			return
 		}
 		root.WalkPre(func(node *Node) (bool, bool) {
+			if node != nil && node.Kind() == NodeLexRulePatternUsing {
+				moduleName, symbolName := usingRuleReferenceParts(node)
+				if moduleName != "" && symbolName != "" {
+					module, ok := ResolveImportedModule(env, moduleName)
+					if ok && module != nil {
+						decl := module.ExportedTemplates[symbolName]
+						callArgs := node.FindFirstKind(NodeParseTemplateCallArgs)
+						if decl != nil && callArgs != nil {
+							for _, tokenName := range staticTokenRefsFromTemplateDeclArgs(callArgs, decl, env) {
+								used[tokenName] = true
+							}
+						}
+					}
+				}
+			}
+			if node != nil && node.Kind() == NodeParseSegment && SegmentHasExplicitTemplateInvocation(node) {
+				for _, name := range StaticTokenRefsFromTemplateCallSegment(node, env) {
+					used[name] = true
+				}
+			}
 			if node.Kind() == NodeParseTokenReference || node.Kind() == NodeParseNestOpenToken || node.Kind() == NodeParseNestCloseToken {
 				name := IdentifierValue(node)
 				if name == "" {
@@ -1889,21 +1909,35 @@ func extractImportedRuleRefs(ruleNode *Node, env *SemanticEnv) []string {
 	if body == nil {
 		return nil
 	}
-	importedRefs := make([]string, 0)
-	for _, refNode := range body.FindAllKind(NodeParseSymbolReference) {
-		refName := RefName(refNode)
+	var refs []string
+	body.WalkPre(func(node *Node) (bool, bool) {
+		if node != nil && node.Kind() == NodeParseSegment {
+			if inner, _, ok := ExpandedTemplateBodyRootForCallSegment(node, env); ok {
+				refs = append(refs, StaticRuleAndPrattRefsFromTemplateCallSegment(node, env)...)
+				refs = append(refs, staticRuleAndPrattRefsFromTemplateBody(inner, env, make(map[string]bool))...)
+				return false, false
+			}
+			if SegmentHasExplicitTemplateInvocation(node) {
+				return false, false
+			}
+		}
+
+		if node == nil {
+			return false, false
+		}
+		if node.Kind() != NodeParseSymbolReference && node.Kind() != NodeParseExpressionReference {
+			return false, false
+		}
+		refName := RefName(node)
 		if refName == "" {
-			continue
+			return false, false
 		}
-		if _, isRule := env.Rules[refName]; isRule {
-			importedRefs = append(importedRefs, refName)
-			continue
+		if env.Rules[refName] != nil || env.Pratt[refName] != nil {
+			refs = append(refs, refName)
 		}
-		if _, isPratt := env.Pratt[refName]; isPratt {
-			importedRefs = append(importedRefs, refName)
-		}
-	}
-	return importedRefs
+		return false, false
+	})
+	return refs
 }
 
 func computeReachablePatterns(root *Node, deps map[string][]string) map[string]bool {

@@ -503,3 +503,58 @@ func StaticRuleAndPrattRefsFromTemplateCallSegment(segment *Node, env *SemanticE
 	}
 	return refs
 }
+
+/*
+StaticTokenRefsFromTemplateCallSegment extracts token dependencies contributed by
+call arguments for explicit template invocations where the callee parameter type is Token.
+*/
+func StaticTokenRefsFromTemplateCallSegment(segment *Node, env *SemanticEnv) []string {
+	if segment == nil || env == nil || !SegmentHasExplicitTemplateInvocation(segment) {
+		return nil
+	}
+	calleeName, _, ok := TemplateCallCalleeName(segment)
+	if !ok {
+		return nil
+	}
+	decl := env.Templates[calleeName]
+	if decl == nil {
+		return nil
+	}
+	args := TemplateCallArgsNode(segment)
+	return staticTokenRefsFromTemplateDeclArgs(args, decl, env)
+}
+
+func staticTokenRefsFromTemplateDeclArgs(args *Node, decl *TemplateDecl, env *SemanticEnv) []string {
+	if args == nil || decl == nil || env == nil {
+		return nil
+	}
+	argNodes := TemplateCallArgumentNodes(args)
+	if len(argNodes) != len(decl.Params) {
+		return nil
+	}
+
+	refs := make([]string, 0, len(argNodes))
+	for i, p := range decl.Params {
+		if p.Type != TemplateParamToken {
+			continue
+		}
+		arg := argNodes[i]
+		if arg == nil {
+			continue
+		}
+		if len(arg.Tokens()) == 0 {
+			continue
+		}
+		if LangSpecLexerTokenType(arg.Tokens()[0].Token) != TokIdentifier {
+			continue
+		}
+		name := strings.TrimSpace(NodeSingleTokenContent(arg))
+		if name == "" {
+			continue
+		}
+		if env.Tokens[name] != nil {
+			refs = append(refs, name)
+		}
+	}
+	return refs
+}
