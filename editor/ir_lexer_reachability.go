@@ -341,9 +341,53 @@ func editorResolveLexingRuleForParseTransition[
 		candidates = append(candidates, rule)
 	}
 	if !have {
+		if fallbackRule, ok, err := editorResolveUniqueLexRuleAcrossAllStates(rulesByState, tok); err != nil {
+			return LexingRule[TObservation, TToken, TTokenRole]{}, false, err
+		} else if ok {
+			return fallbackRule, true, nil
+		}
 		return LexingRule[TObservation, TToken, TTokenRole]{}, false, nil
 	}
 	return first, true, nil
+}
+
+func editorResolveUniqueLexRuleAcrossAllStates[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+](
+	rulesByState map[string][]LexingRule[TObservation, TToken, TTokenRole],
+	tok lexarch.TokenKind,
+) (LexingRule[TObservation, TToken, TTokenRole], bool, error) {
+	var (
+		haveFirst bool
+		firstRule LexingRule[TObservation, TToken, TTokenRole]
+		firstKey  string
+	)
+	for _, rules := range rulesByState {
+		for _, r := range rules {
+			if lexarch.TokenKind(r.Token) != tok {
+				continue
+			}
+			key, err := editorLexRuleEmissionKey(r)
+			if err != nil {
+				return LexingRule[TObservation, TToken, TTokenRole]{}, false, err
+			}
+			if !haveFirst {
+				haveFirst = true
+				firstRule = r
+				firstKey = key
+				continue
+			}
+			if key != firstKey {
+				return LexingRule[TObservation, TToken, TTokenRole]{}, false, nil
+			}
+		}
+	}
+	if !haveFirst {
+		return LexingRule[TObservation, TToken, TTokenRole]{}, false, nil
+	}
+	return firstRule, true, nil
 }
 
 func editorPickHighestPrioritySameRegex[
