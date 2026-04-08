@@ -23,6 +23,9 @@ func SubstituteTemplateParameterReferences(root *Node, bindings map[string]*Node
 		}
 		return root
 	}
+	if replacement, ok := substituteTemplateCallArgumentTokenParameter(root, bindings); ok {
+		return replacement
+	}
 	var walk func(*Node)
 	walk = func(n *Node) {
 		if n == nil {
@@ -35,6 +38,12 @@ func SubstituteTemplateParameterReferences(root *Node, bindings map[string]*Node
 			walk(n.Slot(slotName))
 		}
 		if n.Kind() != NodeParseTemplateParameterReference {
+			if replacement, ok := substituteTemplateCallArgumentTokenParameter(n, bindings); ok {
+				if n.Parent() == nil {
+					return
+				}
+				syntaxa.ReplaceChildInTree(n, replacement)
+			}
 			return
 		}
 		if n.Parent() == nil {
@@ -50,4 +59,23 @@ func SubstituteTemplateParameterReferences(root *Node, bindings map[string]*Node
 	}
 	walk(root)
 	return root
+}
+
+func substituteTemplateCallArgumentTokenParameter(n *Node, bindings map[string]*Node) (*Node, bool) {
+	if n == nil || n.Kind() != NodeParseTemplateCallArgument {
+		return nil, false
+	}
+	toks := n.Tokens()
+	if len(toks) != 1 || LangSpecLexerTokenType(toks[0].Token) != TokParameter {
+		return nil, false
+	}
+	name := NormalizeTemplateParamName(string(toks[0].Raw))
+	rep, ok := bindings[name]
+	if !ok || rep == nil {
+		return nil, false
+	}
+	ed := syntaxa.LSTEditor[LangSpecParserNodeKind]{}
+	out := ed.NewNode(NodeParseTemplateCallArgument)
+	ed.AttachChild(out, syntaxa.CloneLSTSubtreeDetached(rep))
+	return out, true
 }

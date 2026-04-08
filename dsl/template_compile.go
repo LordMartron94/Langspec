@@ -20,6 +20,9 @@ func buildTemplateArgumentParseRoot(
 	if arg == nil {
 		panic("compiler error: empty template call argument")
 	}
+	if n := findTemplateArgumentTypedNode(arg, pty); n != nil {
+		return syntaxa.CloneLSTSubtreeDetached(n)
+	}
 	argSource := findTemplateArgumentSourceNode(arg)
 	if argSource == nil || len(argSource.Tokens()) == 0 {
 		panic("compiler error: empty template call argument")
@@ -47,6 +50,39 @@ func buildTemplateArgumentParseRoot(
 	}
 }
 
+func findTemplateArgumentTypedNode(arg *Node, pty semantics.TemplateParamType) *Node {
+	if arg == nil {
+		return nil
+	}
+	findKindWithTokens := func(kind dslspec.LangSpecParserNodeKind) *Node {
+		return findFirstInSubtree(arg, func(n *Node) bool {
+			return n != nil && n.Kind() == kind && len(n.Tokens()) > 0
+		})
+	}
+	switch pty {
+	case semantics.TemplateParamToken:
+		if n := findKindWithTokens(dslspec.NodeParseTokenReference); n != nil {
+			return n
+		}
+	case semantics.TemplateParamRule, semantics.TemplateParamNode:
+		if n := findKindWithTokens(dslspec.NodeParseSymbolReference); n != nil {
+			return n
+		}
+	case semantics.TemplateParamPair:
+		if n := findKindWithTokens(dslspec.NodeParseNestPairRef); n != nil {
+			return n
+		}
+	case semantics.TemplateParamPrattExpr:
+		if n := findKindWithTokens(dslspec.NodeParseExpressionReference); n != nil {
+			return n
+		}
+	}
+	if n := findKindWithTokens(dslspec.NodeParseTemplateParameterReference); n != nil {
+		return n
+	}
+	return nil
+}
+
 func findTemplateArgumentSourceNode(arg *Node) *Node {
 	if arg == nil {
 		return nil
@@ -54,10 +90,9 @@ func findTemplateArgumentSourceNode(arg *Node) *Node {
 	if len(arg.Tokens()) > 0 {
 		return arg
 	}
-	var best *Node
-	arg.WalkPre(func(n *Node) (bool, bool) {
+	best := findFirstInSubtree(arg, func(n *Node) bool {
 		if n == nil || len(n.Tokens()) == 0 {
-			return false, false
+			return false
 		}
 		switch n.Kind() {
 		case dslspec.NodeParseTokenReference,
@@ -65,15 +100,40 @@ func findTemplateArgumentSourceNode(arg *Node) *Node {
 			dslspec.NodeParseSymbolReference,
 			dslspec.NodeParseTemplateParameterReference,
 			dslspec.NodeParseNestPairRef:
-			best = n
-			return true, false
+			return true
 		}
-		return false, false
+		return false
 	})
 	if best != nil {
 		return best
 	}
-	return arg
+	firstWithTokens := findFirstInSubtree(arg, func(n *Node) bool {
+		return n != nil && len(n.Tokens()) > 0
+	})
+	if firstWithTokens != nil {
+		return firstWithTokens
+	}
+	return nil
+}
+
+func findFirstInSubtree(arg *Node, match func(*Node) bool) *Node {
+	if arg == nil {
+		return nil
+	}
+	if match(arg) {
+		return arg
+	}
+	for _, ch := range arg.ChildrenUnsafe() {
+		if out := findFirstInSubtree(ch, match); out != nil {
+			return out
+		}
+	}
+	for _, slotName := range arg.SlotNames() {
+		if out := findFirstInSubtree(arg.Slot(slotName), match); out != nil {
+			return out
+		}
+	}
+	return nil
 }
 
 func compileTemplateCallSegment(ctx *parseCompileCtx, segment *Node) CompiledRule {
