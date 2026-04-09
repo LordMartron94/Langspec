@@ -1845,20 +1845,38 @@ func buildUnifiedParseDependencyMap(root *Node, env *SemanticEnv) map[string][]s
 	return out
 }
 
+/*
+ruleRefsFromLexRulePatternUsing collects parse-rule / Pratt edges from a `using Module.symbol(...)` site:
+imported exported parse rules are walked; imported exported templates contribute Rule/PrattExpr args only.
+*/
+func ruleRefsFromLexRulePatternUsing(usingNode *Node, env *SemanticEnv) []string {
+	if usingNode == nil || env == nil || usingNode.Kind() != NodeLexRulePatternUsing {
+		return nil
+	}
+	moduleName, symbolName := usingRuleReferenceParts(usingNode)
+	if moduleName == "" || symbolName == "" {
+		return nil
+	}
+	module, ok := ResolveImportedModule(env, moduleName)
+	if !ok || module == nil {
+		return nil
+	}
+	if importedRule := module.ExportedRules[symbolName]; importedRule != nil {
+		return extractImportedRuleRefs(importedRule, env)
+	}
+	if decl := module.ExportedTemplates[symbolName]; decl != nil {
+		callArgs := usingNode.FindFirstKind(NodeParseTemplateCallArgs)
+		return staticRuleAndPrattRefsFromTemplateDeclArgs(callArgs, decl, env)
+	}
+	return nil
+}
+
 func extractAllRuleRefs(container *Node, env *SemanticEnv) []string {
 	var refs []string
 
 	container.WalkPre(func(node *Node) (bool, bool) {
 		if node != nil && node.Kind() == NodeLexRulePatternUsing {
-			moduleName, symbolName := usingRuleReferenceParts(node)
-			if moduleName != "" && symbolName != "" {
-				if module, ok := ResolveImportedModule(env, moduleName); ok && module != nil {
-					if importedRule := module.ExportedRules[symbolName]; importedRule != nil {
-						importedRefs := extractImportedRuleRefs(importedRule, env)
-						refs = append(refs, importedRefs...)
-					}
-				}
-			}
+			refs = append(refs, ruleRefsFromLexRulePatternUsing(node, env)...)
 		}
 
 		if node != nil && node.Kind() == NodeParseSegment {
@@ -1911,6 +1929,9 @@ func extractImportedRuleRefs(ruleNode *Node, env *SemanticEnv) []string {
 	}
 	var refs []string
 	body.WalkPre(func(node *Node) (bool, bool) {
+		if node != nil && node.Kind() == NodeLexRulePatternUsing {
+			refs = append(refs, ruleRefsFromLexRulePatternUsing(node, env)...)
+		}
 		if node != nil && node.Kind() == NodeParseSegment {
 			if inner, _, ok := ExpandedTemplateBodyRootForCallSegment(node, env); ok {
 				refs = append(refs, StaticRuleAndPrattRefsFromTemplateCallSegment(node, env)...)

@@ -468,7 +468,18 @@ func StaticRuleAndPrattRefsFromTemplateCallSegment(segment *Node, env *SemanticE
 	if decl == nil {
 		return nil
 	}
-	args := TemplateCallArgsNode(segment)
+	return staticRuleAndPrattRefsFromTemplateDeclArgs(TemplateCallArgsNode(segment), decl, env)
+}
+
+/*
+staticRuleAndPrattRefsFromTemplateDeclArgs records parse-rule / Pratt dependencies from template
+call arguments when parameter types are Rule or PrattExpr. Used for explicit `call Name(...)` segments
+and for `using Module.template(...)` sites that bind imported exported templates.
+*/
+func staticRuleAndPrattRefsFromTemplateDeclArgs(args *Node, decl *TemplateDecl, env *SemanticEnv) []string {
+	if args == nil || decl == nil || env == nil {
+		return nil
+	}
 	argNodes := TemplateCallArgumentNodes(args)
 	if len(argNodes) != len(decl.Params) {
 		return nil
