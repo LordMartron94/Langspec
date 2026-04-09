@@ -1662,8 +1662,15 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		}
 		openToken = ctx.sym.TokenID(decl.OpenToken)
 		closeToken = ctx.sym.TokenID(decl.CloseToken)
+	} else if tokenRefs := collectDirectNestDelimiterTokenRefs(node); len(tokenRefs) >= 2 {
+		// Template substitutions can materialize explicit nest delimiters as token references
+		// (e.g. nest $openTk $closeTk) instead of NodeParseNestOpenToken/CloseToken.
+		openToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(tokenRefs[0]))
+		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(tokenRefs[1]))
+	} else if tplRef := node.FindFirstKind(dslspec.NodeParseTemplateParameterReference); tplRef != nil {
+		panic("compiler error: unresolved template parameter in nest delimiters (expected Pair parameter or two Token parameters after substitution)")
 	} else {
-		panic("compiler error: nest must use explicit open/close tokens or a pair reference (@Name)")
+		panic("compiler error: nest must use explicit open/close tokens, a pair reference (@Name), or template parameters (Pair or Token Token)")
 	}
 
 	innerRule := extractNestInnerRule(ctx, node)
@@ -1677,6 +1684,25 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return ctx.builder.Rule.Nest(ctx.grammarID, ctx.nodeKind, lexarch.TokenKind(openToken), lexarch.TokenKind(closeToken), innerRule)
 	}
 	return ctx.builder.Rule.TransparentNest(parseCtxLabel(ctx, "NEST"), lexarch.TokenKind(openToken), lexarch.TokenKind(closeToken), innerRule)
+}
+
+func collectDirectNestDelimiterTokenRefs(nestNode *Node) []*Node {
+	if nestNode == nil {
+		return nil
+	}
+	refs := make([]*Node, 0, 2)
+	for _, ch := range nestNode.ChildrenUnsafe() {
+		if ch == nil {
+			continue
+		}
+		if ch.Kind() == dslspec.NodeParseTokenReference {
+			refs = append(refs, ch)
+			if len(refs) == 2 {
+				break
+			}
+		}
+	}
+	return refs
 }
 
 func parseUsingReference(usingRef *Node) (string, string) {

@@ -1400,7 +1400,13 @@ func (b *dslGrammarBuilder) nestOrEmbedMapping() Rule {
 		),
 		b.usingPattern("NEST"),
 		b.g.expectToken(NodeParseNestPairRef, TokPairReference),
-		b.g.expectToken(NodeParseTemplateParameterReference, TokParameter),
+		b.g.rb.Rule.TransparentSequence(
+			LangSpecGrammarIDFromNodeWithSuffix(NodeParseOpNest, "TPL_PARAM_DELIMS"),
+			b.g.expectToken(NodeParseTemplateParameterReference, TokParameter),
+			b.g.rb.Rule.Optional(
+				b.g.expectToken(NodeParseTemplateParameterReference, TokParameter),
+			),
+		),
 	)
 
 	// 2. Define the standard nest (requires a body, allows sync)

@@ -457,7 +457,7 @@ PARSE {
 		PARSE_OP_NEST_EXPLICIT
 		| LEX_RULE_PATTERN_USING_NEST
 		| NodeParseNestPairRef : TokPairReference
-		| NodeParseTemplateParameterReference : TokParameter
+		| PARSE_OP_NEST_TPL_PARAM_DELIMS
 	};
 	
 	rule PARSE_OP_NEST_EXPLICIT -> transparent gr_PARSE_OP_NEST_EXPLICIT {
@@ -476,6 +476,11 @@ PARSE {
 		(
 			DUMMY_CHOICE_NEST
 		)
+	};
+	
+	rule PARSE_OP_NEST_TPL_PARAM_DELIMS -> transparent gr_PARSE_OP_NEST_TPL_PARAM_DELIMS {
+		NodeParseTemplateParameterReference : TokParameter
+		NodeParseTemplateParameterReference : TokParameter?
 	};
 	
 	rule PARSE_OP_SUPPRESS -> NodeParseOpSuppress {
