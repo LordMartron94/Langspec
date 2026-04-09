@@ -1480,23 +1480,6 @@ func compileStar(ctx *parseCompileCtx, node *Node) CompiledRule {
 	return ctx.builder.Rule.TransparentZeroOrMore(parseCtxLabel(ctx, "REPEAT_STAR"), innerRule)
 }
 
-func compileEmit(ctx *parseCompileCtx, node *Node) CompiledRule {
-	outputNodeKindNode := node.FindFirstKind(dslspec.NodeParseSymbolReference)
-	if outputNodeKindNode == nil {
-		outputNodeKindNode = node.FindFirstKind(dslspec.NodeParseNodeName)
-	}
-	if outputNodeKindNode == nil {
-		panic("compiler error: emit node missing output kind")
-	}
-	outputNodeKind := resolveSymbolNodeKindIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(outputNodeKindNode))
-	refNode := node.FindFirstKind(dslspec.NodeParseTokenReference)
-	if refNode == nil {
-		panic("compiler error: emit node missing reference")
-	}
-	targetToken := resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(refNode))
-	return ctx.builder.Token.Expect(parseCtxLabel(ctx, "EMIT"), outputNodeKind, lexarch.TokenKind(targetToken))
-}
-
 func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, customNodeKind string) CompiledRule {
 	innerExpr := groupNode.RequireSingleChild()
 
@@ -1525,6 +1508,39 @@ func compileEmitOneOfWithCustomName(ctx *parseCompileCtx, groupNode *Node, custo
 	return ctx.builder.Token.ExpectOneOf(parseCtxLabel(ctx, "EMIT_ONE_OF"), resolveSymbolNodeKindIDForAlias(ctx.sym, ctx.importAlias, customNodeKind), tokens...)
 }
 
+/*
+segmentLeadingOutputSite returns the leading ref for IDENT_MAPPING_OR_CALL: the first direct
+child (then named slots) that is a rule/symbol ref, output node name, or template parameter
+placeholder. Subtree FindFirstKind(NodeParseSymbolReference) is insufficient here: after
+template expansion / cloning, preorder kind lookup can fail to match the leading site even
+when the structure is a valid NodeParseSymbolReference followed by a mapping tail segment.
+*/
+func segmentLeadingOutputSite(node *Node) *Node {
+	if node == nil || node.Kind() != dslspec.NodeParseSegment {
+		return nil
+	}
+	for _, ch := range node.ChildrenUnsafe() {
+		if ch == nil {
+			continue
+		}
+		switch ch.Kind() {
+		case dslspec.NodeParseSymbolReference, dslspec.NodeParseNodeName, dslspec.NodeParseTemplateParameterReference:
+			return ch
+		}
+	}
+	for _, sn := range node.SlotNames() {
+		sl := node.Slot(sn)
+		if sl == nil {
+			continue
+		}
+		switch sl.Kind() {
+		case dslspec.NodeParseSymbolReference, dslspec.NodeParseNodeName, dslspec.NodeParseTemplateParameterReference:
+			return sl
+		}
+	}
+	return nil
+}
+
 func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 	if usingRef := node.FindFirstKind(dslspec.NodeLexRulePatternUsing); usingRef != nil {
 		return compileExternalUsingSegment(ctx, usingRef)
@@ -1534,7 +1550,10 @@ func compileParseSegment(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return compileTemplateCallSegment(ctx, node)
 	}
 
-	nameNode := node.FindFirstKind(dslspec.NodeParseSymbolReference)
+	nameNode := segmentLeadingOutputSite(node)
+	if nameNode == nil {
+		nameNode = node.FindFirstKind(dslspec.NodeParseSymbolReference)
+	}
 	if nameNode == nil {
 		nameNode = node.FindFirstKind(dslspec.NodeParseNodeName)
 	}
@@ -1791,6 +1810,7 @@ func compileExternalUsingTemplateCall(
 		bindings[p.Name] = buildTemplateArgumentParseRoot(ed, argNodes[i], p.Type)
 	}
 	substituted := semantics.SubstituteTemplateParameterReferences(body, bindings)
+	substituted = normalizeSplitOutputMappingConcats(substituted)
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	subCtx.importAlias = moduleName

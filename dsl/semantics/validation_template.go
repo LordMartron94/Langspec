@@ -154,8 +154,7 @@ func ExpandedTemplateBodyRootForCallSegment(segment *Node, env *SemanticEnv) (bo
 func validateTemplateCallSites(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}) {
 	graph := make(map[string][]string)
 
-	var collectEdges func(tplName string, bodyRoot *Node)
-	collectEdges = func(tplName string, bodyRoot *Node) {
+	var collectEdges = func(tplName string, bodyRoot *Node) {
 		if bodyRoot == nil {
 			return
 		}
@@ -314,11 +313,6 @@ func validateTemplateCallArg(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map
 			ctx.ReportError(VALIDATION_TEMPLATE_CALL_ARG_TYPE.String(),
 				"template argument for node parameter must be an identifier", arg)
 			return
-		}
-		name := strings.TrimSpace(string(raw))
-		if _, ok := nodeKinds[name]; !ok {
-			ctx.ReportError(VALIDATION_TEMPLATE_CALL_ARG_TYPE.String(),
-				fmt.Sprintf("node parameter argument '%s' is not a declared output node kind", name), arg)
 		}
 	case TemplateParamRule:
 		if tt != TokIdentifier {

@@ -163,6 +163,7 @@ func compileTemplateCallSegment(ctx *parseCompileCtx, segment *Node) CompiledRul
 		bindings[p.Name] = buildTemplateArgumentParseRoot(ed, argNodes[i], p.Type)
 	}
 	substituted := semantics.SubstituteTemplateParameterReferences(body, bindings)
+	substituted = normalizeSplitOutputMappingConcats(substituted)
 	subCtx := *ctx
 	subCtx.rootLevel = false
 	compiled := compileParseExpression(&subCtx, substituted)
@@ -170,4 +171,171 @@ func compileTemplateCallSegment(ctx *parseCompileCtx, segment *Node) CompiledRul
 		ctx.sourceMap[g] = segment
 	}
 	return compiled
+}
+
+/*
+normalizeSplitOutputMappingConcats fixes Pratt output where IDENT_MAPPING_OR_CALL is split into two
+concat siblings: a leading-only segment (output name / parameter) and a following MAPPING_TAIL
+segment. compileParseSegment expects a single segment [leading ref, tail…] (see spec IDENT_MAPPING_OR_CALL).
+*/
+func normalizeSplitOutputMappingConcats(root *Node) *Node {
+	if root == nil {
+		return nil
+	}
+	return normalizeSplitOutputMappingInTree(root)
+}
+
+func normalizeSplitOutputMappingInTree(n *Node) *Node {
+	if n == nil {
+		return nil
+	}
+	if n.Kind() != dslspec.NodeParseConcat {
+		return n
+	}
+	raw := n.ChildrenUnsafe()
+	kids := make([]*Node, 0, len(raw))
+	for _, ch := range raw {
+		if ch == nil {
+			continue
+		}
+		kids = append(kids, normalizeSplitOutputMappingInTree(ch))
+	}
+	out := mergeAdjacentLeadTailSegments(kids)
+	if len(out) == 1 {
+		return syntaxa.CloneLSTSubtreeDetached(out[0])
+	}
+	ed := newScratchLSTEditor()
+	concat := ed.NewNode(dslspec.NodeParseConcat)
+	for _, ch := range out {
+		if ch == nil {
+			continue
+		}
+		ed.AttachChild(concat, syntaxa.CloneLSTSubtreeDetached(ch))
+	}
+	return concat
+}
+
+func mergeAdjacentLeadTailSegments(nodes []*Node) []*Node {
+	if len(nodes) < 2 {
+		return nodes
+	}
+	changed := true
+	for changed {
+		changed = false
+		next := make([]*Node, 0, len(nodes))
+		for i := 0; i < len(nodes); i++ {
+			if i+1 < len(nodes) &&
+				isLeadingOnlyOutputSegment(nodes[i]) &&
+				isMappingTailOnlySegment(nodes[i+1]) {
+				next = append(next, mergeLeadAndMappingTailSegments(nodes[i], nodes[i+1]))
+				i++
+				changed = true
+				continue
+			}
+			next = append(next, nodes[i])
+		}
+		nodes = next
+	}
+	return nodes
+}
+
+func segmentLogicalChildCount(n *Node) int {
+	if n == nil {
+		return 0
+	}
+	c := 0
+	for _, ch := range n.ChildrenUnsafe() {
+		if ch != nil {
+			c++
+		}
+	}
+	for _, sn := range n.SlotNames() {
+		if n.Slot(sn) != nil {
+			c++
+		}
+	}
+	return c
+}
+
+func firstLogicalChild(n *Node) *Node {
+	if n == nil {
+		return nil
+	}
+	for _, ch := range n.ChildrenUnsafe() {
+		if ch != nil {
+			return ch
+		}
+	}
+	for _, sn := range n.SlotNames() {
+		if sl := n.Slot(sn); sl != nil {
+			return sl
+		}
+	}
+	return nil
+}
+
+func isLeadingOnlyOutputSegment(n *Node) bool {
+	if n == nil || n.Kind() != dslspec.NodeParseSegment {
+		return false
+	}
+	// A leading output site must not already carry a mapping tail (paren group or token target).
+	if n.FindFirstKind(dslspec.NodeParseGroup) != nil || n.FindFirstKind(dslspec.NodeParseTokenReference) != nil {
+		return false
+	}
+	if segmentLogicalChildCount(n) != 1 {
+		return false
+	}
+	lead := firstLogicalChild(n)
+	if lead == nil {
+		return false
+	}
+	switch lead.Kind() {
+	case dslspec.NodeParseSymbolReference, dslspec.NodeParseNodeName, dslspec.NodeParseTemplateParameterReference:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMappingTailOnlySegment(n *Node) bool {
+	if n == nil || n.Kind() != dslspec.NodeParseSegment {
+		return false
+	}
+	// MAPPING_TAIL segment has a colon + target (group or token) but no leading output ident.
+	if n.FindFirstKind(dslspec.NodeParseSymbolReference) != nil {
+		return false
+	}
+	if n.FindFirstKind(dslspec.NodeParseNodeName) != nil {
+		return false
+	}
+	if n.FindFirstKind(dslspec.NodeParseTemplateParameterReference) != nil {
+		return false
+	}
+	return n.FindFirstKind(dslspec.NodeParseGroup) != nil || n.FindFirstKind(dslspec.NodeParseTokenReference) != nil
+}
+
+func mergeLeadAndMappingTailSegments(leadSeg, tailSeg *Node) *Node {
+	ed := newScratchLSTEditor()
+	out := ed.NewNode(dslspec.NodeParseSegment)
+	for _, ch := range leadSeg.ChildrenUnsafe() {
+		if ch != nil {
+			ed.AttachChild(out, syntaxa.CloneLSTSubtreeDetached(ch))
+		}
+	}
+	for _, sn := range leadSeg.SlotNames() {
+		if sl := leadSeg.Slot(sn); sl != nil {
+			ed.SetSlot(out, sn, syntaxa.CloneLSTSubtreeDetached(sl))
+		}
+	}
+	for _, ch := range tailSeg.ChildrenUnsafe() {
+		if ch != nil {
+			ed.AttachChild(out, syntaxa.CloneLSTSubtreeDetached(ch))
+		}
+	}
+	for _, sn := range tailSeg.SlotNames() {
+		if sl := tailSeg.Slot(sn); sl != nil {
+			ed.SetSlot(out, sn, syntaxa.CloneLSTSubtreeDetached(sl))
+		}
+	}
+	return out
 }
