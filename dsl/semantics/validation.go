@@ -71,9 +71,10 @@ const (
 	VALIDATION_EXPRESSION_REFERENCED_AS_TOKEN_OUTPUT ValidationCode = "V_PAR008"
 	VALIDATION_FIRST_SET_CONFLICT                    ValidationCode = "V_PAR009"
 
-	VALIDATION_DUPLICATE_PAIR_NAME ValidationCode = "V_PAR010"
-	VALIDATION_UNRESOLVED_PAIR_REF ValidationCode = "V_PAR012"
-	VALIDATION_PAIR_REF_MALFORMED  ValidationCode = "V_PAR013"
+	VALIDATION_DUPLICATE_PAIR_NAME            ValidationCode = "V_PAR010"
+	VALIDATION_UNRESOLVED_PAIR_REF            ValidationCode = "V_PAR012"
+	VALIDATION_PAIR_REF_MALFORMED             ValidationCode = "V_PAR013"
+	VALIDATION_SEPARATOR_REPEAT_OPTIONAL_TAIL ValidationCode = "V_PAR014"
 
 	VALIDATION_DUPLICATE_PRATT_EXPR             ValidationCode = "V_PRA001"
 	VALIDATION_PRATT_UNRESOLVED_TOKEN           ValidationCode = "V_PRA002"
@@ -1327,6 +1328,7 @@ func processGrammarSafety(ctx *ValidationCtx) {
 
 	checkGrammarLeftRecursion(ctx, pkg, analysis)
 	checkGrammarUnboundedOptional(ctx, pkg, analysis)
+	checkGrammarSeparatorRepeatOptionalTail(ctx, pkg, analysis, sourceMap)
 	checkGrammarChoiceConflicts(ctx, pkg, analysis, sourceMap)
 }
 
@@ -1432,6 +1434,77 @@ func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, anal
 	for _, root := range pkg.Grammars {
 		walk(root)
 	}
+}
+
+func checkGrammarSeparatorRepeatOptionalTail(
+	ctx *ValidationCtx,
+	pkg *GrammarPackage,
+	analysis *syntaxa.GrammarAnalysis,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
+) {
+	visited := make(map[syntaxa.GrammarKey]bool)
+
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) {
+		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
+			return
+		}
+		visited[g.GrammarKey] = true
+
+		if g.Kind == syntaxa.GConcat {
+			for i := 0; i < len(g.Children)-1; i++ {
+				repeatNode := g.Children[i]
+				tailNode := g.Children[i+1]
+				if !isSeparatorLeadingStarRepeat(repeatNode) || !isOptionalOrNullableNode(tailNode, analysis) {
+					continue
+				}
+
+				anchor := resolveFirstConflictAnchor(ctx, sourceMap, g, repeatNode)
+				if anchor == nil {
+					anchor = ctx.RootNode
+				}
+				ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
+				msg := fmt.Sprintf(
+					"parser-commit sensitive pattern in rule '%s': separator-leading unbounded repetition followed by optional/nullable tail can mis-handle trailing separators; prefer '(element separator)* element?' style",
+					ruleName,
+				)
+				ctx.ReportWarning(VALIDATION_SEPARATOR_REPEAT_OPTIONAL_TAIL.String(), msg, anchor)
+			}
+		}
+
+		for _, child := range g.Children {
+			walk(child)
+		}
+	}
+
+	for _, root := range pkg.Grammars {
+		walk(root)
+	}
+}
+
+func isSeparatorLeadingStarRepeat(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) bool {
+	if g == nil || g.Kind != syntaxa.GRepeat || g.Max != nil || len(g.Children) != 1 {
+		return false
+	}
+	body := g.Children[0]
+	if body == nil || body.Kind != syntaxa.GConcat || len(body.Children) < 2 {
+		return false
+	}
+	first := body.Children[0]
+	return first != nil && first.Kind == syntaxa.GToken
+}
+
+func isOptionalOrNullableNode(g *syntaxa.Grammar[lexarch.TokenKind, uint32], analysis *syntaxa.GrammarAnalysis) bool {
+	if g == nil {
+		return false
+	}
+	if g.Kind == syntaxa.GOptional {
+		return true
+	}
+	if analysis == nil || g.NodePath == nil {
+		return false
+	}
+	return analysis.Nullable[syntaxa.NodeKeyFromPath(*g.NodePath)]
 }
 
 func checkGrammarChoiceConflicts(

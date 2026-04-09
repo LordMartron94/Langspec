@@ -23,6 +23,7 @@ type RuleRegistry = syntaxa.RuleRegistry[uint32]
 type LexerRuleset = langspec.LexerRuleset[uint32, uint32]
 
 type CompiledRule = syntaxa.ParserRule[uint32]
+
 type CompilerRuleBuilder = rule.RuleBuilder[uint32]
 
 /* ToolPragma is one parsed PRAGMA toolchain line: tool name and key/value settings. */
