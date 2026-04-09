@@ -1632,14 +1632,40 @@ func compileVirtual(ctx *parseCompileCtx, node *Node) CompiledRule {
 }
 
 func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
-	openTokNode := node.FindFirstKind(dslspec.NodeParseNestOpenToken)
-	closeTokNode := node.FindFirstKind(dslspec.NodeParseNestCloseToken)
+	var openTokNode, closeTokNode *Node
+	var usingRef, pairRef *Node
+	delimiterTokenRefs := make([]*Node, 0, 2)
+	delimiterTplRefs := make([]*Node, 0, 2)
+
+	for _, ch := range node.ChildrenUnsafe() {
+		if ch == nil {
+			continue
+		}
+		switch ch.Kind() {
+		case dslspec.NodeParseNestBody, dslspec.NodeParseExpressionReference:
+			goto delimitersDone
+		case dslspec.NodeParseNestOpenToken:
+			openTokNode = ch
+		case dslspec.NodeParseNestCloseToken:
+			closeTokNode = ch
+		case dslspec.NodeLexRulePatternUsing:
+			usingRef = ch
+		case dslspec.NodeParseNestPairRef:
+			pairRef = ch
+		case dslspec.NodeParseTokenReference:
+			delimiterTokenRefs = append(delimiterTokenRefs, ch)
+		case dslspec.NodeParseTemplateParameterReference:
+			delimiterTplRefs = append(delimiterTplRefs, ch)
+		}
+	}
+
+delimitersDone:
 
 	var openToken, closeToken uint32
 	if openTokNode != nil && closeTokNode != nil {
 		openToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(openTokNode))
 		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(closeTokNode))
-	} else if usingRef := node.FindFirstKind(dslspec.NodeLexRulePatternUsing); usingRef != nil {
+	} else if usingRef != nil {
 		moduleName, symbolName := parseUsingReference(usingRef)
 		module, ok := semantics.ResolveImportedModule(ctx.env, moduleName)
 		if !ok || module == nil {
@@ -1651,7 +1677,7 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		}
 		openToken = resolveSymbolTokenIDForAlias(ctx.sym, moduleName, decl.OpenToken)
 		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, moduleName, decl.CloseToken)
-	} else if pairRef := node.FindFirstKind(dslspec.NodeParseNestPairRef); pairRef != nil {
+	} else if pairRef != nil {
 		pName := semantics.PairNameFromNestPairRefNode(pairRef)
 		if pName == "" {
 			panic("compiler error: nest pair reference has empty name")
@@ -1662,12 +1688,12 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		}
 		openToken = ctx.sym.TokenID(decl.OpenToken)
 		closeToken = ctx.sym.TokenID(decl.CloseToken)
-	} else if tokenRefs := collectDirectNestDelimiterTokenRefs(node); len(tokenRefs) >= 2 {
+	} else if len(delimiterTokenRefs) >= 2 {
 		// Template substitutions can materialize explicit nest delimiters as token references
 		// (e.g. nest $openTk $closeTk) instead of NodeParseNestOpenToken/CloseToken.
-		openToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(tokenRefs[0]))
-		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(tokenRefs[1]))
-	} else if tplRef := node.FindFirstKind(dslspec.NodeParseTemplateParameterReference); tplRef != nil {
+		openToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(delimiterTokenRefs[0]))
+		closeToken = resolveSymbolTokenIDForAlias(ctx.sym, ctx.importAlias, dslspec.NodeSingleTokenContent(delimiterTokenRefs[1]))
+	} else if len(delimiterTplRefs) > 0 {
 		panic("compiler error: unresolved template parameter in nest delimiters (expected Pair parameter or two Token parameters after substitution)")
 	} else {
 		panic("compiler error: nest must use explicit open/close tokens, a pair reference (@Name), or template parameters (Pair or Token Token)")
@@ -1684,25 +1710,6 @@ func compileNest(ctx *parseCompileCtx, node *Node) CompiledRule {
 		return ctx.builder.Rule.Nest(ctx.grammarID, ctx.nodeKind, lexarch.TokenKind(openToken), lexarch.TokenKind(closeToken), innerRule)
 	}
 	return ctx.builder.Rule.TransparentNest(parseCtxLabel(ctx, "NEST"), lexarch.TokenKind(openToken), lexarch.TokenKind(closeToken), innerRule)
-}
-
-func collectDirectNestDelimiterTokenRefs(nestNode *Node) []*Node {
-	if nestNode == nil {
-		return nil
-	}
-	refs := make([]*Node, 0, 2)
-	for _, ch := range nestNode.ChildrenUnsafe() {
-		if ch == nil {
-			continue
-		}
-		if ch.Kind() == dslspec.NodeParseTokenReference {
-			refs = append(refs, ch)
-			if len(refs) == 2 {
-				break
-			}
-		}
-	}
-	return refs
 }
 
 func parseUsingReference(usingRef *Node) (string, string) {
@@ -1841,12 +1848,44 @@ func compileExternalUsingTemplateCall(
 	subCtx.rootLevel = false
 	subCtx.importAlias = moduleName
 	// Compile substituted imported template in imported module scope.
-	subCtx.env = semantics.BuildSemanticEnvWithImports(module.Root, ctx.env.Imports, nil)
+	subCtx.env = buildExternalTemplateCompileEnv(module.Root, ctx.env)
 	compiled := compileParseExpression(&subCtx, substituted)
 	if g := compiled.GetGrammar(); g != nil && ctx.sourceMap != nil {
 		ctx.sourceMap[g] = anchor
 	}
 	return compiled
+}
+
+func buildExternalTemplateCompileEnv(importedRoot *Node, callerEnv *SemanticEnv) *SemanticEnv {
+	var imports map[string]*semantics.ImportedModuleSymbols
+	if callerEnv != nil {
+		imports = callerEnv.Imports
+	}
+	merged := semantics.BuildSemanticEnvWithImports(importedRoot, imports, nil)
+	if callerEnv == nil {
+		return merged
+	}
+	for name, n := range callerEnv.Tokens {
+		if merged.Tokens[name] == nil {
+			merged.Tokens[name] = n
+		}
+	}
+	for name, n := range callerEnv.Rules {
+		if merged.Rules[name] == nil {
+			merged.Rules[name] = n
+		}
+	}
+	for name, n := range callerEnv.Pratt {
+		if merged.Pratt[name] == nil {
+			merged.Pratt[name] = n
+		}
+	}
+	for name, p := range callerEnv.Pairs {
+		if merged.Pairs[name] == nil {
+			merged.Pairs[name] = p
+		}
+	}
+	return merged
 }
 
 func extractNestInnerRule(ctx *parseCompileCtx, node *Node) CompiledRule {
