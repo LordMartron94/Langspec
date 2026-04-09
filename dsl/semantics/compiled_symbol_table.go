@@ -421,6 +421,9 @@ func walkParseTreeForSymbols(node *Node, env *SemanticEnv, ts, nk map[string]str
 	if node == nil {
 		return
 	}
+	if node.Kind() == NodeParseSegment && SegmentHasExplicitTemplateInvocation(node) {
+		collectTemplateCallNodeArgKinds(node, env, nk)
+	}
 	switch node.Kind() {
 	case NodeParseTokenReference:
 		ts[dslspec.NodeSingleTokenContent(node)] = struct{}{}
@@ -444,6 +447,48 @@ func walkParseTreeForSymbols(node *Node, env *SemanticEnv, ts, nk map[string]str
 	}
 	for _, ch := range node.ChildrenUnsafe() {
 		walkParseTreeForSymbols(ch, env, ts, nk)
+	}
+}
+
+func collectTemplateCallNodeArgKinds(segment *Node, env *SemanticEnv, nk map[string]struct{}) {
+	if segment == nil || env == nil || nk == nil {
+		return
+	}
+	callArgs := TemplateCallArgsNode(segment)
+	if callArgs == nil {
+		return
+	}
+	callee, _, ok := TemplateCallCalleeName(segment)
+	if !ok {
+		return
+	}
+	decl := env.Templates[callee]
+	if decl == nil {
+		return
+	}
+	args := TemplateCallArgumentNodes(callArgs)
+	if len(args) != len(decl.Params) {
+		return
+	}
+	for i, param := range decl.Params {
+		if param.Type != TemplateParamNode {
+			continue
+		}
+		arg := args[i]
+		if arg == nil {
+			continue
+		}
+		toks := arg.Tokens()
+		if len(toks) == 0 {
+			continue
+		}
+		if LangSpecLexerTokenType(toks[0].Token) != TokIdentifier {
+			continue
+		}
+		name := strings.TrimSpace(string(toks[0].Raw))
+		if name != "" {
+			nk[name] = struct{}{}
+		}
 	}
 }
 
