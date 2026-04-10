@@ -1464,8 +1464,9 @@ func checkGrammarSeparatorRepeatOptionalTail(
 					anchor = ctx.RootNode
 				}
 				ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*g.NodePath)]
+
 				msg := fmt.Sprintf(
-					"parser-commit sensitive pattern in rule '%s': separator-leading unbounded repetition followed by optional/nullable tail can mis-handle trailing separators; prefer '(element separator)* element?' style",
+					"parser-commit sensitive pattern in rule '%s': separator-leading unbounded repetition followed by optional/nullable tail mis-handles trailing separators in a strict LL(1) sequence; prefer 'element (separator element?)*' style",
 					ruleName,
 				)
 				ctx.ReportWarning(VALIDATION_SEPARATOR_REPEAT_OPTIONAL_TAIL.String(), msg, anchor)
