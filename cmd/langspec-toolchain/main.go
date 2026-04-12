@@ -25,7 +25,9 @@ func main() {
 	g := cliutil.NewGenerator(*specPath)
 	defer g.Close()
 
-	opts := []bootstrap.Option{bootstrap.WithDiagnosticSink(dsl.DefaultLangSpecDiagnosticSink())}
+	opts := []bootstrap.Option[dsl.LangSpecParserNodeKind]{
+		bootstrap.WithDiagnosticSink[dsl.LangSpecParserNodeKind](dsl.DefaultLangSpecDiagnosticSink()),
+	}
 	if strings.TrimSpace(*toolchains) != "" {
 		parts := strings.Split(*toolchains, ",")
 		names := make([]string, 0, len(parts))
@@ -35,7 +37,7 @@ func main() {
 			}
 		}
 		if len(names) > 0 {
-			opts = append(opts, bootstrap.WithToolchainFilter(names...))
+			opts = append(opts, bootstrap.WithToolchainFilter[dsl.LangSpecParserNodeKind](names...))
 		}
 	}
 

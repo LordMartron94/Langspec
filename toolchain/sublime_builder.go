@@ -69,9 +69,9 @@ Edge cases:
 - overrideProducer may be nil; a no-op producer is used internally so overrides are optional.
 - Returns an error if configuration-path is missing, file read fails, or JSON is invalid.
 */
-func RunSublimeToolchain(
-	compileResult *dsl.LangSpecCompileResult,
-	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
+func RunSublimeToolchain[TNodeKind ~uint32](
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
+	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext],
 ) error {
 	if pragma, ok := compileResult.CompiledToolPragmas[SublimeToolName]; ok {
 		enabled, ok := pragma.Settings[SublimeEnableKey].(string)
@@ -102,10 +102,10 @@ func RunSublimeToolchain(
 			return err
 		}
 
-		return executeSublimeToolchain(
+		return executeSublimeToolchain[TNodeKind](
 			compileResult,
 			sublimeCfg.Manifest,
-			sublimeOverrideFactoryFromProducer(overrideProducer),
+			sublimeOverrideFactoryFromProducer[TNodeKind](overrideProducer),
 			outputPaths,
 			sublimeCfg.FileExtensions,
 			sublimeCfg.ScopeExtension,
@@ -120,17 +120,17 @@ to SublimeInMemoryOverrideFactory. The returned inner producer ignores the lexin
 and coverage ctxProducer (callers that need accurate unused-manifest coverage should pass
 a real factory to RunSublimeToolchainFromMemory instead).
 */
-func sublimeOverrideFactoryFromProducer(
-	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext],
-) SublimeInMemoryOverrideFactory {
+func sublimeOverrideFactoryFromProducer[TNodeKind ~uint32](
+	overrideProducer func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext],
+) SublimeInMemoryOverrideFactory[TNodeKind] {
 	return func(
 		lexing *editor.LexingRuleSet[rune, uint32, uint32],
-		ctxProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) SublimeContext,
-	) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+		ctxProducer func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) SublimeContext,
+	) func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext] {
 		_ = lexing
 		_ = ctxProducer
 		if overrideProducer == nil {
-			return func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+			return func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext] {
 				return nil
 			}
 		}
@@ -142,10 +142,10 @@ func sublimeOverrideFactoryFromProducer(
 // ruleset and the same manifest context producer wired into editor IR. Using this factory
 // (instead of a pre-built override producer) keeps override-driven scope lookups on the
 // coverage-enabled producer used for unused-manifest warnings.
-type SublimeInMemoryOverrideFactory func(
+type SublimeInMemoryOverrideFactory[TNodeKind comparable] func(
 	lexing *editor.LexingRuleSet[rune, uint32, uint32],
-	ctxProducer func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) SublimeContext,
-) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext]
+	ctxProducer func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) SublimeContext,
+) func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext]
 
 /*
 RunSublimeToolchainFromMemory is the in-memory entry point for the Sublime
@@ -166,15 +166,15 @@ Edge cases:
 - overrideFactory may be nil; a no-op inner producer is used.
 - Does not read or validate PRAGMA; the caller (e.g. bootstrap) is responsible for enable and output-path.
 */
-func RunSublimeToolchainFromMemory(
-	compileResult *dsl.LangSpecCompileResult,
+func RunSublimeToolchainFromMemory[TNodeKind ~uint32](
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
 	manifest SemanticManifest[string, string],
-	overrideFactory SublimeInMemoryOverrideFactory,
+	overrideFactory SublimeInMemoryOverrideFactory[TNodeKind],
 	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
 ) error {
-	return executeSublimeToolchain(
+	return executeSublimeToolchain[TNodeKind](
 		compileResult,
 		manifest,
 		overrideFactory,
@@ -184,15 +184,47 @@ func RunSublimeToolchainFromMemory(
 	)
 }
 
+func manifestScopeCoverageAsUint32[TNodeKind ~uint32](in *ManifestScopeCoverage[uint32, TNodeKind]) *ManifestScopeCoverage[uint32, uint32] {
+	if in == nil {
+		return nil
+	}
+	out := &ManifestScopeCoverage[uint32, uint32]{
+		BaseToken:  in.BaseToken,
+		NodeToken:  in.NodeToken,
+		InvalidHit: in.InvalidHit,
+	}
+	if len(in.NodeBinding) > 0 {
+		out.NodeBinding = make(map[uint32]*NodeBindingUsage, len(in.NodeBinding))
+		for nk, v := range in.NodeBinding {
+			out.NodeBinding[uint32(nk)] = v
+		}
+	}
+	return out
+}
+
+func semanticManifestNodeKeysAs[TNodeKind ~uint32](in SemanticManifest[uint32, uint32]) SemanticManifest[uint32, TNodeKind] {
+	out := SemanticManifest[uint32, TNodeKind]{
+		InvalidScope:    in.InvalidScope,
+		BaseTokenScopes: in.BaseTokenScopes,
+	}
+	if len(in.NodeBindings) > 0 {
+		out.NodeBindings = make(map[TNodeKind]NodeBinding[uint32], len(in.NodeBindings))
+		for nk, b := range in.NodeBindings {
+			out.NodeBindings[TNodeKind(nk)] = b
+		}
+	}
+	return out
+}
+
 /*
 executeSublimeToolchain is the shared implementation for both manifest sources.
 It builds the editor IR (manifest context producer with coverage, then overrideFactory(lexing, ctxProducer)),
 then runs the Sublime generator. Called by RunSublimeToolchain and RunSublimeToolchainFromMemory.
 */
-func executeSublimeToolchain(
-	compileResult *dsl.LangSpecCompileResult,
+func executeSublimeToolchain[TNodeKind ~uint32](
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
 	manifest SemanticManifest[string, string],
-	overrideFactory SublimeInMemoryOverrideFactory,
+	overrideFactory SublimeInMemoryOverrideFactory[TNodeKind],
 	outputPaths []string,
 	fileExtensions []string,
 	scopeExtension string,
@@ -204,9 +236,9 @@ func executeSublimeToolchain(
 	if overrideFactory == nil {
 		overrideFactory = func(
 			*editor.LexingRuleSet[rune, uint32, uint32],
-			func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) SublimeContext,
-		) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
-			return func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+			func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) SublimeContext,
+		) func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext] {
+			return func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext] {
 				return nil
 			}
 		}
@@ -215,11 +247,12 @@ func executeSublimeToolchain(
 	editorRuleset := LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
 
 	manifestUint := SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, manifest)
-	ctxProducer, scopeCov := BuildContextProducerFromManifestWithCoverage[rune, uint32, uint32, string](manifestUint)
+	manifestForIR := semanticManifestNodeKeysAs[TNodeKind](manifestUint)
+	ctxProducer, scopeCov := BuildContextProducerFromManifestWithCoverage[rune, uint32, uint32, string, TNodeKind](manifestForIR)
 
 	overrideProducer := overrideFactory(editorRuleset, ctxProducer)
 	if overrideProducer == nil {
-		overrideProducer = func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, SublimeContext] {
+		overrideProducer = func(*editor.EditorCtx[rune, uint32, uint32, string, TNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, TNodeKind, SublimeContext] {
 			return nil
 		}
 	}
@@ -229,7 +262,7 @@ func executeSublimeToolchain(
 		func(token lexarch.TokenKind) uint64 {
 			return uint64(token)
 		},
-		func(nodeKind uint32) uint64 {
+		func(nodeKind TNodeKind) uint64 {
 			return uint64(nodeKind)
 		},
 		ctxProducer,
@@ -239,7 +272,7 @@ func executeSublimeToolchain(
 		},
 	)
 
-	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, uint32]{
+	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, TNodeKind]{
 		LexerRuleset:   editorRuleset,
 		GrammarPackage: &compileResult.CompiledGrammarPackage,
 		IRConfig:       irConfig,
@@ -250,7 +283,7 @@ func executeSublimeToolchain(
 	}
 
 	err := RunSublimeGenerator(runnerCfg)
-	for _, w := range UnusedManifestScopeWarningsFromStringManifest(compileResult.CompiledSymbols, manifest, scopeCov, UnusedManifestScopeOpts{
+	for _, w := range UnusedManifestScopeWarningsFromStringManifest(compileResult.CompiledSymbols, manifest, manifestScopeCoverageAsUint32[TNodeKind](scopeCov), UnusedManifestScopeOpts{
 		WarnUnusedBaseTokenScopes: true,
 	}) {
 		fmt.Fprintln(os.Stderr, "langspec sublime:", w)

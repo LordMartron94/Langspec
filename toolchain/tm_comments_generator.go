@@ -21,7 +21,7 @@ type TMCommentsConfiguration struct {
 	Scope                  string
 }
 
-func RunTMCommentsToolchain(compileResult *dsl.LangSpecCompileResult, cfg TMCommentsConfiguration) error {
+func RunTMCommentsToolchain[TNodeKind ~uint32](compileResult *dsl.LangSpecCompileResult[TNodeKind], cfg TMCommentsConfiguration) error {
 	if cfg.BlockCommentStart != nil && cfg.BlockCommentEnd == nil {
 		return fmt.Errorf("if block comment start is given, block comment end must be set as well")
 	}

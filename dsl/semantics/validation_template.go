@@ -79,7 +79,7 @@ func enclosingParseTemplate(n *Node) *Node {
 validateTemplateParameterScoping reports NodeParseTemplateParameterReference nodes that are not
 inside a template body, and unknown parameter names inside a template body.
 */
-func validateTemplateParameterScoping(ctx *ValidationCtx, env *SemanticEnv) {
+func validateTemplateParameterScoping[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	ctx.RootNode.WalkPre(func(n *Node) (bool, bool) {
 		if n == nil || n.Kind() != NodeParseTemplateParameterReference {
 			return false, false
@@ -151,7 +151,7 @@ func ExpandedTemplateBodyRootForCallSegment(segment *Node, env *SemanticEnv) (bo
 	return root, calleeName, true
 }
 
-func validateTemplateCallSites(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}) {
+func validateTemplateCallSites[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, nodeKinds map[string]struct{}) {
 	graph := make(map[string][]string)
 
 	var collectEdges = func(tplName string, bodyRoot *Node) {
@@ -261,7 +261,7 @@ func templateParamTypesForCallSite(callSegment *Node) map[string]TemplateParamTy
 	return out
 }
 
-func validateTemplateCallArg(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}, pty TemplateParamType, arg *Node, callerParamTypes map[string]TemplateParamType) {
+func validateTemplateCallArg[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, nodeKinds map[string]struct{}, pty TemplateParamType, arg *Node, callerParamTypes map[string]TemplateParamType) {
 	if arg == nil {
 		return
 	}

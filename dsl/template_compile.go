@@ -136,7 +136,7 @@ func findFirstInSubtree(arg *Node, match func(*Node) bool) *Node {
 	return nil
 }
 
-func compileTemplateCallSegment(ctx *parseCompileCtx, segment *Node) CompiledRule {
+func compileTemplateCallSegment[TNodeKind ~uint32](ctx *parseCompileCtx[TNodeKind], segment *Node) syntaxa.ParserRule[TNodeKind] {
 	callArgs := segment.FindFirstKind(dslspec.NodeParseTemplateCallArgs)
 	if callArgs == nil {
 		panic("compiler error: compileTemplateCallSegment without call args")
@@ -166,7 +166,7 @@ func compileTemplateCallSegment(ctx *parseCompileCtx, segment *Node) CompiledRul
 	substituted = normalizeSplitOutputMappingConcats(substituted)
 	subCtx := *ctx
 	subCtx.rootLevel = false
-	compiled := compileParseExpression(&subCtx, substituted)
+	compiled := compileParseExpression[TNodeKind](&subCtx, substituted)
 	if g := compiled.GetGrammar(); g != nil && ctx.sourceMap != nil {
 		ctx.sourceMap[g] = segment
 	}

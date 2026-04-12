@@ -9,4 +9,4 @@ const ProgramRuleName = "PROGRAM"
 GrammarPackage is the lowered grammar package type produced when compiling a .lspec file
 to string token and node kinds (same as dsl.GrammarPackage).
 */
-type GrammarPackage = syntaxa.GrammarPackage[uint32]
+type GrammarPackage[TNodeKind ~uint32] = syntaxa.GrammarPackage[TNodeKind]

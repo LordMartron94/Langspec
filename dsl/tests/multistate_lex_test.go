@@ -30,7 +30,7 @@ func TestMultistateLexFixtureSublimePath(t *testing.T) {
 	defer teardown()
 
 	lspecPath := filepath.Join("testdata", "multistate_lex_minimal.lspec")
-	res, err := dsl.LangSpecCompilerCompile(compiler, lspecPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, lspecPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("LangSpecCompilerCompile: %v", err)
@@ -49,16 +49,16 @@ func TestMultistateLexFixtureSublimePath(t *testing.T) {
 	}
 
 	hasher := hash.XXH3HasherCreateWithSeed(6789)
-	ctxProducer := func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext {
+	ctxProducer := func(*editor.EditorCtx[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind]) toolchain.SublimeContext {
 		return toolchain.SublimeContext{Scope: "source.multistate.test"}
 	}
-	overrideProducer := func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
+	overrideProducer := func(*editor.EditorCtx[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind, toolchain.SublimeContext] {
 		return nil
 	}
 	irConfig := editor.EditorIRConfigurationCreate(
 		hasher,
 		func(tok lexarch.TokenKind) uint64 { return uint64(tok) },
-		func(nk uint32) uint64 { return uint64(nk) },
+		func(nk dsl.LangSpecParserNodeKind) uint64 { return uint64(nk) },
 		ctxProducer,
 		overrideProducer,
 		func(a, b toolchain.SublimeContext) bool { return a.Scope == b.Scope && a.MetaScope == b.MetaScope },

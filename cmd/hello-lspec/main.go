@@ -34,11 +34,11 @@ func main() {
 		return memforge.DynamicLinearAllocatorMallocUnsafe(scratchAllocator, sizeBytes, alignment)
 	})
 
-	var opts []bootstrap.Option
+	var opts []bootstrap.Option[dsl.LangSpecParserNodeKind]
 	if *verbose {
-		opts = append(opts, bootstrap.WithDiagnosticSink(dsl.DefaultLangSpecDiagnosticSink()))
+		opts = append(opts, bootstrap.WithDiagnosticSink[dsl.LangSpecParserNodeKind](dsl.DefaultLangSpecDiagnosticSink()))
 	}
-	parser, err := bootstrap.CompileParserFromSpec(*specPath, scratchAllocFn, opts...)
+	parser, err := bootstrap.CompileParserFromSpec[dsl.LangSpecParserNodeKind](*specPath, scratchAllocFn, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile .lspec: %v\n", err)
 		os.Exit(1)

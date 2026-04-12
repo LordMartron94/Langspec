@@ -28,10 +28,10 @@ func advanceRuneTab4(r rune, currentCol int) int {
 type LexingRuleset = langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole]
 
 /* ValidationStage is a validation stage for the DSL LST when grammar package state is not yet available. */
-type ValidationStage = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
+type ValidationStage[TNodeKind ~uint32] = validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]]
 
 /* ValidationStageCtx is the per-stage context for early DSL validation passes. */
-type ValidationStageCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
+type ValidationStageCtx[TNodeKind ~uint32] = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]]
 
 /* NodeFinalizationCtx is the syntaxa finalization context for DSL parse nodes. */
 type NodeFinalizationCtx = syntaxa.FinalizationCtx[LangSpecParserNodeKind]
@@ -67,9 +67,10 @@ const (
 /* LangSpecCompilerConfiguration encapsulates the configuration for the langspec compiler. */
 type LangSpecCompilerConfiguration struct {
 	scratchAllocationFunction memarch.AllocationFn
-	stageReporter             validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
-	diagnosticSink            *LangSpecDiagnosticSink
-	lexerPatternCompiler      lexarch.PatternCompilerMode
+	// stageReporter is optional; when set it must match the TNodeKind used in LangSpecCompilerCompile (same *GrammarValidationState[T] family).
+	stageReporter        any
+	diagnosticSink       *LangSpecDiagnosticSink
+	lexerPatternCompiler lexarch.PatternCompilerMode
 
 	lexerPositionTracking LangSpecLexerPositionTracking
 	lexerRuneTabWidth     int
@@ -86,7 +87,7 @@ Stage reporter is optional. DiagnosticSink is optional; when set, compilation di
 */
 func LangSpecCompilerConfigurationCreate(
 	scratchAllocationFunction memarch.AllocationFn,
-	stageReporter validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState],
+	stageReporter any,
 ) *LangSpecCompilerConfiguration {
 	return &LangSpecCompilerConfiguration{
 		scratchAllocationFunction: scratchAllocationFunction,
@@ -160,7 +161,7 @@ LangSpecCompileResult holds the result of compiling a .lspec file: the parsed LS
 parse trace, syntax errors (if any), and validation entries (when validation was run).
 Callers can inspect the result without parsing stdout.
 */
-type LangSpecCompileResult struct {
+type LangSpecCompileResult[TNodeKind ~uint32] struct {
 	RootNode          *Node
 	Trace             *syntaxa.ParseTrace
 	SyntaxErrors      *syntaxa.SyntaxErrors
@@ -171,17 +172,17 @@ type LangSpecCompileResult struct {
 	LanguageVersion string
 
 	CompiledLexerSpec  *LexerSpec
-	CompiledParserSpec *ParserSpec
+	CompiledParserSpec *ParserSpec[TNodeKind]
 
 	TargetLangspecVersion string
 
 	// CompiledGrammarPackage and the other Compiled* fields are set as soon as lowering
 	// (compileTree) succeeds, even when compilation later returns an error (e.g. grammar
 	// safety validation). They stay zero until that point.
-	CompiledGrammarPackage GrammarPackage
+	CompiledGrammarPackage GrammarPackage[TNodeKind]
 
 	CompiledToolPragmas map[string]ToolPragma
-	SourceMap           map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
+	SourceMap           map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node
 
 	CompiledSymbols *semantics.CompiledSymbolTable
 	EOFToken        uint32
@@ -206,8 +207,7 @@ type LangSpecCompiler struct {
 
 	languageSpec LanguageSpec
 
-	parser          *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
-	validatorConfig *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]
+	parser *langspec.LangParser[rune, LangSpecLexerState, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]
 
 	lexingRuleSet *langspec.LexerRuleset[LangSpecLexerTokenType, LangSpecLexerTokenRole]
 	programRule   Rule
@@ -230,12 +230,6 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 	}
 	parser := langspec.LangParserCreate(langParserConfig)
 
-	// Register ALL stages (0 through 4) in the unified config
-	validationConfig := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]()
-	validationConfig = validationConfig.WithStageReporter(compilerConfig.stageReporter).WithStages(
-		semantics.ValidationStages()...,
-	)
-
 	var w io.Writer
 	if compilerConfig.diagnosticSink != nil && compilerConfig.diagnosticSink.Writer != nil {
 		w = compilerConfig.diagnosticSink.Writer
@@ -245,7 +239,6 @@ func LangSpecCompilerCreate(compilerConfig *LangSpecCompilerConfiguration) *Lang
 		config:           compilerConfig,
 		languageSpec:     languageSpec,
 		parser:           parser,
-		validatorConfig:  validationConfig,
 		lexingRuleSet:    ruleset,
 		programRule:      programRule,
 		diagnosticWriter: w,
@@ -261,6 +254,16 @@ func LangSpecCompilerDestroy(compiler *LangSpecCompiler) {
 	langspec.LangParserDestroy(compiler.parser)
 }
 
+func langSpecValidatorConfigurationNew[TNodeKind ~uint32](stageReporter any) *validation.LSTValidatorConfiguration[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]] {
+	cfg := validation.LSTValidatorConfigurationCreate[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]]().WithStages(
+		semantics.ValidationStages[TNodeKind]()...,
+	)
+	if stageReporter != nil {
+		cfg = cfg.WithStageReporter(stageReporter.(validation.LSTValidationStageSummarizer[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]]))
+	}
+	return cfg
+}
+
 /*
 LangSpecCompilerCompile compiles a .lspec file and returns a structured result plus an error.
 When the file is not .lspec or lexing fails, result is nil. Otherwise result is populated
@@ -271,10 +274,10 @@ It does not execute PRAGMA toolchains (go_bindings, Sublime, etc.); those requir
 codegen step such as bootstrap.RunToolchainsFromSpecFile using the same spec path or a
 LangSpecCompileResult from bootstrap.RunToolchainsFromCompileResult.
 */
-func LangSpecCompilerCompile(
+func LangSpecCompilerCompile[TNodeKind ~uint32](
 	compiler *LangSpecCompiler,
 	sourceFile string,
-) (*LangSpecCompileResult, error) {
+) (*LangSpecCompileResult[TNodeKind], error) {
 	if !system.PathHasExt(sourceFile, ".lspec") {
 		return nil, fmt.Errorf("file is not a .lspec file: %s", sourceFile)
 	}
@@ -296,7 +299,7 @@ func LangSpecCompilerCompile(
 		return nil, fmt.Errorf("fatal internal error: parser returned nil syntax errors without an error")
 	}
 
-	result := &LangSpecCompileResult{
+	result := &LangSpecCompileResult[TNodeKind]{
 		RootNode:     rootNode,
 		Trace:        trace,
 		SyntaxErrors: syntaxErrors,
@@ -334,14 +337,14 @@ func LangSpecCompilerCompile(
 		}
 		return result, importResolveErr
 	}
-	preValidationState := &semantics.GrammarValidationState{
+	preValidationState := &semantics.GrammarValidationState[TNodeKind]{
 		ImportedModules: importGraph.byAlias,
 		LibraryMode:     extractCompileOptions(rootNode).Library,
 	}
 	validationEntries, validationErr := validation.LSTValidatorRun(
-		compiler.validatorConfig,
+		langSpecValidatorConfigurationNew[TNodeKind](compiler.config.stageReporter),
 		rootNode,
-		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
+		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]]) bool {
 			return stage.Order < 4
 		},
 		preValidationState,
@@ -359,7 +362,7 @@ func LangSpecCompilerCompile(
 	}
 
 	// 4. Compilation & Post-Validation
-	compiled := compileTree(compiler, result.RootNode, sourceFile, importGraph)
+	compiled := compileTree[TNodeKind](compiler, result.RootNode, sourceFile, importGraph)
 
 	// Attach lowered artifacts as soon as compileTree succeeds so callers (e.g. tests) can
 	// inspect lexer/parser/grammar even when stage-4+ validation or bootstrap fails later.
@@ -374,16 +377,16 @@ func LangSpecCompilerCompile(
 	result.EOFToken = compiled.eofToken
 	result.SourceMap = compiled.sourceMap
 
-	valState := &semantics.GrammarValidationState{
+	valState := &semantics.GrammarValidationState[TNodeKind]{
 		Package:   &compiled.grammarPackage,
 		SourceMap: compiled.sourceMap,
 		Symbols:   compiled.symbols,
 	}
 
 	postValidationEntries, postValidationErr := validation.LSTValidatorRun(
-		compiler.validatorConfig,
+		langSpecValidatorConfigurationNew[TNodeKind](compiler.config.stageReporter),
 		rootNode,
-		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
+		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[TNodeKind]]) bool {
 			return stage.Order >= 4
 		},
 		valState,
@@ -488,7 +491,7 @@ LangSpecCompilerDebugResult writes parse trace and/or LST dump for result per co
 
 When config.DebugParseTrace is true, event-level trace output requires parse trace collection during LangSpecCompilerCompile (see LangSpecCompilerConfiguration.WithCollectParseTraceForLspec). Otherwise RenderParseTrace reports no trace data.
 */
-func LangSpecCompilerDebugResult(compiler *LangSpecCompiler, result *LangSpecCompileResult, config *CompilerDebugConfig) {
+func LangSpecCompilerDebugResult[TNodeKind ~uint32](compiler *LangSpecCompiler, result *LangSpecCompileResult[TNodeKind], config *CompilerDebugConfig) {
 	if config.DebugParseTrace {
 		RenderParseTrace(compiler.diagnosticWriter, result.Trace, func(t lexarch.TokenKind) string { return LangSpecLexerTokenType(t).String() })
 	}

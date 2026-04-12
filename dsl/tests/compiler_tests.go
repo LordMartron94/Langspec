@@ -87,8 +87,8 @@ func TestParseGeneratedLSpecViaBootstrap(t *testing.T) {
 		t.Fatalf("LSpec file generation failed with error: %s", err.Error())
 	}
 
-	parser, compiledSym, err := bootstrap.CompileParserFromSpecWithCompiledSymbols(testOutput, scratchAllocFn,
-		bootstrap.WithDiagnosticSink(sink),
+	parser, compiledSym, err := bootstrap.CompileParserFromSpecWithCompiledSymbols[dsl.LangSpecParserNodeKind](testOutput, scratchAllocFn,
+		bootstrap.WithDiagnosticSink[dsl.LangSpecParserNodeKind](sink),
 	)
 	if err != nil {
 		t.Fatalf("bootstrap.CompileParserFromSpecWithCompiledSymbols failed: %s", err.Error())

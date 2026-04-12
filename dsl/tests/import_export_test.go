@@ -69,7 +69,7 @@ LEX {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
@@ -130,7 +130,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected compile failure for imported syntax error")
 	}
@@ -190,7 +190,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected compile failure for imported validation error")
 	}
@@ -253,7 +253,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("expected compile success for library module missing PROGRAM: %v", err)
@@ -305,7 +305,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected compile failure for library imported module defining PROGRAM")
 	}
@@ -366,7 +366,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected compile failure for non-library imported module missing PROGRAM")
 	}
@@ -430,7 +430,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		if res != nil && len(res.ImportedDiagnostics) > 0 {
@@ -495,7 +495,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected validation failure for invalid external template usage")
 	}
@@ -582,7 +582,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected validation failure for invalid lex using references")
 	}
@@ -663,7 +663,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
@@ -754,7 +754,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
@@ -849,7 +849,7 @@ PARSE {
 		t.Fatalf("write main spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
@@ -911,7 +911,7 @@ PARSE {
 		t.Fatalf("write host spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("LangSpecCompilerCompile failed: %v", err)
@@ -1007,7 +1007,7 @@ PARSE {
 		t.Fatalf("write host spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, mainPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, mainPath)
 	if err == nil {
 		t.Fatalf("expected compile failure when embed uses non-embed import alias")
 	}

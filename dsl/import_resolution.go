@@ -178,14 +178,14 @@ func validateImportModule(
 	sourceRunes, _ := system.FileReadAllRunes(sourceFile)
 	sourceText := string(sourceRunes)
 	opts := extractCompileOptions(root)
-	preValidationState := &semantics.GrammarValidationState{
+	preValidationState := &semantics.GrammarValidationState[LangSpecParserNodeKind]{
 		ImportedModules: graph.byAlias,
 		LibraryMode:     opts.Library,
 	}
 	validationEntries, validationErr := validation.LSTValidatorRun(
-		compiler.validatorConfig,
+		langSpecValidatorConfigurationNew[LangSpecParserNodeKind](compiler.config.stageReporter),
 		root,
-		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState]) bool {
+		func(stage *validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *semantics.GrammarValidationState[LangSpecParserNodeKind]]) bool {
 			return stage.Order < 4
 		},
 		preValidationState,

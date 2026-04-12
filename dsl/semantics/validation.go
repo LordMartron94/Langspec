@@ -13,16 +13,16 @@ import (
 	. "langspec/dsl/spec"
 )
 
-type GrammarValidationState struct {
-	Package         *GrammarPackage
-	SourceMap       map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node
+type GrammarValidationState[TNodeKind ~uint32] struct {
+	Package         *GrammarPackage[TNodeKind]
+	SourceMap       map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node
 	Symbols         *CompiledSymbolTable
 	ImportedModules map[string]*ImportedModuleSymbols
 	LibraryMode     bool
 }
 
 /* ValidationCtx is the validation stage context type for LangSpec LST validation. */
-type ValidationCtx = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState]
+type ValidationCtx[TNodeKind ~uint32] = validation.LSTValidationStageContext[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState[TNodeKind]]
 
 /*
 ValidationCode is a stable machine-readable diagnostic code for LangSpec validation (e.g. V_PAT001).
@@ -122,44 +122,44 @@ func attributeAs[TAttribute any](node *Node, attributeName string) (TAttribute, 
 /*
 ValidationStages returns the ordered LST validation stages for the LangSpec DSL compiler.
 */
-func ValidationStages() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState] {
-	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState]{
+func ValidationStages[TNodeKind ~uint32]() []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState[TNodeKind]] {
+	return []*validation.LSTValidationStage[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind, *GrammarValidationState[TNodeKind]]{
 		{
 			Name:        "Symbol Binding & Environment",
 			Description: "Builds semantic environment, checks duplicates, scoping, and reference resolution.",
 			Order:       0,
-			Processor:   processSymbolBinding,
+			Processor:   processSymbolBinding[TNodeKind],
 		},
 		{
 			Name:        "Structure & Reachability",
 			Description: "Analyzes cross-section reachability and detects cyclic dependencies.",
 			Order:       1,
-			Processor:   processReachability,
+			Processor:   processReachability[TNodeKind],
 		},
 		{
 			Name:        "Lexer Semantics",
 			Description: "Validates EOF configurations, shadowing, and ambiguous token matches.",
 			Order:       2,
-			Processor:   processLexSemantics,
+			Processor:   processLexSemantics[TNodeKind],
 		},
 		{
 			Name:        "Pattern Semantics",
 			Description: "Validates pattern negation and brace repetition bounds in pattern and parse sections.",
 			Order:       3,
-			Processor:   processPatternSemantics,
+			Processor:   processPatternSemantics[TNodeKind],
 		},
 		{
 			Name:        "Grammar Safety & Ambiguity",
 			Description: "Analyzes lowered grammar for left-recursion, unbounded nullable repetitions, and FIRST-set conflicts.",
 			Order:       4,
-			Processor:   processGrammarSafety,
+			Processor:   processGrammarSafety[TNodeKind],
 		},
 	}
 }
 
 // ------------------------------------------------------------- SYMBOL BINDING (STAGE 0)
 
-func processSymbolBinding(ctx *ValidationCtx) {
+func processSymbolBinding[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	var imports map[string]*ImportedModuleSymbols
 	if ctx.RunState != nil {
 		imports = ctx.RunState.ImportedModules
@@ -208,7 +208,7 @@ func processSymbolBinding(ctx *ValidationCtx) {
 	validateRuleReferences(ctx, env)
 }
 
-func validateImportDefinitions(ctx *ValidationCtx) {
+func validateImportDefinitions[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	importSection := ctx.RootNode.FindFirstKind(NodeImportSection)
 	if importSection == nil {
 		return
@@ -234,7 +234,7 @@ func validateImportDefinitions(ctx *ValidationCtx) {
 	}
 }
 
-func validateUsingReferences(ctx *ValidationCtx, env *SemanticEnv, nodeKinds map[string]struct{}) {
+func validateUsingReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, nodeKinds map[string]struct{}) {
 	importAliases := collectImportAliases(ctx.RootNode)
 	for _, usingRef := range ctx.RootNode.FindAllKind(NodeLexRulePatternUsing) {
 		moduleNode := usingRef.FindFirstKind(NodeModuleReference)
@@ -402,7 +402,7 @@ func collectEmbedImportAliases(root *Node) map[string]bool {
 	return out
 }
 
-func validateEmbedAliasDefinitions(ctx *ValidationCtx, env *SemanticEnv) {
+func validateEmbedAliasDefinitions[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	if ctx == nil || env == nil {
 		return
 	}
@@ -435,7 +435,7 @@ func validateEmbedAliasDefinitions(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 }
 
-func validateEmbedEntryTokenReachability(ctx *ValidationCtx, env *SemanticEnv) {
+func validateEmbedEntryTokenReachability[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	if ctx == nil || env == nil {
 		return
 	}
@@ -466,7 +466,7 @@ func validateEmbedEntryTokenReachability(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 }
 
-func validateEmbedExitTokenShadowing(ctx *ValidationCtx, env *SemanticEnv) {
+func validateEmbedExitTokenShadowing[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	if ctx == nil || env == nil {
 		return
 	}
@@ -512,7 +512,7 @@ func validateEmbedExitTokenShadowing(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 }
 
-func validateImportLexicalObligations(ctx *ValidationCtx, env *SemanticEnv) {
+func validateImportLexicalObligations[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	if ctx == nil || env == nil {
 		return
 	}
@@ -580,7 +580,7 @@ func collectDefinedLexerStates(root *Node) map[string]bool {
 
 // validateSymbolNameCollisions ensures no name is declared in more than one symbol table
 // (tokens, patterns, parse rules, pairs, pratt). Order for "first" declaration follows SemanticSymbolKind iota.
-func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
+func validateSymbolNameCollisions[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	kindName := func(k SemanticSymbolKind) string {
 		switch k {
 		case SymbolKindToken:
@@ -671,7 +671,7 @@ func validateSymbolNameCollisions(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 }
 
-func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
+func validateTokenReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	used := make(map[string]bool)
 	ignoredRoles := getIgnoredRoles(ctx)
 
@@ -682,7 +682,7 @@ func validateTokenReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	reportUnusedTokens(ctx, env, used, ignoredRoles)
 }
 
-func markImportedLexicalObligationTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+func markImportedLexicalObligationTokenReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool) {
 	if ctx == nil || env == nil {
 		return
 	}
@@ -710,7 +710,7 @@ func markImportedLexicalObligationTokenReferences(ctx *ValidationCtx, env *Seman
 	}
 }
 
-func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+func markExplicitTokenReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool) {
 	parseSec := ctx.RootNode.FindFirstKind(NodeParseSection)
 	if parseSec == nil {
 		return
@@ -766,7 +766,7 @@ func markExplicitTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[
 	}
 }
 
-func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+func markNestTokenReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool) {
 	for _, nestOp := range ctx.RootNode.FindAllKind(NodeParseOpNest) {
 		openNode := nestOp.FindFirstKind(NodeParseNestOpenToken)
 		closeNode := nestOp.FindFirstKind(NodeParseNestCloseToken)
@@ -794,7 +794,7 @@ func markNestTokenReferences(ctx *ValidationCtx, env *SemanticEnv, used map[stri
 	}
 }
 
-func markTokenNameUsed(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, tokenName string, refNode *Node) {
+func markTokenNameUsed[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool, tokenName string, refNode *Node) {
 	if tokenName == "" {
 		return
 	}
@@ -805,7 +805,7 @@ func markTokenNameUsed(ctx *ValidationCtx, env *SemanticEnv, used map[string]boo
 	used[tokenName] = true
 }
 
-func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool) {
+func markPrattOperatorTargetReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool) {
 	prattSection := ctx.RootNode.FindFirstKind(NodePrattSection)
 	if prattSection == nil {
 		return
@@ -836,7 +836,7 @@ func markPrattOperatorTargetReferences(ctx *ValidationCtx, env *SemanticEnv, use
 	}
 }
 
-func validateAndMarkToken(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, tokenNode *Node) {
+func validateAndMarkToken[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool, tokenNode *Node) {
 	if tokenNode == nil {
 		return
 	}
@@ -849,22 +849,22 @@ func validateAndMarkToken(ctx *ValidationCtx, env *SemanticEnv, used map[string]
 	}
 }
 
-func reportUnresolvedToken(ctx *ValidationCtx, ref *Node, name string) {
+func reportUnresolvedToken[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], ref *Node, name string) {
 	if shouldSkipLibraryUnresolvedChecks(ctx) {
 		return
 	}
 	ctx.ReportError(codeForUnresolvedTokenRef(ref).String(), fmt.Sprintf("unresolved token reference '%s'", name), ref)
 }
 
-func isLibraryMode(ctx *ValidationCtx) bool {
+func isLibraryMode[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) bool {
 	return ctx != nil && ctx.RunState != nil && ctx.RunState.LibraryMode
 }
 
-func shouldSkipLibraryUnresolvedChecks(ctx *ValidationCtx) bool {
+func shouldSkipLibraryUnresolvedChecks[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) bool {
 	return isLibraryMode(ctx)
 }
 
-func reportUnusedTokens(ctx *ValidationCtx, env *SemanticEnv, used map[string]bool, ignoredRoles map[string]bool) {
+func reportUnusedTokens[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, used map[string]bool, ignoredRoles map[string]bool) {
 	if isLibraryMode(ctx) {
 		return
 	}
@@ -876,7 +876,7 @@ func reportUnusedTokens(ctx *ValidationCtx, env *SemanticEnv, used map[string]bo
 	}
 }
 
-func getIgnoredRoles(ctx *ValidationCtx) map[string]bool {
+func getIgnoredRoles[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) map[string]bool {
 	ignored := make(map[string]bool)
 	parse := ctx.RootNode.FindFirstKind(NodeParseSection)
 	if parse == nil {
@@ -908,7 +908,7 @@ func getTokenRole(tokenNameNode *Node) string {
 	return IdentifierValue(roleNode)
 }
 
-func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
+func validatePatternReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	for _, ref := range ctx.RootNode.FindAllKind(NodePatternRef) {
 		name := PatternRefTargetName(ref)
 		if name == "" {
@@ -928,7 +928,7 @@ func validatePatternReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 }
 
-func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
+func validateRuleReferences[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv) {
 	if isLibraryMode(ctx) {
 		if programNode, ok := env.Rules[ProgramRuleName]; ok {
 			nameNode := programNode.FindFirstKind(NodeParseRuleName)
@@ -953,7 +953,7 @@ func validateRuleReferences(ctx *ValidationCtx, env *SemanticEnv) {
 	}
 }
 
-func validateParseExpressionReference(ctx *ValidationCtx, env *SemanticEnv, ref *Node) {
+func validateParseExpressionReference[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, ref *Node) {
 	name := RefName(ref)
 	if name == "" {
 		return
@@ -982,7 +982,7 @@ validateBareParseSegmentSymbolReference checks NodeParseSymbolReference in a par
 without output mapping (= token / = group). A declared token is not valid there: tokens must
 use `virtual <tok>` or `<node name> = <token reference>`. Rule/pratt names are valid bare references.
 */
-func validateBareParseSegmentSymbolReference(ctx *ValidationCtx, env *SemanticEnv, ref *Node) {
+func validateBareParseSegmentSymbolReference[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, ref *Node) {
 	name := RefName(ref)
 	if name == "" {
 		return
@@ -1020,7 +1020,7 @@ func symbolReferenceIsBareParseSegmentGrammarRef(ref *Node) bool {
 
 // ------------------------------------------------------------- REACHABILITY (STAGE 1)
 
-func processReachability(ctx *ValidationCtx) {
+func processReachability[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	var imports map[string]*ImportedModuleSymbols
 	if ctx.RunState != nil {
 		imports = ctx.RunState.ImportedModules
@@ -1039,7 +1039,7 @@ func processReachability(ctx *ValidationCtx) {
 	}
 }
 
-func checkPatternCycles(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
+func checkPatternCycles[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, deps map[string][]string) {
 	for name, node := range env.Patterns {
 		if cycle := findCycleInPatternDeps(name, deps); cycle != nil {
 			_, nameNode := ExtractPatternDefName(node)
@@ -1048,7 +1048,7 @@ func checkPatternCycles(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]
 	}
 }
 
-func checkPatternReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
+func checkPatternReachability[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, deps map[string][]string) {
 	reachable := computeReachablePatterns(ctx.RootNode, deps)
 	for name, node := range env.Patterns {
 		if env.LocalPatterns[name] {
@@ -1070,7 +1070,7 @@ func patternDefinitionIsExported(def *Node) bool {
 	return def != nil && def.FindFirstKind(NodeExported) != nil
 }
 
-func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[string][]string) {
+func checkParseReachability[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], env *SemanticEnv, deps map[string][]string) {
 	reachable := computeReachableParseRules(deps, ProgramRuleName)
 	if reachable == nil {
 		return
@@ -1086,7 +1086,7 @@ func checkParseReachability(ctx *ValidationCtx, env *SemanticEnv, deps map[strin
 
 // ------------------------------------------------------------- LEX SEMANTICS (STAGE 2)
 
-func processLexerStateSemantics(ctx *ValidationCtx) {
+func processLexerStateSemantics[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	lex := ctx.RootNode.FindFirstKind(NodeLexSection)
 	if lex == nil {
 		return
@@ -1143,7 +1143,7 @@ func processLexerStateSemantics(ctx *ValidationCtx) {
 	checkLexTokenConsistencyAcrossStates(ctx)
 }
 
-func validateLexRuleHasPattern(ctx *ValidationCtx, ruleNode *Node) {
+func validateLexRuleHasPattern[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], ruleNode *Node) {
 	if ruleNode == nil {
 		return
 	}
@@ -1162,7 +1162,7 @@ func validateLexRuleHasPattern(ctx *ValidationCtx, ruleNode *Node) {
 	)
 }
 
-func validateLexerMutations(ctx *ValidationCtx, rule *Node, defined map[string]struct{}) {
+func validateLexerMutations[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], rule *Node, defined map[string]struct{}) {
 	mutRoot := rule.FindFirstKind(NodeLexRuleStateMutation)
 	if mutRoot == nil {
 		return
@@ -1192,7 +1192,7 @@ func markReferencedLexerStates(rule *Node, referenced map[string]bool) {
 	}
 }
 
-func checkLexTokenConsistencyAcrossStates(ctx *ValidationCtx) {
+func checkLexTokenConsistencyAcrossStates[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	byToken := make(map[string]string)
 	for _, info := range collectLexRules(ctx.RootNode) {
 		sig := info.patternKey + "|" + info.stackSig
@@ -1220,7 +1220,7 @@ func lexerStateDefinitionNames(stateList *Node) []string {
 	return out
 }
 
-func processLexSemantics(ctx *ValidationCtx) {
+func processLexSemantics[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	processLexerStateSemantics(ctx)
 	lexRules := collectLexRules(ctx.RootNode)
 	patternKeyToRules := groupLexRulesByPattern(lexRules)
@@ -1234,7 +1234,7 @@ func processLexSemantics(ctx *ValidationCtx) {
 	}
 }
 
-func reportIdenticalAndAmbiguousPatterns(ctx *ValidationCtx, key string, rules []lexRuleInfo) {
+func reportIdenticalAndAmbiguousPatterns[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], key string, rules []lexRuleInfo) {
 	for _, r := range rules {
 		msgIden := fmt.Sprintf("token '%s' produces the same pattern as other token(s) (pattern key: %s)", r.tokenName, key)
 		ctx.ReportWarning(VALIDATION_IDENTICAL_TOKEN_PATTERN.String(), msgIden, r.tokenNameNode)
@@ -1244,7 +1244,7 @@ func reportIdenticalAndAmbiguousPatterns(ctx *ValidationCtx, key string, rules [
 	}
 }
 
-func reportShadowedTokens(ctx *ValidationCtx, rules []lexRuleInfo) {
+func reportShadowedTokens[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], rules []lexRuleInfo) {
 	maxPri := rules[0].priority
 	for _, r := range rules[1:] {
 		if r.priority > maxPri {
@@ -1261,12 +1261,12 @@ func reportShadowedTokens(ctx *ValidationCtx, rules []lexRuleInfo) {
 
 // ------------------------------------------------------------- PATTERN SEMANTICS (STAGE 3)
 
-func processPatternSemantics(ctx *ValidationCtx) {
+func processPatternSemantics[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	validateNegationNodes(ctx)
 	validateRepetitionBounds(ctx)
 }
 
-func validateNegationNodes(ctx *ValidationCtx) {
+func validateNegationNodes[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	for _, negNode := range ctx.RootNode.FindAllKind(NodePatternNegation) {
 		children := negNode.Children()
 		if len(children) == 0 {
@@ -1278,7 +1278,7 @@ func validateNegationNodes(ctx *ValidationCtx) {
 	}
 }
 
-func validateRepetitionBounds(ctx *ValidationCtx) {
+func validateRepetitionBounds[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	for _, boundsNode := range ctx.RootNode.FindAllKind(NodeRepetitionBounds) {
 		minNode := boundsNode.FindFirstKind(NodeRepetitionMin)
 		maxNode := boundsNode.FindFirstKind(NodeRepetitionMax)
@@ -1312,7 +1312,7 @@ func validateRepetitionBounds(ctx *ValidationCtx) {
 
 // ------------------------------------------------------------- GRAMMAR SEMANTICS (POST-COMPILATION) (STAGE 4)
 
-func processGrammarSafety(ctx *ValidationCtx) {
+func processGrammarSafety[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	if ctx.RunState == nil || ctx.RunState.Package == nil {
 		ctx.ReportFatal("V_INTERNAL", "engine error: grammar package missing in validation run state", ctx.RootNode)
 		return
@@ -1328,15 +1328,15 @@ func processGrammarSafety(ctx *ValidationCtx) {
 
 	checkGrammarLeftRecursion(ctx, pkg, analysis)
 	checkGrammarUnboundedOptional(ctx, pkg, analysis)
-	checkGrammarSeparatorRepeatOptionalTail(ctx, pkg, analysis, sourceMap)
-	checkGrammarChoiceConflicts(ctx, pkg, analysis, sourceMap)
+	checkGrammarSeparatorRepeatOptionalTail[TNodeKind](ctx, pkg, analysis, sourceMap)
+	checkGrammarChoiceConflicts[TNodeKind](ctx, pkg, analysis, sourceMap)
 }
 
-func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis) {
+func checkGrammarLeftRecursion[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], pkg *GrammarPackage[TNodeKind], analysis *syntaxa.GrammarAnalysis) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 
 	for ruleName, rootGrammar := range pkg.Grammars {
-		if hasLeftRecursion(rootGrammar, pkg, analysis, make(map[syntaxa.GrammarLabel]bool), ruleName) {
+		if hasLeftRecursion[TNodeKind](rootGrammar, pkg, analysis, make(map[syntaxa.GrammarLabel]bool), ruleName) {
 			ruleNode := findParseRuleByName(parseSection, string(ruleName))
 			nodeToReport := ctx.RootNode
 			if ruleNode != nil {
@@ -1350,7 +1350,7 @@ func checkGrammarLeftRecursion(ctx *ValidationCtx, pkg *GrammarPackage, analysis
 	}
 }
 
-func hasLeftRecursion(g *syntaxa.Grammar[lexarch.TokenKind, uint32], pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis, visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
+func hasLeftRecursion[TNodeKind ~uint32](g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], pkg *GrammarPackage[TNodeKind], analysis *syntaxa.GrammarAnalysis, visited map[syntaxa.GrammarLabel]bool, target syntaxa.GrammarLabel) bool {
 	if g == nil {
 		return false
 	}
@@ -1364,7 +1364,7 @@ func hasLeftRecursion(g *syntaxa.Grammar[lexarch.TokenKind, uint32], pkg *Gramma
 		}
 		visited[g.ReferenceTarget] = true
 		targetRule := pkg.Grammars[g.ReferenceTarget]
-		res := hasLeftRecursion(targetRule, pkg, analysis, visited, target)
+		res := hasLeftRecursion[TNodeKind](targetRule, pkg, analysis, visited, target)
 		visited[g.ReferenceTarget] = false
 		return res
 	case syntaxa.GToken:
@@ -1373,7 +1373,7 @@ func hasLeftRecursion(g *syntaxa.Grammar[lexarch.TokenKind, uint32], pkg *Gramma
 		return false // Open token consumes input immediately
 	case syntaxa.GConcat:
 		for _, child := range g.Children {
-			if hasLeftRecursion(child, pkg, analysis, visited, target) {
+			if hasLeftRecursion[TNodeKind](child, pkg, analysis, visited, target) {
 				return true
 			}
 			// If child is not nullable, it consumes input; we can't left-recurse past it.
@@ -1386,26 +1386,26 @@ func hasLeftRecursion(g *syntaxa.Grammar[lexarch.TokenKind, uint32], pkg *Gramma
 		return false
 	case syntaxa.GChoice:
 		for _, child := range g.Children {
-			if hasLeftRecursion(child, pkg, analysis, visited, target) {
+			if hasLeftRecursion[TNodeKind](child, pkg, analysis, visited, target) {
 				return true
 			}
 		}
 		return false
 	case syntaxa.GRepeat, syntaxa.GOptional:
 		if len(g.Children) > 0 {
-			return hasLeftRecursion(g.Children[0], pkg, analysis, visited, target)
+			return hasLeftRecursion[TNodeKind](g.Children[0], pkg, analysis, visited, target)
 		}
 		return false
 	}
 	return false
 }
 
-func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, analysis *syntaxa.GrammarAnalysis) {
+func checkGrammarUnboundedOptional[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], pkg *GrammarPackage[TNodeKind], analysis *syntaxa.GrammarAnalysis) {
 	parseSection := ctx.RootNode.FindFirstKind(NodeParseSection)
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
-	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) {
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
@@ -1436,16 +1436,16 @@ func checkGrammarUnboundedOptional(ctx *ValidationCtx, pkg *GrammarPackage, anal
 	}
 }
 
-func checkGrammarSeparatorRepeatOptionalTail(
-	ctx *ValidationCtx,
-	pkg *GrammarPackage,
+func checkGrammarSeparatorRepeatOptionalTail[TNodeKind ~uint32](
+	ctx *ValidationCtx[TNodeKind],
+	pkg *GrammarPackage[TNodeKind],
 	analysis *syntaxa.GrammarAnalysis,
-	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node,
 ) {
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
-	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) {
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
@@ -1455,11 +1455,11 @@ func checkGrammarSeparatorRepeatOptionalTail(
 			for i := 0; i < len(g.Children)-1; i++ {
 				repeatNode := g.Children[i]
 				tailNode := g.Children[i+1]
-				if !isSeparatorLeadingStarRepeat(repeatNode) || !isOptionalOrNullableNode(tailNode, analysis) {
+				if !isSeparatorLeadingStarRepeat[TNodeKind](repeatNode) || !isOptionalOrNullableNode[TNodeKind](tailNode, analysis) {
 					continue
 				}
 
-				anchor := resolveFirstConflictAnchor(ctx, sourceMap, g, repeatNode)
+				anchor := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, g, repeatNode)
 				if anchor == nil {
 					anchor = ctx.RootNode
 				}
@@ -1483,7 +1483,7 @@ func checkGrammarSeparatorRepeatOptionalTail(
 	}
 }
 
-func isSeparatorLeadingStarRepeat(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) bool {
+func isSeparatorLeadingStarRepeat[TNodeKind ~uint32](g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) bool {
 	if g == nil || g.Kind != syntaxa.GRepeat || g.Max != nil || len(g.Children) != 1 {
 		return false
 	}
@@ -1495,7 +1495,7 @@ func isSeparatorLeadingStarRepeat(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
 	return first != nil && first.Kind == syntaxa.GToken
 }
 
-func isOptionalOrNullableNode(g *syntaxa.Grammar[lexarch.TokenKind, uint32], analysis *syntaxa.GrammarAnalysis) bool {
+func isOptionalOrNullableNode[TNodeKind ~uint32](g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], analysis *syntaxa.GrammarAnalysis) bool {
 	if g == nil {
 		return false
 	}
@@ -1508,23 +1508,23 @@ func isOptionalOrNullableNode(g *syntaxa.Grammar[lexarch.TokenKind, uint32], ana
 	return analysis.Nullable[syntaxa.NodeKeyFromPath(*g.NodePath)]
 }
 
-func checkGrammarChoiceConflicts(
-	ctx *ValidationCtx,
-	pkg *GrammarPackage,
+func checkGrammarChoiceConflicts[TNodeKind ~uint32](
+	ctx *ValidationCtx[TNodeKind],
+	pkg *GrammarPackage[TNodeKind],
 	analysis *syntaxa.GrammarAnalysis,
-	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node,
 ) {
 	visited := make(map[syntaxa.GrammarKey]bool)
 
-	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, uint32])
-	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, uint32]) {
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
 		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
 			return
 		}
 		visited[g.GrammarKey] = true
 
 		if g.Kind == syntaxa.GChoice {
-			analyzeChoiceNode(ctx, pkg, analysis, sourceMap, g)
+			analyzeChoiceNode[TNodeKind](ctx, pkg, analysis, sourceMap, g)
 		}
 
 		for _, child := range g.Children {
@@ -1537,12 +1537,12 @@ func checkGrammarChoiceConflicts(
 	}
 }
 
-func analyzeChoiceNode(
-	ctx *ValidationCtx,
-	pkg *GrammarPackage,
+func analyzeChoiceNode[TNodeKind ~uint32](
+	ctx *ValidationCtx[TNodeKind],
+	pkg *GrammarPackage[TNodeKind],
 	analysis *syntaxa.GrammarAnalysis,
-	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
-	choiceNode *syntaxa.Grammar[lexarch.TokenKind, uint32],
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node,
+	choiceNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 ) {
 	seenTokens := make(map[lexarch.TokenKind]int)
 	reportedPrev := make(map[lexarch.TokenKind]bool)
@@ -1569,8 +1569,8 @@ func analyzeChoiceNode(
 				continue
 			}
 			prevKey := syntaxa.NodeKeyFromPath(*prevChild.NodePath)
-			g1 := guardForChoiceArm(analysis, prevKey, prevChild)
-			g2 := guardForChoiceArm(analysis, childKey, child)
+			g1 := guardForChoiceArm[TNodeKind](analysis, prevKey, prevChild)
+			g2 := guardForChoiceArm[TNodeKind](analysis, childKey, child)
 			if syntaxa.GuardsMutuallyExclusive(g1, g2) {
 				continue
 			}
@@ -1580,7 +1580,7 @@ func analyzeChoiceNode(
 
 			// 1. Report the earlier branch (only once per token to avoid spam)
 			if !reportedPrev[token] {
-				prevNode := resolveFirstConflictAnchor(ctx, sourceMap, choiceNode, prevChild)
+				prevNode := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, choiceNode, prevChild)
 				msg := fmt.Sprintf(
 					"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is also expected by a later branch (%d).%s",
 					ruleName, tokenLabel, i, note,
@@ -1590,7 +1590,7 @@ func analyzeChoiceNode(
 			}
 
 			// 2. Report the current branch (always)
-			currNode := resolveFirstConflictAnchor(ctx, sourceMap, choiceNode, child)
+			currNode := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, choiceNode, child)
 			msg := fmt.Sprintf(
 				"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is already expected by an earlier branch (%d).%s",
 				ruleName, tokenLabel, prevBranch, note,
@@ -1612,10 +1612,10 @@ func firstSetForChoiceArm(analysis *syntaxa.GrammarAnalysis, childKey syntaxa.No
 	return analysis.First[childKey]
 }
 
-func guardForChoiceArm(
+func guardForChoiceArm[TNodeKind ~uint32](
 	analysis *syntaxa.GrammarAnalysis,
 	childKey syntaxa.NodeKey,
-	child *syntaxa.Grammar[lexarch.TokenKind, uint32],
+	child *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 ) []syntaxa.Lookahead[lexarch.TokenKind] {
 	if analysis != nil && analysis.ArmPredict != nil {
 		if arm, ok := analysis.ArmPredict[childKey]; ok && len(arm.Guard) > 0 {
@@ -1767,11 +1767,11 @@ Resolution order: prefer the conflicting alternative’s arm grammar node (pinpo
 expression that overlaps), then the whole alternation if the arm has no mapped/usable span,
 then root. This avoids reporting the entire `|` twice when both branches conflict.
 */
-func resolveFirstConflictAnchor(
-	ctx *ValidationCtx,
-	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, uint32]]*Node,
-	choiceRoot *syntaxa.Grammar[lexarch.TokenKind, uint32],
-	arm *syntaxa.Grammar[lexarch.TokenKind, uint32],
+func resolveFirstConflictAnchor[TNodeKind ~uint32](
+	ctx *ValidationCtx[TNodeKind],
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node,
+	choiceRoot *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	arm *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
 ) *Node {
 	if arm != nil {
 		if n := sourceMap[arm]; n != nil && syntaxa.LSTNodeHasMergedByteSpan(n) {

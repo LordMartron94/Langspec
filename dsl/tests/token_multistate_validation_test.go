@@ -52,7 +52,7 @@ PARSE {
 		t.Fatalf("write test spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, specPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, specPath)
 	if err != nil {
 		logCompileFailureDiagnostics(t, res)
 		t.Fatalf("expected multi-state token reuse to be valid, got: %v", err)
@@ -101,7 +101,7 @@ PARSE {
 		t.Fatalf("write test spec: %v", err)
 	}
 
-	res, err := dsl.LangSpecCompilerCompile(compiler, specPath)
+	res, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, specPath)
 	if err == nil {
 		t.Fatalf("expected validation failure for inconsistent multi-state token reuse")
 	}

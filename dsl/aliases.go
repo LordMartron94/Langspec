@@ -23,7 +23,7 @@ type (
 )
 
 /* GrammarPackage is the lowered grammar package type (see semantics.GrammarPackage). */
-type GrammarPackage = semantics.GrammarPackage
+type GrammarPackage[TNodeKind ~uint32] = semantics.GrammarPackage[TNodeKind]
 
 /* SemanticEnv is the symbol environment built from the LST (see semantics.SemanticEnv). */
 type SemanticEnv = semantics.SemanticEnv

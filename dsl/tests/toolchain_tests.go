@@ -18,7 +18,7 @@ func TestClientDSLToolchain(t *testing.T) {
 	compiler, _, _, teardown := setupTestCompiler()
 	defer teardown()
 
-	compileResult, err := dsl.LangSpecCompilerCompile(compiler, testClientDSLFile)
+	compileResult, err := dsl.LangSpecCompilerCompile[dsl.LangSpecParserNodeKind](compiler, testClientDSLFile)
 	if err != nil {
 		t.Fatalf("Client compilation failed with error: %s", err.Error())
 	}
@@ -30,14 +30,14 @@ func TestClientDSLToolchain(t *testing.T) {
 
 	stringManifest := adaptManifest(dsleditor.LangSpecEditorManifest, dsl.LangSpecCompilerScopeMap(compiler))
 
-	err = bootstrap.RunToolchainsFromCompileResult(
+	err = bootstrap.RunToolchainsFromCompileResult[dsl.LangSpecParserNodeKind](
 		compileResult,
-		bootstrap.WithSublimeToolchain(
+		bootstrap.WithSublimeToolchain[dsl.LangSpecParserNodeKind](
 			stringManifest,
 			func(
 				_ *editor.LexingRuleSet[rune, uint32, uint32],
-				_ func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext,
-			) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
+				_ func(*editor.EditorCtx[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind]) toolchain.SublimeContext,
+			) func(*editor.EditorCtx[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind, toolchain.SublimeContext] {
 				return adaptGoOverrideProducer(compileResult, compiler)
 			},
 			[]string{".lspec"},
@@ -81,9 +81,9 @@ func adaptManifest(
 }
 
 func adaptGoOverrideProducer(
-	compileResult *dsl.LangSpecCompileResult,
+	compileResult *dsl.LangSpecCompileResult[dsl.LangSpecParserNodeKind],
 	compiler *dsl.LangSpecCompiler,
-) func(*editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
+) func(*editor.EditorCtx[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind, toolchain.SublimeContext] {
 
 	ruleset := dsl.LangSpecCompilerLexingRuleSet(compiler)
 	editorRuleset := convertRulesetToEditorForToolchain(ruleset)
@@ -110,7 +110,7 @@ func adaptGoOverrideProducer(
 
 	sym := compileResult.CompiledSymbols
 
-	return func(ctx *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext] {
+	return func(ctx *editor.EditorCtx[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind]) []*editor.EditorOverride[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind, toolchain.SublimeContext] {
 		var nativeToken *dsl.LangSpecLexerTokenType
 		var nativeNode *dsl.LangSpecParserNodeKind
 
@@ -120,7 +120,7 @@ func adaptGoOverrideProducer(
 			}
 		}
 		if ctx.NodeKind != nil && sym != nil {
-			if nodeEnum, ok := nodeMap[sym.NodeKindName(*ctx.NodeKind)]; ok {
+			if nodeEnum, ok := nodeMap[sym.NodeKindName(uint32(*ctx.NodeKind))]; ok {
 				nativeNode = &nodeEnum
 			}
 		}
@@ -135,9 +135,9 @@ func adaptGoOverrideProducer(
 			return nil
 		}
 
-		out := make([]*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext], len(nativeOverrides))
+		out := make([]*editor.EditorOverride[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind, toolchain.SublimeContext], len(nativeOverrides))
 		for i, nativeOverride := range nativeOverrides {
-			out[i] = &editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]{
+			out[i] = &editor.EditorOverride[rune, uint32, uint32, string, dsl.LangSpecParserNodeKind, toolchain.SublimeContext]{
 				Pattern:          nativeOverride.Pattern,
 				PatternRegex:     nativeOverride.PatternRegex,
 				MatchContext:     nativeOverride.MatchContext,

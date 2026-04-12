@@ -5,7 +5,6 @@ import (
 	"langspec"
 	"langspec/dsl"
 	"langspec/dsl/semantics"
-	"langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
 	"memarch"
@@ -13,12 +12,9 @@ import (
 
 // ----------------------------------------------------------------- CONFIGURATION
 
-type SublimeOverrideFactory func(
-	ruleset *editor.LexingRuleSet[rune, uint32, uint32],
-	ctxProducer func(ctx *editor.EditorCtx[rune, uint32, uint32, string, uint32]) toolchain.SublimeContext,
-) func(ec *editor.EditorCtx[rune, uint32, uint32, string, uint32]) []*editor.EditorOverride[rune, uint32, uint32, string, uint32, toolchain.SublimeContext]
-
-type ParserCompiler struct {
+// ParserCompiler holds bootstrap settings for a single TNodeKind (~uint32) used by
+// dsl.LangSpecCompilerCompile[TNodeKind] and matching toolchain entry points.
+type ParserCompiler[TNodeKind ~uint32] struct {
 	specFile                string
 	allocFn                 memarch.AllocationFn
 	diagnosticSink          *dsl.LangSpecDiagnosticSink
@@ -38,7 +34,7 @@ type ParserCompiler struct {
 
 	// Sublime Config
 	sublimeManifest *toolchain.SemanticManifest[string, string]
-	sublimeFactory  SublimeOverrideFactory
+	sublimeFactory  toolchain.SublimeInMemoryOverrideFactory[TNodeKind]
 	fileExtensions  []string
 	scopeExtension  string
 
@@ -46,26 +42,27 @@ type ParserCompiler struct {
 	tmCommentsOverride *toolchain.TMCommentsConfiguration
 }
 
-type Option func(*ParserCompiler)
+// Option configures ParserCompiler[TNodeKind]. TNodeKind must match LangSpecCompilerCompile's type argument.
+type Option[TNodeKind ~uint32] func(*ParserCompiler[TNodeKind])
 
 /* WithDiagnosticSink sets compile diagnostics output for DSL compilation. */
-func WithDiagnosticSink(sink *dsl.LangSpecDiagnosticSink) Option {
-	return func(c *ParserCompiler) {
+func WithDiagnosticSink[TNodeKind ~uint32](sink *dsl.LangSpecDiagnosticSink) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.diagnosticSink = sink
 	}
 }
 
 /* WithLexerPatternCompiler sets lexer pattern compiler mode for parser compilation. */
-func WithLexerPatternCompiler(mode lexarch.PatternCompilerMode) Option {
-	return func(c *ParserCompiler) {
+func WithLexerPatternCompiler[TNodeKind ~uint32](mode lexarch.PatternCompilerMode) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.lexerPatternCompilerSet = true
 		c.lexerPatternCompiler = mode
 	}
 }
 
 /* WithLexerPositionTrackingGeneric sets generic lexarch position tracking for compiled lexer specs. */
-func WithLexerPositionTrackingGeneric() Option {
-	return func(c *ParserCompiler) {
+func WithLexerPositionTrackingGeneric[TNodeKind ~uint32]() Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.lexerPositionSet = true
 		c.lexerPositionTracking = dsl.LangSpecLexerPositionTrackingGeneric
 	}
@@ -75,8 +72,8 @@ func WithLexerPositionTrackingGeneric() Option {
 WithLexerPositionTrackingRuneFast sets the rune fast position kernel with the given tab width.
 tabWidth must be greater than zero.
 */
-func WithLexerPositionTrackingRuneFast(tabWidth int) Option {
-	return func(c *ParserCompiler) {
+func WithLexerPositionTrackingRuneFast[TNodeKind ~uint32](tabWidth int) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		if tabWidth <= 0 {
 			panic("langspec/bootstrap: WithLexerPositionTrackingRuneFast requires tabWidth > 0")
 		}
@@ -87,8 +84,8 @@ func WithLexerPositionTrackingRuneFast(tabWidth int) Option {
 }
 
 /* WithLexerPositionTrackingCompilerDefault restores the LangSpec compiler default (rune fast, tab 4). */
-func WithLexerPositionTrackingCompilerDefault() Option {
-	return func(c *ParserCompiler) {
+func WithLexerPositionTrackingCompilerDefault[TNodeKind ~uint32]() Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.lexerPositionSet = true
 		c.lexerPositionTracking = dsl.LangSpecLexerPositionTrackingCompilerDefault
 		c.lexerRuneTabWidth = 0
@@ -100,8 +97,8 @@ WithNodePoolPrefill sets a fixed Syntaxa LST node pool prefill on the LangParser
 
 When unset, LangParser derives a hint from loaded source length when building the parse context.
 */
-func WithNodePoolPrefill(hint int) Option {
-	return func(c *ParserCompiler) {
+func WithNodePoolPrefill[TNodeKind ~uint32](hint int) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		if hint < 0 {
 			panic("langspec/bootstrap: WithNodePoolPrefill requires hint >= 0")
 		}
@@ -116,8 +113,8 @@ WithNodePoolGrowFn sets syntaxa.SyntaxaParser.SetNodePoolGrowFn on the produced 
 growFn(currentCap, needed) matches memforge.GrowthStrategy: cap(nodeFree) and minimum
 length after growth; return target capacity >= needed.
 */
-func WithNodePoolGrowFn(growFn func(currentCap, needed int) int) Option {
-	return func(c *ParserCompiler) {
+func WithNodePoolGrowFn[TNodeKind ~uint32](growFn func(currentCap, needed int) int) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.nodePoolGrowFn = growFn
 	}
 }
@@ -127,20 +124,20 @@ func WithNodePoolGrowFn(growFn func(currentCap, needed int) int) Option {
 
 (e.g., "go_bindings", "sublime", "tm_comments"). If never called, all toolchains are executed.
 */
-func WithToolchainFilter(toolchainNames ...string) Option {
-	return func(c *ParserCompiler) {
+func WithToolchainFilter[TNodeKind ~uint32](toolchainNames ...string) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.toolchainFilter = toolchainNames
 	}
 }
 
 /* WithSublimeToolchain configures the pipeline to use an in-memory Sublime manifest. */
-func WithSublimeToolchain(
+func WithSublimeToolchain[TNodeKind ~uint32](
 	manifest toolchain.SemanticManifest[string, string],
-	factory SublimeOverrideFactory,
+	factory toolchain.SublimeInMemoryOverrideFactory[TNodeKind],
 	fileExtensions []string,
 	scopeExtension string,
-) Option {
-	return func(c *ParserCompiler) {
+) Option[TNodeKind] {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.sublimeManifest = &manifest
 		c.sublimeFactory = factory
 		c.fileExtensions = fileExtensions
@@ -153,9 +150,9 @@ WithTMCommentsToolchain supplies TMCommentsConfiguration for the tm_comments too
 PRAGMA-derived scope and comment strings. When unset, RunToolchainsFrom* uses tool.tm_comments
 settings from the compiled spec (scope or scope-extension, single-line-comment-start, optional block pair).
 */
-func WithTMCommentsToolchain(cfg toolchain.TMCommentsConfiguration) Option {
+func WithTMCommentsToolchain[TNodeKind ~uint32](cfg toolchain.TMCommentsConfiguration) Option[TNodeKind] {
 	copyCfg := cfg
-	return func(c *ParserCompiler) {
+	return func(c *ParserCompiler[TNodeKind]) {
 		c.tmCommentsOverride = &copyCfg
 	}
 }
@@ -166,12 +163,12 @@ func WithTMCommentsToolchain(cfg toolchain.TMCommentsConfiguration) Option {
 CompileParserFromSpec compiles a .lspec file and returns a LangParser ready to parse
 source. It runs the DSL compiler only.
 */
-func CompileParserFromSpec(
+func CompileParserFromSpec[TNodeKind ~uint32](
 	specFile string,
 	alloc memarch.AllocationFn,
-	opts ...Option,
-) (*LangParser, error) {
-	p, _, err := CompileParserFromSpecWithCompiledSymbols(specFile, alloc, opts...)
+	opts ...Option[TNodeKind],
+) (*LangParser[TNodeKind], error) {
+	p, _, err := CompileParserFromSpecWithCompiledSymbols[TNodeKind](specFile, alloc, opts...)
 	return p, err
 }
 
@@ -180,14 +177,14 @@ CompileParserFromSpecWithCompiledSymbols is like CompileParserFromSpec but also 
 the CompiledSymbolTable that maps uint32 token, role, and node-kind IDs to names for the
 compiled target language. Use it for LST debug output and other ID-to-string resolution.
 */
-func CompileParserFromSpecWithCompiledSymbols(
+func CompileParserFromSpecWithCompiledSymbols[TNodeKind ~uint32](
 	specFile string,
 	alloc memarch.AllocationFn,
-	opts ...Option,
-) (*LangParser, *semantics.CompiledSymbolTable, error) {
+	opts ...Option[TNodeKind],
+) (*LangParser[TNodeKind], *semantics.CompiledSymbolTable, error) {
 	cfg := buildConfig(specFile, alloc, opts...)
 
-	compileResult, err := compileDSL(cfg)
+	compileResult, err := compileDSL[TNodeKind](cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -198,9 +195,9 @@ func CompileParserFromSpecWithCompiledSymbols(
 /*
 RunToolchainsFromSpecFile compiles the .lspec at specFile and runs toolchains per PRAGMA and filters.
 */
-func RunToolchainsFromSpecFile(specFile string, alloc memarch.AllocationFn, opts ...Option) error {
+func RunToolchainsFromSpecFile[TNodeKind ~uint32](specFile string, alloc memarch.AllocationFn, opts ...Option[TNodeKind]) error {
 	cfg := buildConfig(specFile, alloc, opts...)
-	compileResult, err := compileDSL(cfg)
+	compileResult, err := compileDSL[TNodeKind](cfg)
 	if err != nil {
 		return err
 	}
@@ -210,11 +207,11 @@ func RunToolchainsFromSpecFile(specFile string, alloc memarch.AllocationFn, opts
 /*
 RunToolchainsFromCompileResult runs toolchain steps on an existing compile result.
 */
-func RunToolchainsFromCompileResult(
-	compileResult *dsl.LangSpecCompileResult,
-	opts ...Option,
+func RunToolchainsFromCompileResult[TNodeKind ~uint32](
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
+	opts ...Option[TNodeKind],
 ) error {
-	cfg := &ParserCompiler{}
+	cfg := &ParserCompiler[TNodeKind]{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -223,8 +220,8 @@ func RunToolchainsFromCompileResult(
 
 // ----------------------------------------------------------------- SINGLE-RESPONSIBILITY HELPERS
 
-func buildConfig(specFile string, alloc memarch.AllocationFn, opts ...Option) *ParserCompiler {
-	cfg := &ParserCompiler{
+func buildConfig[TNodeKind ~uint32](specFile string, alloc memarch.AllocationFn, opts ...Option[TNodeKind]) *ParserCompiler[TNodeKind] {
+	cfg := &ParserCompiler[TNodeKind]{
 		specFile: specFile,
 		allocFn:  alloc,
 	}
@@ -234,7 +231,7 @@ func buildConfig(specFile string, alloc memarch.AllocationFn, opts ...Option) *P
 	return cfg
 }
 
-func (c *ParserCompiler) shouldRunToolchain(name string) bool {
+func (c *ParserCompiler[TNodeKind]) shouldRunToolchain(name string) bool {
 	if len(c.toolchainFilter) == 0 {
 		return true // No filter means run all
 	}
@@ -246,7 +243,7 @@ func (c *ParserCompiler) shouldRunToolchain(name string) bool {
 	return false
 }
 
-func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
+func compileDSL[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind]) (*dsl.LangSpecCompileResult[TNodeKind], error) {
 	compilerConfig := dsl.LangSpecCompilerConfigurationCreate(cfg.allocFn, nil)
 	if cfg.diagnosticSink != nil {
 		compilerConfig.WithDiagnosticSink(cfg.diagnosticSink)
@@ -268,7 +265,7 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	langSpecCompiler := dsl.LangSpecCompilerCreate(compilerConfig)
 	defer dsl.LangSpecCompilerDestroy(langSpecCompiler)
 
-	result, err := dsl.LangSpecCompilerCompile(langSpecCompiler, cfg.specFile)
+	result, err := dsl.LangSpecCompilerCompile[TNodeKind](langSpecCompiler, cfg.specFile)
 	if err != nil {
 		return nil, fmt.Errorf("DSL compilation failed: %w", err)
 	}
@@ -280,7 +277,7 @@ func compileDSL(cfg *ParserCompiler) (*dsl.LangSpecCompileResult, error) {
 	return result, nil
 }
 
-func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) *LangParser {
+func createParser[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind], compileResult *dsl.LangSpecCompileResult[TNodeKind]) *LangParser[TNodeKind] {
 	langSpec := langspec.LangSpecCreate(
 		compileResult.CompiledLexerSpec,
 		compileResult.CompiledParserSpec,
@@ -298,7 +295,7 @@ func createParser(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult)
 
 // ----------------------------------------------------------------- PIPELINE EXECUTION
 
-func executePipeline(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
+func executePipeline[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind], compileResult *dsl.LangSpecCompileResult[TNodeKind]) error {
 	if err := executeGoBindings(cfg, compileResult); err != nil {
 		return fmt.Errorf("go bindings failed: %w", err)
 	}
@@ -314,14 +311,14 @@ func executePipeline(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResu
 	return nil
 }
 
-func executeGoBindings(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
+func executeGoBindings[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind], compileResult *dsl.LangSpecCompileResult[TNodeKind]) error {
 	if !cfg.shouldRunToolchain(toolchain.GoBindingsToolName) {
 		return nil
 	}
 	return toolchain.RunGoBindingsToolchain(compileResult)
 }
 
-func executeSublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
+func executeSublime[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind], compileResult *dsl.LangSpecCompileResult[TNodeKind]) error {
 	if !cfg.shouldRunToolchain(toolchain.SublimeToolName) {
 		return nil
 	}
@@ -333,7 +330,7 @@ func executeSublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResul
 	return runInMemorySublime(cfg, compileResult)
 }
 
-func executeTMComments(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
+func executeTMComments[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind], compileResult *dsl.LangSpecCompileResult[TNodeKind]) error {
 	if !cfg.shouldRunToolchain(toolchain.TmCommentsToolName) {
 		return nil
 	}
@@ -362,7 +359,7 @@ func executeTMComments(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileRe
 	return toolchain.RunTMCommentsToolchain(compileResult, tmCfg)
 }
 
-func runInMemorySublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileResult) error {
+func runInMemorySublime[TNodeKind ~uint32](cfg *ParserCompiler[TNodeKind], compileResult *dsl.LangSpecCompileResult[TNodeKind]) error {
 	pragma, ok := compileResult.CompiledToolPragmas[toolchain.SublimeToolName]
 	if !ok {
 		return nil
@@ -380,22 +377,18 @@ func runInMemorySublime(cfg *ParserCompiler, compileResult *dsl.LangSpecCompileR
 	return dispatchInMemorySublimeGeneration(cfg, compileResult, outputPaths)
 }
 
-func dispatchInMemorySublimeGeneration(
-	cfg *ParserCompiler,
-	compileResult *dsl.LangSpecCompileResult,
+func dispatchInMemorySublimeGeneration[TNodeKind ~uint32](
+	cfg *ParserCompiler[TNodeKind],
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
 	outputPaths []string,
 ) error {
 	if compileResult.CompiledSymbols == nil {
 		return fmt.Errorf("bootstrap sublime: compiled symbols missing")
 	}
-	var factory toolchain.SublimeInMemoryOverrideFactory
-	if cfg.sublimeFactory != nil {
-		factory = toolchain.SublimeInMemoryOverrideFactory(cfg.sublimeFactory)
-	}
-	return toolchain.RunSublimeToolchainFromMemory(
+	return toolchain.RunSublimeToolchainFromMemory[TNodeKind](
 		compileResult,
 		*cfg.sublimeManifest,
-		factory,
+		cfg.sublimeFactory,
 		outputPaths,
 		cfg.fileExtensions,
 		cfg.scopeExtension,

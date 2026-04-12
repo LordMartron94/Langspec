@@ -6,8 +6,9 @@
 // Use CompileParserFromSpec(specFile, alloc, opts...) to compile the DSL and return
 // a LangParser. Use CompileParserFromSpecWithCompiledSymbols when you also need the
 // target language CompiledSymbolTable (e.g. resolving node-kind IDs in LST dumps).
-// This does not run toolchains (no generated files). Options:
-// WithDiagnosticSink for human-readable compile diagnostics; WithNodePoolPrefill and
+// This does not run toolchains (no generated files). Options are bootstrap.Option[TNodeKind]
+// matching the TNodeKind type argument (e.g. Option[dsl.LangSpecParserNodeKind]):
+// WithDiagnosticSink[TNodeKind] for human-readable compile diagnostics; WithNodePoolPrefill and
 // WithNodePoolGrowFn for Syntaxa LST node pool tuning (see langspec.LangParserConfiguration).
 // WithSublimeToolchain is not used by CompileParserFromSpec (ignored); use RunToolchainsFromSpecFile for that.
 //
@@ -21,7 +22,7 @@
 // WithTMCommentsToolchain to override TM comment settings from Go.
 //
 // Use RunToolchainsFromCompileResult when you already have a LangSpecCompileResult
-// (e.g. after dsl.LangSpecCompilerCompile).
+// (e.g. after dsl.LangSpecCompilerCompile). Pass Option[TNodeKind] for the same TNodeKind.
 //
 // # Sublime toolchain: JSON vs in-memory manifest
 //

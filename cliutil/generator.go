@@ -65,9 +65,11 @@ func (g *Generator) Close() {
 RunToolchains executes the generation pipeline. Pass bootstrap.WithToolchainFilter
 to restrict execution to specific outputs (e.g., just "go_bindings").
 */
-func (g *Generator) RunToolchains(opts ...bootstrap.Option) error {
+func (g *Generator) RunToolchains(opts ...bootstrap.Option[dsl.LangSpecParserNodeKind]) error {
 	if len(opts) == 0 {
-		opts = []bootstrap.Option{bootstrap.WithDiagnosticSink(dsl.DefaultLangSpecDiagnosticSink())}
+		opts = []bootstrap.Option[dsl.LangSpecParserNodeKind]{
+			bootstrap.WithDiagnosticSink[dsl.LangSpecParserNodeKind](dsl.DefaultLangSpecDiagnosticSink()),
+		}
 	}
-	return bootstrap.RunToolchainsFromSpecFile(g.specPath, g.allocFn, opts...)
+	return bootstrap.RunToolchainsFromSpecFile[dsl.LangSpecParserNodeKind](g.specPath, g.allocFn, opts...)
 }

@@ -50,14 +50,14 @@ func setupTestCompiler() (
 	return compiler, scratchAllocFn, sink, teardown
 }
 
-// debugParseResult formats parse output from bootstrap (compiled target: uint32 token/role/kind).
+// debugParseResult formats parse output from bootstrap (compiled target node kind TNodeKind ~uint32).
 // sym should be compileResult.CompiledSymbols from the same compile when non-nil so LST node kinds
-// show target-language names, not LangSpecParserNodeKind stringer output.
+// resolve to names via the symbol table.
 func debugParseResult(
 	enable bool,
 	sink *dsl.LangSpecDiagnosticSink,
 	trace *syntaxa.ParseTrace,
-	rootNode *syntaxa.SyntaxaLSTNode[uint32],
+	rootNode *syntaxa.SyntaxaLSTNode[dsl.LangSpecParserNodeKind],
 	sym *semantics.CompiledSymbolTable,
 ) {
 	if !enable {
@@ -68,10 +68,10 @@ func debugParseResult(
 
 	if rootNode != nil {
 		lstDump := rootNode.DebugDump(
-			syntaxa.LSTDebugFormatter[uint32]{
-				FormatKind: func(k uint32) string {
+			syntaxa.LSTDebugFormatter[dsl.LangSpecParserNodeKind]{
+				FormatKind: func(k dsl.LangSpecParserNodeKind) string {
 					if sym != nil {
-						return sym.NodeKindName(k)
+						return sym.NodeKindName(uint32(k))
 					}
 					return strconv.FormatUint(uint64(k), 10)
 				},
@@ -93,7 +93,7 @@ func debugParseResult(
 // logCompileFailureDiagnostics writes validation findings, then either a lowered grammar-package
 // dump (when compileTree ran) or a full LangSpec LST dump (parse succeeded but validation or
 // lowering did not complete). Use after bootstrap compile failure.
-func logCompileFailureDiagnostics(t *testing.T, result *dsl.LangSpecCompileResult) {
+func logCompileFailureDiagnostics(t *testing.T, result *dsl.LangSpecCompileResult[dsl.LangSpecParserNodeKind]) {
 	t.Helper()
 	if result == nil {
 		t.Logf("compile failure diagnostic: nil LangSpecCompileResult")
@@ -118,7 +118,7 @@ func logCompileFailureDiagnostics(t *testing.T, result *dsl.LangSpecCompileResul
 			return strconv.FormatUint(uint64(tok), 10)
 		}
 		dump := pkg.DebugDump(
-			syntaxa.GrammarPackageDebugFormatter[uint32]{
+			syntaxa.GrammarPackageDebugFormatter[dsl.LangSpecParserNodeKind]{
 				FormatToken: formatTok,
 			},
 			func() *syntaxa.GrammarAnalysis { return lowering.GetAnalysis(&pkg) },

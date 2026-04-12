@@ -38,17 +38,17 @@ Edge cases:
 - If the spec has no tokens (resp. no nodes), the generated file omits the Token (resp. Node) type and const block.
 - Returns an error if output-path or package-name is missing when the toolchain is enabled.
 */
-func RunGoBindingsToolchain(compileResult *dsl.LangSpecCompileResult) error {
+func RunGoBindingsToolchain[TNodeKind ~uint32](compileResult *dsl.LangSpecCompileResult[TNodeKind]) error {
 	pragma, ok := compileResult.CompiledToolPragmas[GoBindingsToolName]
 
 	if ok {
-		return processGoBindingsPragma(compileResult, pragma)
+		return processGoBindingsPragma[TNodeKind](compileResult, pragma)
 	}
 
 	return nil
 }
 
-func processGoBindingsPragma(compileResult *dsl.LangSpecCompileResult, pragma dsl.ToolPragma) error {
+func processGoBindingsPragma[TNodeKind ~uint32](compileResult *dsl.LangSpecCompileResult[TNodeKind], pragma dsl.ToolPragma) error {
 	// 1. Validate Enablement safely
 	enabled, ok := pragma.Settings[GoBindingsEnableKey].(string)
 	if !ok || enabled == "false" {
@@ -82,11 +82,11 @@ func processGoBindingsPragma(compileResult *dsl.LangSpecCompileResult, pragma ds
 		return fmt.Errorf("go_bindings path resolution failed for '%s': %w", outputPath, err)
 	}
 
-	return executeGoBindingsToolchain(compileResult, resolved, packageName, typePrefix)
+	return executeGoBindingsToolchain[TNodeKind](compileResult, resolved, packageName, typePrefix)
 }
 
-func executeGoBindingsToolchain(
-	compileResult *dsl.LangSpecCompileResult,
+func executeGoBindingsToolchain[TNodeKind ~uint32](
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
 	outputPath string,
 	packageName string,
 	typePrefix *string,
