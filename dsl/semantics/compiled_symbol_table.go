@@ -507,7 +507,17 @@ func walkPrattCategoryForSymbols(node *Node, env *SemanticEnv, ts, nk map[string
 	case NodeParseNodeName:
 		nk[dslspec.NodeSingleTokenContent(node)] = struct{}{}
 	case NodeParseSymbolReference:
-		nk[dslspec.IdentifierValue(node)] = struct{}{}
+		// Pratt operator targets are parsed as symbol references but may name a lexer token
+		// (infix/postfix) or a parse rule; only the latter are AST node kinds for bindings.
+		name := dslspec.IdentifierValue(node)
+		if name == "" {
+			break
+		}
+		if env.Tokens[name] != nil {
+			ts[name] = struct{}{}
+		} else {
+			nk[name] = struct{}{}
+		}
 	}
 	for _, ch := range node.ChildrenUnsafe() {
 		walkPrattCategoryForSymbols(ch, env, ts, nk)
