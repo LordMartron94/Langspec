@@ -226,10 +226,11 @@ func buildContextsMap[TObservation cmp.Ordered, TToken ~uint32, TTokenRole compa
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 			mergedMeta := mergeInheritedSetChainMetaScope(metaScope, incomingMetaEdges[label])
 			metaScope = mergedMeta
-			if shouldSuppressContextMetaScopeForSetChain(metaScope, incomingMetaEdges[label]) {
-			} else {
-				entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
-			}
+			// Always emit meta_scope on each parse context that has semantic meta.
+			// SET-chain suppression was removed: Sublime does not reliably inherit a
+			// parent context's meta_scope onto matches in a child context reached only
+			// via set:, so skipping meta_scope on those targets left tail tokens unscoped.
+			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}
 
 		if state.HasFallthroughPop {
@@ -966,21 +967,6 @@ func buildIncomingMetaEdges[TObservation cmp.Ordered, TContext any](
 		}
 	}
 	return incoming
-}
-
-func shouldSuppressContextMetaScopeForSetChain(metaScope string, edges []incomingMetaEdge) bool {
-	if metaScope == "" || len(edges) == 0 {
-		return false
-	}
-	for _, edge := range edges {
-		if edge.Operation != editor.STACK_SET {
-			return false
-		}
-		if edge.SourceMeta == "" || edge.SourceMeta != metaScope {
-			return false
-		}
-	}
-	return true
 }
 
 func mergeInheritedSetChainMetaScope(metaScope string, edges []incomingMetaEdge) string {
