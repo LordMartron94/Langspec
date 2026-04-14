@@ -178,6 +178,10 @@ func validateImportModule(
 	sourceRunes, _ := system.FileReadAllRunes(sourceFile)
 	sourceText := string(sourceRunes)
 	opts := extractCompileOptions(root)
+	warningsAsErrors := opts.WarningsAsErrors
+	if compiler.config.validationWarningsAsErrors != nil {
+		warningsAsErrors = *compiler.config.validationWarningsAsErrors
+	}
 	preValidationState := &semantics.GrammarValidationState[LangSpecParserNodeKind]{
 		ImportedModules: graph.byAlias,
 		LibraryMode:     opts.Library,
@@ -221,7 +225,7 @@ func validateImportModule(
 			}
 		}
 	}
-	if hasCriticalValidationErrors(validationEntries) {
+	if validationFailsCompilation(validationEntries, warningsAsErrors) {
 		return fmt.Errorf("import '%s' (%s) failed validation", alias, sourceFile)
 	}
 	return nil

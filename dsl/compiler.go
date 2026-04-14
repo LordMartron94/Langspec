@@ -29,6 +29,9 @@ type ToolPragma struct {
 
 type dslCompileOptions struct {
 	Library bool
+	// WarningsAsErrors when true (default) makes WARNING-level validation fail compilation.
+	// Set via PRAGMA lspec { warnings_as_errors = false } to allow warnings.
+	WarningsAsErrors bool
 }
 
 /* CompiledLangSpec is compileTree output: lexer/parser specs, lowered grammar, EOF token, and pragmas. */
@@ -217,20 +220,22 @@ func extractPragmas(rootNode *Node) map[string]ToolPragma {
 func extractCompileOptions(rootNode *Node) dslCompileOptions {
 	section := rootNode.FindFirstKind(dslspec.NodePragmaSection)
 	if section == nil {
-		return dslCompileOptions{}
+		return dslCompileOptions{WarningsAsErrors: true}
 	}
 
-	opts := dslCompileOptions{}
+	opts := dslCompileOptions{WarningsAsErrors: true}
 	for _, block := range section.FindAllKind(dslspec.NodePragmaBlock) {
 		keyNode := block.FindFirstKind(dslspec.NodePragmaBlockKey)
 		if keyNode == nil || !pragmaKeyMatches(keyNode, "lspec", "") {
 			continue
 		}
-		val, exists := extractPragmaSettings(block)["library"]
-		if !exists {
-			continue
+		settings := extractPragmaSettings(block)
+		if val, ok := settings["library"]; ok {
+			opts.Library = pragmaSettingAsBool(val)
 		}
-		opts.Library = pragmaSettingAsBool(val)
+		if val, ok := settings["warnings_as_errors"]; ok {
+			opts.WarningsAsErrors = pragmaSettingAsBool(val)
+		}
 	}
 	return opts
 }

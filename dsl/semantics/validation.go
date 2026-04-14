@@ -75,6 +75,7 @@ const (
 	VALIDATION_UNRESOLVED_PAIR_REF            ValidationCode = "V_PAR012"
 	VALIDATION_PAIR_REF_MALFORMED             ValidationCode = "V_PAR013"
 	VALIDATION_SEPARATOR_REPEAT_OPTIONAL_TAIL ValidationCode = "V_PAR014"
+	VALIDATION_ORDERED_CHOICE_OVERLAP         ValidationCode = "V_PAR015"
 
 	VALIDATION_DUPLICATE_PRATT_EXPR             ValidationCode = "V_PRA001"
 	VALIDATION_PRATT_UNRESOLVED_TOKEN           ValidationCode = "V_PRA002"
@@ -1508,6 +1509,155 @@ func isOptionalOrNullableNode[TNodeKind ~uint32](g *syntaxa.Grammar[lexarch.Toke
 	return analysis.Nullable[syntaxa.NodeKeyFromPath(*g.NodePath)]
 }
 
+const choiceOverlapMaxPrefixDepth = 4
+const choiceOverlapMaxPrefixEnumerations = 8192
+
+type choiceOverlapKind uint8
+
+const (
+	choiceOverlapResolved choiceOverlapKind = iota
+	choiceOverlapOrderedWarning
+	choiceOverlapLegacyError
+)
+
+/*
+classifyChoiceOverlapForToken simulates Syntaxa choice dispatch over bounded peek prefixes
+starting with conflictToken (peek(0)). Returns choiceOverlapResolved when every simulated
+prefix leaves at most one candidate arm; choiceOverlapOrderedWarning when some prefix
+leaves multiple candidates (PEG / ordered choice applies); choiceOverlapLegacyError when
+simulation cannot run (missing token vocabulary) or analysis is unusable.
+*/
+func classifyChoiceOverlapForToken[TNodeKind ~uint32](
+	pkg *GrammarPackage[TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	choiceNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+	conflictToken lexarch.TokenKind,
+) choiceOverlapKind {
+	if analysis == nil || len(pkg.TokensUsed) == 0 {
+		return choiceOverlapLegacyError
+	}
+
+	maxOff := maxGuardPeekOffsetForChoice[TNodeKind](analysis, choiceNode)
+	K := maxOff + 1
+	if K < 1 {
+		K = 1
+	}
+	if K > choiceOverlapMaxPrefixDepth {
+		K = choiceOverlapMaxPrefixDepth
+	}
+
+	extended := extendedTokenAlphabet(pkg.TokensUsed)
+	for {
+		if K <= 1 {
+			break
+		}
+		prod := 1
+		for j := 0; j < K-1; j++ {
+			prod *= len(extended)
+		}
+		if prod <= choiceOverlapMaxPrefixEnumerations {
+			break
+		}
+		K--
+	}
+
+	arms := choiceNode.Children
+	prefix := make([]lexarch.TokenKind, K)
+	prefix[0] = conflictToken
+
+	multi := false
+	unmodelled := false
+
+	var visit func(pos int)
+	visit = func(pos int) {
+		if unmodelled {
+			return
+		}
+		if pos == K {
+			peekFn := func(n int) syntaxa.Lexeme {
+				if n >= 0 && n < len(prefix) {
+					return syntaxa.Lexeme{Token: prefix[n]}
+				}
+				return syntaxa.Lexeme{Token: lexarch.TokenKindEOF}
+			}
+			cands, mode := syntaxa.ChoiceCandidateIndicesFromAnalysis(analysis, arms, peekFn)
+			if mode == syntaxa.ChoiceDispatchFallback {
+				unmodelled = true
+				return
+			}
+			if len(cands) > 1 {
+				multi = true
+			}
+			return
+		}
+		for _, tk := range extended {
+			prefix[pos] = tk
+			visit(pos + 1)
+			if unmodelled {
+				return
+			}
+		}
+	}
+	if K == 1 {
+		peekFn := func(n int) syntaxa.Lexeme {
+			if n == 0 {
+				return syntaxa.Lexeme{Token: conflictToken}
+			}
+			return syntaxa.Lexeme{Token: lexarch.TokenKindEOF}
+		}
+		cands, mode := syntaxa.ChoiceCandidateIndicesFromAnalysis(analysis, arms, peekFn)
+		if mode == syntaxa.ChoiceDispatchFallback {
+			return choiceOverlapLegacyError
+		}
+		if len(cands) > 1 {
+			return choiceOverlapOrderedWarning
+		}
+		return choiceOverlapResolved
+	}
+	visit(1)
+	if unmodelled {
+		return choiceOverlapLegacyError
+	}
+	if multi {
+		return choiceOverlapOrderedWarning
+	}
+	return choiceOverlapResolved
+}
+
+func maxGuardPeekOffsetForChoice[TNodeKind ~uint32](
+	analysis *syntaxa.GrammarAnalysis,
+	choiceNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) int {
+	maxOff := 0
+	for _, c := range choiceNode.Children {
+		if c == nil || c.NodePath == nil {
+			continue
+		}
+		key := syntaxa.NodeKeyFromPath(*c.NodePath)
+		g := guardForChoiceArm[TNodeKind](analysis, key, c)
+		for _, l := range g {
+			if l.Offset > maxOff {
+				maxOff = l.Offset
+			}
+		}
+	}
+	return maxOff
+}
+
+func extendedTokenAlphabet(tokens []lexarch.TokenKind) []lexarch.TokenKind {
+	seen := make(map[lexarch.TokenKind]struct{}, len(tokens)+1)
+	for _, t := range tokens {
+		seen[t] = struct{}{}
+	}
+	seen[lexarch.TokenKindEOF] = struct{}{}
+	out := make([]lexarch.TokenKind, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 func checkGrammarChoiceConflicts[TNodeKind ~uint32](
 	ctx *ValidationCtx[TNodeKind],
 	pkg *GrammarPackage[TNodeKind],
@@ -1546,6 +1696,8 @@ func analyzeChoiceNode[TNodeKind ~uint32](
 ) {
 	seenTokens := make(map[lexarch.TokenKind]int)
 	reportedPrev := make(map[lexarch.TokenKind]bool)
+	tokenOverlapClass := make(map[lexarch.TokenKind]choiceOverlapKind)
+	orderedWarnReported := make(map[lexarch.TokenKind]bool)
 	sym := ctx.RunState.Symbols
 
 	ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*choiceNode.NodePath)]
@@ -1575,10 +1727,30 @@ func analyzeChoiceNode[TNodeKind ~uint32](
 				continue
 			}
 
+			if _, ok := tokenOverlapClass[token]; !ok {
+				tokenOverlapClass[token] = classifyChoiceOverlapForToken(pkg, analysis, choiceNode, token)
+			}
+			switch tokenOverlapClass[token] {
+			case choiceOverlapResolved:
+				continue
+			case choiceOverlapOrderedWarning:
+				if !orderedWarnReported[token] {
+					msg := fmt.Sprintf(
+						"Rule '%s': token '%s' matches more than one ordered choice arm for some peek prefixes; alternatives are tried in source order (earlier alternative wins on success). Add disjoint `predict` or reorder if a later arm should take precedence.",
+						ruleName, formatCompiledToken(sym, token),
+					)
+					anchor := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, choiceNode, child)
+					ctx.ReportWarning(VALIDATION_ORDERED_CHOICE_OVERLAP.String(), msg, anchor)
+					orderedWarnReported[token] = true
+				}
+				continue
+			case choiceOverlapLegacyError:
+				// fall through to V_PAR009
+			}
+
 			tokenLabel := formatCompiledToken(sym, token)
 			note := buildFirstSetConflictNote(sym, token, prevBranch, i, g1, g2)
 
-			// 1. Report the earlier branch (only once per token to avoid spam)
 			if !reportedPrev[token] {
 				prevNode := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, choiceNode, prevChild)
 				msg := fmt.Sprintf(
@@ -1589,7 +1761,6 @@ func analyzeChoiceNode[TNodeKind ~uint32](
 				reportedPrev[token] = true
 			}
 
-			// 2. Report the current branch (always)
 			currNode := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, choiceNode, child)
 			msg := fmt.Sprintf(
 				"FIRST-set conflict in rule '%s'. Token '%s' is ambiguous; it is already expected by an earlier branch (%d).%s",

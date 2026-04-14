@@ -6,11 +6,14 @@ import (
 	"foundation/system"
 	"foundation/text"
 	"io"
+	"maps"
 	"sort"
 	"strings"
 	"time"
 
 	"langspec/editor"
+	"lexarch"
+	"syntaxa"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -44,6 +47,11 @@ type contextEntry struct {
 	Escape         *string        `yaml:"escape,omitempty"`
 	EscapeCaptures map[int]string `yaml:"escape_captures,omitempty"`
 	Include        *string        `yaml:"include,omitempty"`
+	// BranchPoint + Branch are Sublime Text 4 (syntax version 2): ordered PEG-style
+	// alternatives when static lookaheads cannot separate targets. See
+	// https://www.sublimetext.com/docs/syntax.html — branch / branch_point / fail.
+	BranchPoint *string  `yaml:"branch_point,omitempty"`
+	Branch      []string `yaml:"branch,omitempty"`
 }
 
 type contextsSection struct {
@@ -53,14 +61,18 @@ type contextsSection struct {
 /*
 GenerateSyntaxFile serializes editor IR to a Sublime Text .sublime-syntax YAML file at outputFile.
 If pruneWarnings is non-nil, each unreachable context removed after reachability analysis is reported there (one line per context).
+If generationWarnings is non-nil, consecutive rules that remain identical after branch expansion are reported.
+peekOpt is optional: when non-nil, PeekAfterMatch on transitions is turned into positive lookaheads here (not in editor IR).
 */
-func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerState, TNodeKind comparable, TContext any](
+func GenerateSyntaxFile[TObservation cmp.Ordered, TToken ~uint32, TTokenRole comparable, TLexerState, TNodeKind comparable, TContext any](
 	ir *editor.EditorIR[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext],
 	fileExtensions []string,
 	baseScope string,
 	outputFile string,
 	config ExtractionConfig[TContext],
 	pruneWarnings io.Writer,
+	generationWarnings io.Writer,
+	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) error {
 	sb := &strings.Builder{}
 
@@ -70,7 +82,7 @@ func GenerateSyntaxFile[TObservation cmp.Ordered, TToken, TTokenRole, TLexerStat
 		return err
 	}
 
-	if err := writeContexts(sb, ir.LanguageMachine, config, pruneWarnings); err != nil {
+	if err := writeContexts(sb, ir.LanguageMachine, config, pruneWarnings, generationWarnings, peekOpt); err != nil {
 		return err
 	}
 
@@ -109,22 +121,26 @@ func writeMetadata(sb *strings.Builder, name string, exts []string, baseScope st
 	return encodeAndWriteYAML(sb, meta)
 }
 
-func writeContexts[TObservation cmp.Ordered, TContext any](
+func writeContexts[TObservation cmp.Ordered, TToken ~uint32, TTokenRole comparable, TContext any](
 	sb *strings.Builder,
 	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
 	pruneWarnings io.Writer,
+	generationWarnings io.Writer,
+	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) error {
 	writeSectionHeader(sb, "Contexts & Rules")
-	contextsMap := buildContextsMap(machine, config, pruneWarnings)
+	contextsMap := buildContextsMap(machine, config, pruneWarnings, generationWarnings, peekOpt)
 	section := contextsSection{Contexts: contextsMap}
 	return encodeAndWriteYAML(sb, section)
 }
 
-func buildContextsMap[TObservation cmp.Ordered, TContext any](
+func buildContextsMap[TObservation cmp.Ordered, TToken ~uint32, TTokenRole comparable, TContext any](
 	machine editor.LanguageMachine[TObservation, TContext],
 	config ExtractionConfig[TContext],
 	pruneWarnings io.Writer,
+	generationWarnings io.Writer,
+	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) map[string][]contextEntry {
 	representatives, labelToRepresentative := minimizeStatesForEmission(machine, config)
 	incomingMetaEdges := buildIncomingMetaEdges(representatives, labelToRepresentative, config)
@@ -132,6 +148,7 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	contextsMap := make(map[string][]contextEntry)
 	baseEntriesByLabel := make(map[string][]contextEntry)
 	baseSignatureToLabels := make(map[string][]string)
+	branchExtras := make(map[string][]contextEntry)
 
 	repLabels := make([]string, 0, len(representatives))
 	for label := range representatives {
@@ -139,20 +156,26 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	}
 	sort.Strings(repLabels)
 
-	for _, label := range repLabels {
-		state := representatives[label]
-		baseEntries := buildTransitionsRemapped(state.Transitions, config, labelToRepresentative, label)
-		baseEntriesByLabel[label] = baseEntries
-
-		sig := generateEntriesSignature(baseEntries)
-		baseSignatureToLabels[sig] = append(baseSignatureToLabels[sig], label)
-	}
-
-	usedNames := make(map[string]bool, len(repLabels))
+	usedNames := make(map[string]bool, len(repLabels)+8)
 	for _, label := range repLabels {
 		usedNames[label] = true
 	}
 	usedNames["prototype"] = true
+
+	for _, label := range repLabels {
+		state := representatives[label]
+		baseEntries := buildTransitionsRemapped(state.Transitions, config, labelToRepresentative, label, peekOpt)
+		var extra map[string][]contextEntry
+		baseEntries, extra = mergeIdenticalMatchesToBranchPoints(baseEntries, label, usedNames)
+		maps.Copy(branchExtras, extra)
+		baseEntriesByLabel[label] = baseEntries
+		if generationWarnings != nil {
+			reportDuplicateShadowedMatches(generationWarnings, label, baseEntries)
+		}
+
+		sig := generateEntriesSignature(baseEntries)
+		baseSignatureToLabels[sig] = append(baseSignatureToLabels[sig], label)
+	}
 
 	sharedNameBySignature := make(map[string]string)
 	sharedPool := make(map[string][]contextEntry)
@@ -242,14 +265,21 @@ func buildContextsMap[TObservation cmp.Ordered, TContext any](
 	}
 
 	if len(machine.AmbientTransitions) > 0 {
-		prototypeEntries := buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative, "prototype")
+		prototypeEntries := buildTransitionsRemapped(machine.AmbientTransitions, config, labelToRepresentative, "prototype", peekOpt)
+		var pExtra map[string][]contextEntry
+		prototypeEntries, pExtra = mergeIdenticalMatchesToBranchPoints(prototypeEntries, "prototype", usedNames)
+		maps.Copy(branchExtras, pExtra)
 		contextsMap["prototype"] = prototypeEntries
 	}
 
-	lexModeContexts := buildLexModeContexts(machine.LexerModeStates, config)
+	for _, st := range machine.LexerModeStates {
+		usedNames[determineContextLabel(st.Label)] = true
+	}
+	lexModeContexts := buildLexModeContexts(machine.LexerModeStates, config, peekOpt, branchExtras, usedNames)
 	for name, entries := range lexModeContexts {
 		contextsMap[name] = entries
 	}
+	maps.Copy(contextsMap, branchExtras)
 	pruneUnreachableContexts(contextsMap, pruneWarnings)
 	validateContextReferences(contextsMap)
 
@@ -318,6 +348,7 @@ func contextEntryReferencedContexts(ent contextEntry) []string {
 	if ent.Include != nil && *ent.Include != "" {
 		out = append(out, *ent.Include)
 	}
+	out = append(out, ent.Branch...)
 	return out
 }
 
@@ -492,6 +523,127 @@ func fullStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	return sb.String()
 }
 
+func peekAfterMatchSignature(peek []syntaxa.Lookahead[lexarch.TokenKind]) string {
+	if len(peek) == 0 {
+		return ""
+	}
+	cp := append([]syntaxa.Lookahead[lexarch.TokenKind](nil), peek...)
+	sort.Slice(cp, func(i, j int) bool {
+		if cp[i].Offset != cp[j].Offset {
+			return cp[i].Offset < cp[j].Offset
+		}
+		return cp[i].Expected < cp[j].Expected
+	})
+	var b strings.Builder
+	for i, l := range cp {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%d:%d", l.Offset, uint32(l.Expected))
+	}
+	return b.String()
+}
+
+func reportDuplicateShadowedMatches(w io.Writer, contextLabel string, entries []contextEntry) {
+	for i := 0; i+1 < len(entries); i++ {
+		a, b := entries[i], entries[i+1]
+		if a.Match == nil || b.Match == nil {
+			continue
+		}
+		if *a.Match != *b.Match {
+			continue
+		}
+		if a.Include != nil || b.Include != nil {
+			continue
+		}
+		if contextEntryStackEffectKey(a) == contextEntryStackEffectKey(b) {
+			continue
+		}
+		fmt.Fprintf(w, "langspec sublime: context %q rules %d and %d: identical match; first wins (unreachable later path)\n",
+			contextLabel, i+1, i+2)
+	}
+}
+
+func contextEntryStackEffectKey(e contextEntry) string {
+	return fmt.Sprintf("set=%v|push=%v|pop=%v|embed=%s", e.Set, e.Push, e.Pop, e.Embed)
+}
+
+func contextEntriesShareLexemeAndMeta(a, b contextEntry) bool {
+	if a.Match == nil || b.Match == nil {
+		return false
+	}
+	if *a.Match != *b.Match {
+		return false
+	}
+	if a.Scope != b.Scope {
+		return false
+	}
+	return maps.Equal(a.Captures, b.Captures)
+}
+
+// branchableStackRun is true when at least two rules differ in parse-stack effect.
+func branchableStackRun(run []contextEntry) bool {
+	if len(run) < 2 {
+		return false
+	}
+	seen := make(map[string]struct{})
+	for _, e := range run {
+		seen[contextEntryStackEffectKey(e)] = struct{}{}
+	}
+	return len(seen) >= 2
+}
+
+// mergeIdenticalMatchesToBranchPoints turns consecutive rules with the same emitted
+// `match` (and scope/captures) but different stack targets into ST4 branch points:
+// a zero-width parent (?=M) with branch_point + branch, and one context per arm that
+// repeats the full match and applies that arm’s stack action. That mirrors PEG ordered
+// choice: the engine may rewind to the branch point and try the next arm (see fail:).
+func mergeIdenticalMatchesToBranchPoints(entries []contextEntry, parentLabel string, used map[string]bool) ([]contextEntry, map[string][]contextEntry) {
+	extras := make(map[string][]contextEntry)
+	if len(entries) < 2 {
+		return entries, extras
+	}
+	out := make([]contextEntry, 0, len(entries))
+	i := 0
+	for i < len(entries) {
+		e := entries[i]
+		if e.Match == nil || e.Include != nil {
+			out = append(out, e)
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(entries) && contextEntriesShareLexemeAndMeta(entries[i], entries[j]) {
+			j++
+		}
+		run := entries[i:j]
+		if len(run) < 2 || !branchableStackRun(run) {
+			out = append(out, run...)
+			i = j
+			continue
+		}
+		full := *run[0].Match
+		parentMatch := "(?=" + full + ")"
+		bp := makeUniqueContextName(parentLabel+"__bp", used)
+		used[bp] = true
+		names := make([]string, len(run))
+		for k := range run {
+			armName := makeUniqueContextName(fmt.Sprintf("%s__b%d", parentLabel, k), used)
+			used[armName] = true
+			names[k] = armName
+			arm := run[k]
+			extras[armName] = []contextEntry{arm}
+		}
+		out = append(out, contextEntry{
+			Match:       stringPtr(parentMatch),
+			BranchPoint: stringPtr(bp),
+			Branch:      names,
+		})
+		i = j
+	}
+	return out, extras
+}
+
 func localTransitionEmissionSignature[TObservation cmp.Ordered, TContext any](
 	tr editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
@@ -514,6 +666,8 @@ func localTransitionEmissionSignature[TObservation cmp.Ordered, TContext any](
 	}
 
 	sb.WriteString(regexStr)
+	sb.WriteString("||")
+	sb.WriteString(peekAfterMatchSignature(tr.PeekAfterMatch))
 	sb.WriteString("||")
 	sb.WriteString(config.ExtractScope(tr.MatchContext))
 	sb.WriteString("||")
@@ -597,24 +751,26 @@ func foreignPayloadEmissionSignature[TObservation cmp.Ordered, TContext any](
 	return sb.String()
 }
 
-func buildTransitionsRemapped[TObservation cmp.Ordered, TContext any](
+func buildTransitionsRemapped[TObservation cmp.Ordered, TToken ~uint32, TTokenRole comparable, TContext any](
 	transitions []editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
 	labelToRepresentative map[string]string,
 	sourceLabel string,
+	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) []contextEntry {
 	entries := make([]contextEntry, 0, len(transitions))
 	for _, t := range transitions {
-		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative, sourceLabel))
+		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative, sourceLabel, peekOpt))
 	}
 	return entries
 }
 
-func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
+func buildSingleTransitionRemapped[TObservation cmp.Ordered, TToken ~uint32, TTokenRole comparable, TContext any](
 	t editor.EditorTransition[TObservation, TContext],
 	config ExtractionConfig[TContext],
 	labelToRepresentative map[string]string,
 	sourceLabel string,
+	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) contextEntry {
 	var regexStr string
 	if t.RegexPattern != nil {
@@ -629,6 +785,17 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TContext any](
 
 	if t.IsLookahead {
 		regexStr = fmt.Sprintf("(?=%s)", regexStr)
+	} else if len(t.PeekAfterMatch) > 0 {
+		if peekOpt != nil && len(t.Targets) > 0 {
+			afterID := t.Targets[0].LoweringContextID
+			if afterID != "" {
+				var err error
+				regexStr, err = applyPeekAfterMatchToRegex(regexStr, t.PeekAfterMatch, afterID, peekOpt)
+				if err != nil {
+					panic(fmt.Errorf("sublime peek lookahead: %w", err))
+				}
+			}
+		}
 	}
 
 	entry := contextEntry{
@@ -702,9 +869,12 @@ func applyLexModeStack[TObservation cmp.Ordered, TContext any](
 	}
 }
 
-func buildLexModeContexts[TObservation cmp.Ordered, TContext any](
+func buildLexModeContexts[TObservation cmp.Ordered, TToken ~uint32, TTokenRole comparable, TContext any](
 	lexerModeStates []editor.EditorState[TObservation, TContext],
 	config ExtractionConfig[TContext],
+	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
+	branchExtras map[string][]contextEntry,
+	usedNames map[string]bool,
 ) map[string][]contextEntry {
 	if len(lexerModeStates) == 0 {
 		return nil
@@ -712,7 +882,10 @@ func buildLexModeContexts[TObservation cmp.Ordered, TContext any](
 	contexts := make(map[string][]contextEntry, len(lexerModeStates))
 	for _, state := range lexerModeStates {
 		label := determineContextLabel(state.Label)
-		entries := buildTransitionsRemapped(state.Transitions, config, map[string]string{}, label)
+		entries := buildTransitionsRemapped(state.Transitions, config, map[string]string{}, label, peekOpt)
+		var lExtra map[string][]contextEntry
+		entries, lExtra = mergeIdenticalMatchesToBranchPoints(entries, label, usedNames)
+		maps.Copy(branchExtras, lExtra)
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}

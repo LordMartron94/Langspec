@@ -77,6 +77,9 @@ type LangSpecCompilerConfiguration struct {
 
 	// collectParseTraceForLspec enables syntaxa parse trace when parsing .lspec sources (high allocation cost).
 	collectParseTraceForLspec bool
+
+	// validationWarningsAsErrors when non-nil overrides PRAGMA lspec.warnings_as_errors for whether WARNING severity fails compilation.
+	validationWarningsAsErrors *bool
 }
 
 /*
@@ -151,6 +154,17 @@ When false (default), LangSpecCompileResult.Trace may be nil and LangSpecCompile
 */
 func (c *LangSpecCompilerConfiguration) WithCollectParseTraceForLspec(v bool) *LangSpecCompilerConfiguration {
 	c.collectParseTraceForLspec = v
+	return c
+}
+
+/*
+WithValidationWarningsAsErrors overrides PRAGMA lspec { warnings_as_errors = ... } for compilation failure policy.
+
+When true (default via PRAGMA when unset), WARNING-level validation entries fail the compile.
+When false, only ERROR and FATAL fail compilation.
+*/
+func (c *LangSpecCompilerConfiguration) WithValidationWarningsAsErrors(v bool) *LangSpecCompilerConfiguration {
+	c.validationWarningsAsErrors = &v
 	return c
 }
 
@@ -337,9 +351,14 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 		}
 		return result, importResolveErr
 	}
+	compileOpts := extractCompileOptions(rootNode)
+	warningsAsErrors := compileOpts.WarningsAsErrors
+	if compiler.config.validationWarningsAsErrors != nil {
+		warningsAsErrors = *compiler.config.validationWarningsAsErrors
+	}
 	preValidationState := &semantics.GrammarValidationState[TNodeKind]{
 		ImportedModules: importGraph.byAlias,
-		LibraryMode:     extractCompileOptions(rootNode).Library,
+		LibraryMode:     compileOpts.Library,
 	}
 	validationEntries, validationErr := validation.LSTValidatorRun(
 		langSpecValidatorConfigurationNew[TNodeKind](compiler.config.stageReporter),
@@ -356,7 +375,7 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 		return result, validationErr
 	}
 
-	if hasCriticalValidationErrors(validationEntries) {
+	if validationFailsCompilation(validationEntries, warningsAsErrors) {
 		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, validationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("parsing failed with validation errors")
 	}
@@ -402,7 +421,7 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 		return result, postValidationErr
 	}
 
-	if hasCriticalValidationErrors(postValidationEntries) {
+	if validationFailsCompilation(postValidationEntries, warningsAsErrors) {
 		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, postValidationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("compilation failed with grammar safety errors")
 	}
@@ -410,15 +429,22 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 	return result, nil
 }
 
-// Helper method to keep the main function clean
-func hasCriticalValidationErrors(entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) bool {
+// validationFailsCompilation returns true when entries contain a severity that should fail compilation.
+// When warningsAsErrors is true, WARNING and above fail; when false, only ERROR and FATAL fail.
+func validationFailsCompilation(entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind], warningsAsErrors bool) bool {
 	if entries == nil {
 		return false
 	}
 	for _, stage := range entries.Results {
 		for _, entry := range stage.Entries {
-			if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
-				return true
+			if warningsAsErrors {
+				if entry.Severity > validation.VALIDATION_SEVERITY_INFO {
+					return true
+				}
+			} else {
+				if entry.Severity >= validation.VALIDATION_SEVERITY_ERROR {
+					return true
+				}
 			}
 		}
 	}

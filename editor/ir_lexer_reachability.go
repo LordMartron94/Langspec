@@ -109,6 +109,23 @@ func editorApplyLexerStackAfterRule(
 }
 
 /*
+LexingRulesGroupedByLexerState sorts rules per lexer state by priority (desc) then token id.
+Used by syntax emitters (e.g. Sublime) with LexerStackReachabilityFromStateGraph.
+*/
+func LexingRulesGroupedByLexerState[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+](
+	lexingRuleset *LexingRuleSet[TObservation, TToken, TTokenRole],
+) (
+	rulesByState map[string][]LexingRule[TObservation, TToken, TTokenRole],
+	allLexerStates []string,
+) {
+	return editorLexRulesGroupedByState(lexingRuleset)
+}
+
+/*
 editorLexRulesGroupedByState sorts rules per lexer state by priority (desc) then token id.
 */
 func editorLexRulesGroupedByState[
@@ -256,6 +273,40 @@ func editorComputeLexerStackReachability[
 	}
 
 	return reached, nil
+}
+
+/*
+LexerStackReachabilityFromStateGraph is the exported name for editorComputeLexerStackReachability.
+*/
+func LexerStackReachabilityFromStateGraph[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+	TNodeKind comparable,
+](
+	sg *lowering.StateGraph[TNodeKind],
+	rulesByState map[string][]LexingRule[TObservation, TToken, TTokenRole],
+) (map[string]map[string]bool, error) {
+	return editorComputeLexerStackReachability(sg, rulesByState)
+}
+
+/*
+ResolveLexingRuleAtParseContext returns the lexing rule for token tok at parse context
+parseContextID using the same reachability rules as EditorIRFromStateGraph. Syntax
+emitters use this to build peek lookaheads from PeekAfterMatch constraints; the editor
+IR carries only grammar data, not composed regexes.
+*/
+func ResolveLexingRuleAtParseContext[
+	TObservation cmp.Ordered,
+	TToken ~uint32,
+	TTokenRole comparable,
+](
+	parseContextID string,
+	tok lexarch.TokenKind,
+	reached map[string]map[string]bool,
+	rulesByState map[string][]LexingRule[TObservation, TToken, TTokenRole],
+) (LexingRule[TObservation, TToken, TTokenRole], bool, error) {
+	return editorResolveLexingRuleForParseTransition(parseContextID, tok, reached, rulesByState)
 }
 
 func editorLexRuleSignature[

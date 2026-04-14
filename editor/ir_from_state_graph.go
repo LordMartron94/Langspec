@@ -87,7 +87,11 @@ func EditorIRFromStateGraph[
 	stateByID := make(map[string]*EditorState[TObservation, TContext])
 	for _, c := range sg.Contexts {
 		sanitizedID := sanitizer.Sanitize(c.ID)
-		s := &EditorState[TObservation, TContext]{ID: sanitizedID, Label: c.Label}
+		s := &EditorState[TObservation, TContext]{
+			ID:                sanitizedID,
+			Label:             c.Label,
+			LoweringContextID: c.ID,
+		}
 		stateByID[c.ID] = s
 
 		if meta, ok := sg.ContextMeta[c.ID]; ok {
@@ -176,6 +180,12 @@ func EditorIRFromStateGraph[
 			// recovery lookahead pops so boundary ownership stays deterministic.
 			if pairs[i].tr.Token == pairs[j].tr.Token && pairs[i].tr.IsRecoveryTransition != pairs[j].tr.IsRecoveryTransition {
 				return !pairs[i].tr.IsRecoveryTransition
+			}
+			// Guarded (predict) arms before unguarded so first-match emit order matches PEG.
+			gi := len(pairs[i].tr.PeekAfterMatch) > 0
+			gj := len(pairs[j].tr.PeekAfterMatch) > 0
+			if gi != gj {
+				return gi && !gj
 			}
 			// Absolute deterministic tie-breaker within same priority/token class.
 			if pairs[i].order != pairs[j].order {
@@ -371,12 +381,13 @@ func buildDefaultTransition[
 	}
 
 	out := EditorTransition[TObservation, TContext]{
-		OnPattern:    lexRule.Pattern,
-		MatchContext: config.contextProducer(edCtx),
-		Operation:    stackOpFromLowering(tr.Operation),
-		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
-		PopAmount:    determinePopAmount(tr),
-		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
+		OnPattern:      lexRule.Pattern,
+		MatchContext:   config.contextProducer(edCtx),
+		Operation:      stackOpFromLowering(tr.Operation),
+		Targets:        resolveTargets(tr.TargetContextIDs, stateByID),
+		PopAmount:      determinePopAmount(tr),
+		IsLookahead:    tr.Operation == lowering.OpSyncTokenNoConsume,
+		PeekAfterMatch: append([]syntaxa.Lookahead[lexarch.TokenKind](nil), tr.PeekAfterMatch...),
 	}
 	copyLexStackFromLexingRule(&out, lexRule)
 	return out, true
@@ -427,6 +438,7 @@ func buildOverrideTransition[
 			Captures:       override.Captures,
 			Operation:      STACK_EMBED,
 			ForeignPayload: override.ForeignPayload,
+			PeekAfterMatch: append([]syntaxa.Lookahead[lexarch.TokenKind](nil), tr.PeekAfterMatch...),
 		}
 		if lexOK {
 			copyLexStackFromLexingRule(&out, lexRule)
@@ -437,12 +449,13 @@ func buildOverrideTransition[
 	if override.DelimitedPayload != nil {
 		bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
 		out := EditorTransition[TObservation, TContext]{
-			OnPattern:    pat,
-			RegexPattern: regexPat,
-			MatchContext: matchCtx,
-			Captures:     override.Captures,
-			Operation:    STACK_PUSH,
-			Targets:      []*EditorState[TObservation, TContext]{bodyState},
+			OnPattern:      pat,
+			RegexPattern:   regexPat,
+			MatchContext:   matchCtx,
+			Captures:       override.Captures,
+			Operation:      STACK_PUSH,
+			Targets:        []*EditorState[TObservation, TContext]{bodyState},
+			PeekAfterMatch: append([]syntaxa.Lookahead[lexarch.TokenKind](nil), tr.PeekAfterMatch...),
 		}
 		if lexOK {
 			copyLexStackFromLexingRule(&out, lexRule)
@@ -451,14 +464,15 @@ func buildOverrideTransition[
 	}
 
 	out := EditorTransition[TObservation, TContext]{
-		OnPattern:    pat,
-		RegexPattern: regexPat,
-		MatchContext: matchCtx,
-		Captures:     override.Captures,
-		Operation:    stackOpFromLowering(tr.Operation),
-		Targets:      resolveTargets(tr.TargetContextIDs, stateByID),
-		PopAmount:    determinePopAmount(tr),
-		IsLookahead:  tr.Operation == lowering.OpSyncTokenNoConsume,
+		OnPattern:      pat,
+		RegexPattern:   regexPat,
+		MatchContext:   matchCtx,
+		Captures:       override.Captures,
+		Operation:      stackOpFromLowering(tr.Operation),
+		Targets:        resolveTargets(tr.TargetContextIDs, stateByID),
+		PopAmount:      determinePopAmount(tr),
+		IsLookahead:    tr.Operation == lowering.OpSyncTokenNoConsume,
+		PeekAfterMatch: append([]syntaxa.Lookahead[lexarch.TokenKind](nil), tr.PeekAfterMatch...),
 	}
 	if lexOK {
 		copyLexStackFromLexingRule(&out, lexRule)

@@ -3,6 +3,7 @@ package editor
 import (
 	"autarch/pattern"
 	"cmp"
+	"fmt"
 	"foundation/hash"
 	"lexarch"
 	"syntaxa"
@@ -94,6 +95,20 @@ func EditorIRConfigurationCreate[TObservation cmp.Ordered, TToken, TTokenRole, T
 }
 
 /*
+BuildStateGraphForPackage builds the generic state graph using this configuration's
+hashers. Toolchains use it with LexingRulesGroupedByLexerState and
+LexerStackReachabilityFromStateGraph for Sublime peek lookahead emission.
+*/
+func (c *EditorIRConfiguration[TObservation, TToken, TTokenRole, TLexerState, TNodeKind, TContext]) BuildStateGraphForPackage(
+	pkg *syntaxa.GrammarPackage[TNodeKind],
+) (*lowering.StateGraph[TNodeKind], error) {
+	if c == nil || pkg == nil {
+		return nil, fmt.Errorf("editor: nil config or grammar package")
+	}
+	return lowering.BuildStateGraph(pkg, c.tokenHasher, c.nodeKindHasher, c.hasher)
+}
+
+/*
 EditorState is a single state in the editor IR state machine.
 
 ID and Label identify the state. Context is the semantic context (e.g. highlighting
@@ -110,8 +125,12 @@ such a catch-all rule when HasFallbackInvalid is true, ensuring no input region 
 ever left unscoped (i.e. no "source"-only fallthrough).
 */
 type EditorState[TObservation cmp.Ordered, TContext any] struct {
-	ID                     string
-	Label                  string
+	ID    string
+	Label string
+	// LoweringContextID is the syntaxa state-graph context id (before ID sanitization)
+	// for this state. Syntax emitters use it for lexer reachability when resolving
+	// peek constraints; empty if not applicable.
+	LoweringContextID      string
 	Context                TContext
 	Transitions            []EditorTransition[TObservation, TContext]
 	HasFallthroughPop      bool
@@ -187,6 +206,11 @@ type EditorTransition[TObservation cmp.Ordered, TContext any] struct {
 	LexPushStates []string
 	LexPopAmount  int
 	LexSetStates  []string
+
+	// PeekAfterMatch is set by lowering only when multiple transitions from the same
+	// state share this match’s token (fork disambiguation). The Sublime backend may
+	// fold these into the emitted regex; empty means no fork lookahead on this edge.
+	PeekAfterMatch []syntaxa.Lookahead[lexarch.TokenKind]
 }
 
 /*

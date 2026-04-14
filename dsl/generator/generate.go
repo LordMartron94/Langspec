@@ -289,6 +289,8 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildHeader() Do
 func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSection() Doc {
 	var bodyDocs []Doc
 
+	bodyDocs = g.addPragmaDoc(bodyDocs, g.buildLspecCompilePragma())
+
 	if g.enableSublime {
 		bodyDocs = g.addPragmaDoc(bodyDocs, g.buildSublimePragma())
 	}
@@ -302,7 +304,12 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSecti
 	}
 
 	if len(bodyDocs) == 0 {
-		return concat(doctext("PRAGMA {"), line(), doctext("}"))
+		return concat(
+			doctext("PRAGMA {"),
+			nest(1, concat(line(), g.buildLspecCompilePragma())),
+			line(),
+			doctext("}"),
+		)
 	}
 
 	return concat(
@@ -310,6 +317,16 @@ func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildPragmaSecti
 		nest(1, concat(line(), concat(bodyDocs...))),
 		line(),
 		doctext("}"),
+	)
+}
+
+func (g *generator[TToken, TTokenRole, TNodeKind, TLexerState]) buildLspecCompilePragma() Doc {
+	return concat(
+		doctext("lspec {"),
+		nest(1, concat(
+			line(), doctext("warnings_as_errors = true;"),
+		)),
+		line(), doctext("}"),
 	)
 }
 

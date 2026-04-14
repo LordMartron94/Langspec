@@ -363,6 +363,20 @@ func RunSublimeGenerator[TObservation cmp.Ordered, TToken ~uint32, TTokenRole, T
 		return fmt.Errorf("failed to create editor IR: %w", err)
 	}
 
+	rulesByState, _ := editor.LexingRulesGroupedByLexerState(cfg.LexerRuleset)
+	sg, err := cfg.IRConfig.BuildStateGraphForPackage(cfg.GrammarPackage)
+	if err != nil {
+		return fmt.Errorf("state graph for sublime peek emit: %w", err)
+	}
+	reach, err := editor.LexerStackReachabilityFromStateGraph(sg, rulesByState)
+	if err != nil {
+		return fmt.Errorf("lexer stack reachability: %w", err)
+	}
+	peek := &sublime.PeekEmitConfig[TObservation, TToken, TTokenRole]{
+		LexerReach:   reach,
+		RulesByState: rulesByState,
+	}
+
 	var errs []error
 
 	for _, outputPath := range cfg.OutputPaths {
@@ -380,6 +394,8 @@ func RunSublimeGenerator[TObservation cmp.Ordered, TToken ~uint32, TTokenRole, T
 				},
 			},
 			os.Stderr,
+			os.Stderr,
+			peek,
 		)
 		if genErr != nil {
 			errs = append(errs, fmt.Errorf("output path %s: %w", outputPath, genErr))
