@@ -76,6 +76,8 @@ const (
 	VALIDATION_PAIR_REF_MALFORMED             ValidationCode = "V_PAR013"
 	VALIDATION_SEPARATOR_REPEAT_OPTIONAL_TAIL ValidationCode = "V_PAR014"
 	VALIDATION_ORDERED_CHOICE_OVERLAP         ValidationCode = "V_PAR015"
+	// Ordered-choice prefix trap: earlier arm begins with the same rule as a later arm that is only that rule; PEG does not backtrack after a successful sub-parse.
+	VALIDATION_ORDERED_CHOICE_PREFIX_TRAP ValidationCode = "V_PAR016"
 
 	VALIDATION_DUPLICATE_PRATT_EXPR             ValidationCode = "V_PRA001"
 	VALIDATION_PRATT_UNRESOLVED_TOKEN           ValidationCode = "V_PRA002"
@@ -151,7 +153,7 @@ func ValidationStages[TNodeKind ~uint32]() []*validation.LSTValidationStage[rune
 		},
 		{
 			Name:        "Grammar Safety & Ambiguity",
-			Description: "Analyzes lowered grammar for left-recursion, unbounded nullable repetitions, and FIRST-set conflicts.",
+			Description: "Analyzes lowered grammar for left-recursion, unbounded nullable repetitions, FIRST-set conflicts, and PEG prefix traps between ordered-choice arms.",
 			Order:       4,
 			Processor:   processGrammarSafety[TNodeKind],
 		},
@@ -1331,6 +1333,7 @@ func processGrammarSafety[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind]) {
 	checkGrammarUnboundedOptional(ctx, pkg, analysis)
 	checkGrammarSeparatorRepeatOptionalTail[TNodeKind](ctx, pkg, analysis, sourceMap)
 	checkGrammarChoiceConflicts[TNodeKind](ctx, pkg, analysis, sourceMap)
+	checkGrammarChoicePrefixTraps[TNodeKind](ctx, pkg, analysis, sourceMap)
 }
 
 func checkGrammarLeftRecursion[TNodeKind ~uint32](ctx *ValidationCtx[TNodeKind], pkg *GrammarPackage[TNodeKind], analysis *syntaxa.GrammarAnalysis) {
@@ -1769,6 +1772,128 @@ func analyzeChoiceNode[TNodeKind ~uint32](
 			ctx.ReportError(VALIDATION_FIRST_SET_CONFLICT.String(), msg, currNode)
 		}
 	}
+}
+
+func checkGrammarChoicePrefixTraps[TNodeKind ~uint32](
+	ctx *ValidationCtx[TNodeKind],
+	pkg *GrammarPackage[TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node,
+) {
+	visited := make(map[syntaxa.GrammarKey]bool)
+	var walk func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind])
+	walk = func(g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind]) {
+		if g == nil || g.NodePath == nil || visited[g.GrammarKey] {
+			return
+		}
+		visited[g.GrammarKey] = true
+		if g.Kind == syntaxa.GChoice {
+			analyzeChoicePrefixTrap[TNodeKind](ctx, pkg, analysis, sourceMap, g)
+		}
+		for _, child := range g.Children {
+			walk(child)
+		}
+	}
+	for _, root := range pkg.Grammars {
+		walk(root)
+	}
+}
+
+/*
+analyzeChoicePrefixTrap warns when an earlier arm is a concat whose first symbol is the same
+rule R as a later arm that is only R. PEG/ordered choice commits after a successful sub-parse
+of R inside the longer arm; it does not backtrack to try the shorter arm.
+
+Mitigations: disjoint predict(...) on the longer arm (look past the shared prefix), or order
+the shorter alternative first.
+*/
+func analyzeChoicePrefixTrap[TNodeKind ~uint32](
+	ctx *ValidationCtx[TNodeKind],
+	pkg *GrammarPackage[TNodeKind],
+	analysis *syntaxa.GrammarAnalysis,
+	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node,
+	choiceNode *syntaxa.Grammar[lexarch.TokenKind, TNodeKind],
+) {
+	children := choiceNode.Children
+	ruleName := pkg.PathToGrammarLabel[syntaxa.NodeKeyFromPath(*choiceNode.NodePath)]
+	for i := 0; i < len(children); i++ {
+		for j := i + 1; j < len(children); j++ {
+			longArm := children[i]
+			shortArm := children[j]
+			if longArm == nil || shortArm == nil || longArm.NodePath == nil || shortArm.NodePath == nil {
+				continue
+			}
+			// The shorter arm must be a direct rule reference (e.g. `STRING_LITERAL`). Do not unwrap
+			// into the callee body here — that body is often a GChoice (e.g. single vs double quote).
+			if shortArm.Kind != syntaxa.GReference || shortArm.ReferenceTarget == "" {
+				continue
+			}
+
+			longBody := grammarUnwrapRef[TNodeKind](longArm, pkg)
+			if longBody == nil {
+				continue
+			}
+			if longBody.Kind != syntaxa.GConcat || len(longBody.Children) < 2 {
+				continue
+			}
+			first := longBody.Children[0]
+			if first == nil || first.Kind != syntaxa.GReference || first.ReferenceTarget == "" {
+				continue
+			}
+			if first.ReferenceTarget != shortArm.ReferenceTarget {
+				continue
+			}
+			// Require non-empty continuation after the shared leading rule: either three or more
+			// concat operands (e.g. lit .. lit), or a analyzed non-nullable suffix (two operands).
+			if len(longBody.Children) < 3 && !concatTailNonNullable[TNodeKind](longBody, analysis) {
+				continue
+			}
+
+			ruleLabel := string(first.ReferenceTarget)
+			msg := fmt.Sprintf(
+				"Rule '%s': arm %d starts with '%s' but requires more input after it; arm %d is only '%s'. Ordered choice tries arm %d first — after a successful '%s' sub-parse, failure is a syntax error (no backtrack to arm %d). Add disjoint `predict (...)` lookaheads on arm %d (tokens after the shared prefix), or move arm %d before arm %d.",
+				ruleName, i+1, ruleLabel, j+1, ruleLabel, i+1, ruleLabel, j+1, i+1, j+1, i+1,
+			)
+			anchor := resolveFirstConflictAnchor[TNodeKind](ctx, sourceMap, choiceNode, longArm)
+			ctx.ReportWarning(VALIDATION_ORDERED_CHOICE_PREFIX_TRAP.String(), msg, anchor)
+		}
+	}
+}
+
+func grammarUnwrapRef[TNodeKind ~uint32](g *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], pkg *GrammarPackage[TNodeKind]) *syntaxa.Grammar[lexarch.TokenKind, TNodeKind] {
+	if g == nil {
+		return nil
+	}
+	if g.Kind == syntaxa.GReference && g.ResolvedReference != nil {
+		return g.ResolvedReference
+	}
+	if g.Kind == syntaxa.GReference && g.ReferenceTarget != "" {
+		if body, ok := pkg.Grammars[g.ReferenceTarget]; ok {
+			return body
+		}
+	}
+	return g
+}
+
+func concatTailNonNullable[TNodeKind ~uint32](concat *syntaxa.Grammar[lexarch.TokenKind, TNodeKind], analysis *syntaxa.GrammarAnalysis) bool {
+	if concat == nil || concat.Kind != syntaxa.GConcat || len(concat.Children) < 2 || analysis == nil {
+		return false
+	}
+	for _, ch := range concat.Children[1:] {
+		if ch == nil {
+			continue
+		}
+		if ch.NodePath == nil {
+			// Virtual tokens / synthetic fragments often have no analysis entry; treat as
+			// required continuation (otherwise tails like `virtual TokRange` are skipped).
+			return true
+		}
+		k := syntaxa.NodeKeyFromPath(*ch.NodePath)
+		if !analysis.Nullable[k] {
+			return true
+		}
+	}
+	return false
 }
 
 func firstSetForChoiceArm(analysis *syntaxa.GrammarAnalysis, childKey syntaxa.NodeKey) syntaxa.TokenSet {

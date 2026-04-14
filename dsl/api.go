@@ -374,9 +374,11 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 	if validationErr != nil {
 		return result, validationErr
 	}
+	if validationHasFindings(validationEntries) {
+		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, validationEntries, advanceRuneTab4)
+	}
 
 	if validationFailsCompilation(validationEntries, warningsAsErrors) {
-		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, validationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("parsing failed with validation errors")
 	}
 
@@ -420,9 +422,11 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 	if postValidationErr != nil {
 		return result, postValidationErr
 	}
+	if validationHasFindings(postValidationEntries) {
+		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, postValidationEntries, advanceRuneTab4)
+	}
 
 	if validationFailsCompilation(postValidationEntries, warningsAsErrors) {
-		renderValidationEntries(compiler.diagnosticWriter, sourceFile, contentRune, postValidationEntries, advanceRuneTab4)
 		return result, fmt.Errorf("compilation failed with grammar safety errors")
 	}
 
@@ -446,6 +450,18 @@ func validationFailsCompilation(entries *validation.ValidationEntries[rune, Lang
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+func validationHasFindings(entries *validation.ValidationEntries[rune, LangSpecLexerTokenType, LangSpecLexerTokenRole, LangSpecParserNodeKind]) bool {
+	if entries == nil {
+		return false
+	}
+	for _, stage := range entries.Results {
+		if len(stage.Entries) > 0 {
+			return true
 		}
 	}
 	return false
