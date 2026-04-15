@@ -411,15 +411,17 @@ func editorResolveUniqueLexRuleAcrossAllStates[
 	tok lexarch.TokenKind,
 ) (LexingRule[TObservation, TToken, TTokenRole], bool, error) {
 	var (
-		haveFirst bool
-		firstRule LexingRule[TObservation, TToken, TTokenRole]
-		firstKey  string
+		haveFirst  bool
+		firstRule  LexingRule[TObservation, TToken, TTokenRole]
+		firstKey   string
+		candidates []LexingRule[TObservation, TToken, TTokenRole]
 	)
 	for _, rules := range rulesByState {
 		for _, r := range rules {
 			if lexarch.TokenKind(r.Token) != tok {
 				continue
 			}
+			candidates = append(candidates, r)
 			key, err := editorLexRuleEmissionKey(r)
 			if err != nil {
 				return LexingRule[TObservation, TToken, TTokenRole]{}, false, err
@@ -431,6 +433,12 @@ func editorResolveUniqueLexRuleAcrossAllStates[
 				continue
 			}
 			if key != firstKey {
+				// Allow fallback selection when all candidate rules share the same regex
+				// but differ by mode-specific metadata (e.g. lexer state name).
+				sameRegex, picked, okPick := editorPickHighestPrioritySameRegex(candidates)
+				if sameRegex && okPick {
+					return picked, true, nil
+				}
 				return LexingRule[TObservation, TToken, TTokenRole]{}, false, nil
 			}
 		}
