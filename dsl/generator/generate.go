@@ -8,6 +8,7 @@ import (
 	"foundation/system"
 	"foundation/text"
 	"langspec"
+	"langspec/dsl/ir"
 	"langspec/editor"
 	"langspec/toolchain"
 	"lexarch"
@@ -178,6 +179,22 @@ func GenerateLSpec[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable
 	}
 
 	return writeLSpecDocument[TToken, TTokenRole, TNodeKind, TLexerState](grammarPackage, lexingRuleSet, outputPath, configuration)
+}
+
+func GenerateLSpecFromSemanticIR[TNodeKind ~uint32](
+	semanticIR *ir.SemanticModel[TNodeKind],
+	outputPath string,
+	configuration *GeneratorConfig[uint32, uint32, TNodeKind],
+) error {
+	if semanticIR == nil || semanticIR.Lowered == nil {
+		return fmt.Errorf("langspec/generator: semantic IR or lowered artifacts are nil")
+	}
+	return GenerateLSpec[uint32, uint32, TNodeKind, string](
+		&semanticIR.Lowered.GrammarPackage,
+		toolchain.LexerSpecToEditorLexingRuleSet(semanticIR.Lowered.LexerSpec),
+		outputPath,
+		configuration,
+	)
 }
 
 func writeLSpecDocument[TToken ~uint32, TTokenRole, TNodeKind, TLexerState comparable](

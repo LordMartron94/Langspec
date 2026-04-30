@@ -3,7 +3,6 @@ package dsl
 import (
 	"autarch/pattern"
 	"fmt"
-	"foundation/domain"
 	"langspec"
 	"langspec/dsl/semantics"
 	dslspec "langspec/dsl/spec"
@@ -12,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"syntaxa"
-	"syntaxa/lowering"
 	"syntaxa/rule"
 )
 
@@ -98,87 +96,8 @@ type parseCompileCtx[TNodeKind ~uint32] struct {
 const embedNamespaceSeparator = "::"
 
 func compileTree[TNodeKind ~uint32](comp *LangSpecCompiler, rootNode *Node, sourceFile string, importGraph *resolvedImportGraph) *CompiledLangSpec[TNodeKind] {
-	dslName, dslVersion, langspecTargetVersion := getInfoFromHeader(rootNode.FindFirstKind(dslspec.NodeHeader))
-
-	if importGraph == nil {
-		var importErr error
-		importGraph, importErr = resolveImportGraph(comp, sourceFile, rootNode)
-		if importErr != nil {
-			panic(importErr)
-		}
-	}
-	env := semantics.BuildSemanticEnvWithImports(rootNode, importGraph.byAlias, nil)
-
-	eofName := getEOFToken(rootNode)
-	tokStrs, roleStrs, nodeStrs := semantics.CollectCompiledSymbolStrings(rootNode, env, eofName)
-	sym := semantics.CompiledSymbolTableBuild(tokStrs, roleStrs, nodeStrs)
-	eofToken := sym.TokenID(eofName)
-	domainRunes := domain.DiscreteDomainRuneCreate()
-
-	lexerSpec := langspec.LexerSpecCreate[rune, uint32, uint32, string](
-		eofToken,
-		"INITIAL",
-		func(t uint32) string {
-			return sym.TokenName(t)
-		},
-		true, // The parser is not mutating lexer spec.
-	)
-	lexerSpec.WithCompilationMode(lexarch.PATTERN_COMPILE_GLUSHKOV)
-	switch comp.config.lexerPositionTracking {
-	case LangSpecLexerPositionTrackingGeneric:
-		// LexerSpecCreate leaves generic position mode.
-	case LangSpecLexerPositionTrackingRuneFast:
-		lexerSpec.WithRunePositionTrackingFast(comp.config.lexerRuneTabWidth)
-	default:
-		lexerSpec.WithRunePositionTrackingFast(4)
-	}
-
-	lspecCompiler := compiler{
-		factory: pattern.RegulaASTFactoryCreate(domainRunes),
-	}
-	patternCtx := &patternCompileCtx{
-		c:        &lspecCompiler,
-		rootNode: rootNode,
-		env:      env,
-		sym:      sym,
-	}
-	lspecCompiler.compilePatterns(patternCtx)
-
-	lspecCompiler.compileLexerSpec(patternCtx, lexerSpec, "")
-	lspecCompiler.compileEmbeddedLexerSpecs(env, lexerSpec, sym)
-	injectEmbedLexerHandoffs(rootNode, env, lexerSpec, sym)
-
-	grammarPackage, ruleRegistry, rootNodeKind, skipRoles, sourceMap := getParserSpecInfo[TNodeKind](rootNode, env, dslName, dslVersion, sym)
-
-	grammarPkg := new(syntaxa.GrammarPackage[TNodeKind])
-	*grammarPkg = grammarPackage
-
-	analysis := lowering.GetAnalysis(grammarPkg)
-	getAnalysis := func() *syntaxa.GrammarAnalysis { return analysis }
-	parserSpec := langspec.ParserSpecCreate[rune, uint32, uint32, string, TNodeKind](
-		grammarPkg,
-		ruleRegistry,
-		rootNodeKind,
-		TNodeKind(sym.NodeKindID("ERROR_NODE")),
-		false, // TODO allow configuration of this flag inside LSpec
-		getAnalysis,
-	)
-	parserSpec.WithSkipRoles(skipRoles...)
-
-	toolPragmas := extractPragmas(rootNode)
-
-	return &CompiledLangSpec[TNodeKind]{
-		dslName:               dslName,
-		dslVersion:            dslVersion,
-		lexerSpec:             lexerSpec,
-		parserSpec:            parserSpec,
-		symbols:               sym,
-		eofToken:              eofToken,
-		grammarPackage:        *grammarPkg,
-		toolPragmas:           toolPragmas,
-		targetLangspecVersion: langspecTargetVersion,
-		sourceMap:             sourceMap,
-	}
+	semanticModel := semanticIRBuildFromLST[TNodeKind](comp, rootNode, sourceFile, importGraph)
+	return semanticIRLowerToCompiled(comp, semanticModel)
 }
 
 func getInfoFromHeader(headerNode *Node) (string, string, string) {

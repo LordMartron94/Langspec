@@ -19,6 +19,7 @@ type GrammarValidationState[TNodeKind ~uint32] struct {
 	Symbols         *CompiledSymbolTable
 	ImportedModules map[string]*ImportedModuleSymbols
 	LibraryMode     bool
+	SemanticIR      any
 }
 
 /* ValidationCtx is the validation stage context type for LangSpec LST validation. */

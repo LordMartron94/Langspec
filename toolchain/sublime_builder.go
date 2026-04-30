@@ -7,6 +7,7 @@ import (
 	"foundation/hash"
 	"langspec"
 	"langspec/dsl"
+	"langspec/dsl/ir"
 	"langspec/editor"
 	"langspec/editor/sublime"
 	"lexarch"
@@ -230,6 +231,30 @@ func executeSublimeToolchain[TNodeKind ~uint32](
 	fileExtensions []string,
 	scopeExtension string,
 ) error {
+	semanticModel := dsl.SemanticIRBuildFromCompileResult(compileResult)
+	return executeSublimeToolchainFromSemanticIR(
+		semanticModel,
+		compileResult,
+		manifest,
+		overrideFactory,
+		outputPaths,
+		fileExtensions,
+		scopeExtension,
+	)
+}
+
+func executeSublimeToolchainFromSemanticIR[TNodeKind ~uint32](
+	semanticModel *ir.SemanticModel[TNodeKind],
+	compileResult *dsl.LangSpecCompileResult[TNodeKind],
+	manifest SemanticManifest[string, string],
+	overrideFactory SublimeInMemoryOverrideFactory[TNodeKind],
+	outputPaths []string,
+	fileExtensions []string,
+	scopeExtension string,
+) error {
+	if semanticModel == nil || semanticModel.Lowered == nil {
+		return fmt.Errorf("sublime toolchain: semantic IR missing lowered artifacts")
+	}
 	if compileResult.CompiledSymbols == nil {
 		return fmt.Errorf("sublime toolchain: compiled symbols missing on compile result")
 	}
@@ -245,7 +270,7 @@ func executeSublimeToolchain[TNodeKind ~uint32](
 		}
 	}
 
-	editorRuleset := LexerSpecToEditorLexingRuleSet(compileResult.CompiledLexerSpec)
+	editorRuleset := LexerSpecToEditorLexingRuleSet(semanticModel.Lowered.LexerSpec)
 
 	manifestUint := SemanticManifestRemapFromStrings(compileResult.CompiledSymbols, manifest)
 	manifestForIR := semanticManifestNodeKeysAs[TNodeKind](manifestUint)
@@ -275,7 +300,7 @@ func executeSublimeToolchain[TNodeKind ~uint32](
 
 	runnerCfg := &SublimeRunnerConfig[rune, uint32, uint32, string, TNodeKind]{
 		LexerRuleset:   editorRuleset,
-		GrammarPackage: &compileResult.CompiledGrammarPackage,
+		GrammarPackage: &semanticModel.Lowered.GrammarPackage,
 		IRConfig:       irConfig,
 		FileExtensions: fileExtensions,
 		BaseScope:      fmt.Sprintf("source%s", scopeExtension),

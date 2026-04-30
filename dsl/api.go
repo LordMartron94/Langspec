@@ -384,6 +384,19 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 
 	// 4. Compilation & Post-Validation
 	compiled := compileTree[TNodeKind](compiler, result.RootNode, sourceFile, importGraph)
+	semanticModel := SemanticIRBuildFromCompileResult(&LangSpecCompileResult[TNodeKind]{
+		RootNode:               result.RootNode,
+		LanguageName:           compiled.dslName,
+		LanguageVersion:        compiled.dslVersion,
+		TargetLangspecVersion:  compiled.targetLangspecVersion,
+		CompiledLexerSpec:      compiled.lexerSpec,
+		CompiledParserSpec:     compiled.parserSpec,
+		CompiledGrammarPackage: compiled.grammarPackage,
+		CompiledToolPragmas:    compiled.toolPragmas,
+		SourceMap:              compiled.sourceMap,
+		CompiledSymbols:        compiled.symbols,
+		EOFToken:               compiled.eofToken,
+	})
 
 	// Attach lowered artifacts as soon as compileTree succeeds so callers (e.g. tests) can
 	// inspect lexer/parser/grammar even when stage-4+ validation or bootstrap fails later.
@@ -399,9 +412,10 @@ func LangSpecCompilerCompile[TNodeKind ~uint32](
 	result.SourceMap = compiled.sourceMap
 
 	valState := &semantics.GrammarValidationState[TNodeKind]{
-		Package:   &compiled.grammarPackage,
-		SourceMap: compiled.sourceMap,
-		Symbols:   compiled.symbols,
+		Package:    &compiled.grammarPackage,
+		SourceMap:  compiled.sourceMap,
+		Symbols:    compiled.symbols,
+		SemanticIR: semanticModel,
 	}
 
 	postValidationEntries, postValidationErr := validation.LSTValidatorRun(
