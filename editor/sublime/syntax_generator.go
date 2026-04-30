@@ -25,6 +25,9 @@ const timeFormat = "2006-01-02 15:04:05 MST"
 type ExtractionConfig[TContext any] struct {
 	ExtractScope     func(TContext) string
 	ExtractMetaScope func(TContext) string
+	// ExtractIncludePrototype controls whether emitted contexts include Sublime's
+	// global `prototype`. Return nil to keep default Sublime behavior.
+	ExtractIncludePrototype func(TContext) *bool
 }
 
 type languageMetadata struct {
@@ -35,18 +38,19 @@ type languageMetadata struct {
 }
 
 type contextEntry struct {
-	MetaScope      *string        `yaml:"meta_scope,omitempty"`
-	Match          *string        `yaml:"match,omitempty"`
-	Scope          string         `yaml:"scope,omitempty"`
-	Push           any            `yaml:"push,omitempty"`
-	Pop            any            `yaml:"pop,omitempty"`
-	Set            any            `yaml:"set,omitempty"`
-	Captures       map[int]string `yaml:"captures,omitempty"`
-	Embed          string         `yaml:"embed,omitempty"`
-	EmbedScope     string         `yaml:"embed_scope,omitempty"`
-	Escape         *string        `yaml:"escape,omitempty"`
-	EscapeCaptures map[int]string `yaml:"escape_captures,omitempty"`
-	Include        *string        `yaml:"include,omitempty"`
+	MetaScope            *string        `yaml:"meta_scope,omitempty"`
+	MetaIncludePrototype *bool          `yaml:"meta_include_prototype,omitempty"`
+	Match                *string        `yaml:"match,omitempty"`
+	Scope                string         `yaml:"scope,omitempty"`
+	Push                 any            `yaml:"push,omitempty"`
+	Pop                  any            `yaml:"pop,omitempty"`
+	Set                  any            `yaml:"set,omitempty"`
+	Captures             map[int]string `yaml:"captures,omitempty"`
+	Embed                string         `yaml:"embed,omitempty"`
+	EmbedScope           string         `yaml:"embed_scope,omitempty"`
+	Escape               *string        `yaml:"escape,omitempty"`
+	EscapeCaptures       map[int]string `yaml:"escape_captures,omitempty"`
+	Include              *string        `yaml:"include,omitempty"`
 	// BranchPoint + Branch are Sublime Text 4 (syntax version 2): ordered PEG-style
 	// alternatives when static lookaheads cannot separate targets. See
 	// https://www.sublimetext.com/docs/syntax.html — branch / branch_point / fail.
@@ -231,6 +235,9 @@ func buildContextsMap[TObservation cmp.Ordered, TToken ~uint32, TTokenRole compa
 			// parent context's meta_scope onto matches in a child context reached only
 			// via set:, so skipping meta_scope on those targets left tail tokens unscoped.
 			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
+		}
+		if includePrototype := extractIncludePrototype(config, state.Context); includePrototype != nil {
+			entries = append([]contextEntry{{MetaIncludePrototype: includePrototype}}, entries...)
 		}
 
 		if state.HasFallthroughPop {
@@ -476,6 +483,9 @@ func localStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	sb.WriteString("meta=")
 	sb.WriteString(metaScope)
 	sb.WriteString("||")
+	sb.WriteString("include_prototype=")
+	sb.WriteString(triStateBoolSignature(extractIncludePrototype(config, state.Context)))
+	sb.WriteString("||")
 
 	if state.ImmediatePushTarget != nil {
 		sb.WriteString("imm=1||")
@@ -504,6 +514,9 @@ func fullStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	metaScope := config.ExtractMetaScope(state.Context)
 	sb.WriteString("meta=")
 	sb.WriteString(metaScope)
+	sb.WriteString("||")
+	sb.WriteString("include_prototype=")
+	sb.WriteString(triStateBoolSignature(extractIncludePrototype(config, state.Context)))
 	sb.WriteString("||")
 
 	if state.ImmediatePushTarget != nil {
@@ -890,6 +903,9 @@ func buildLexModeContexts[TObservation cmp.Ordered, TToken ~uint32, TTokenRole c
 		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
 			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}
+		if includePrototype := extractIncludePrototype(config, state.Context); includePrototype != nil {
+			entries = append([]contextEntry{{MetaIncludePrototype: includePrototype}}, entries...)
+		}
 		if state.HasFallthroughPop {
 			popAmount := 1
 			if state.FallthroughPopAmount > 0 {
@@ -1253,6 +1269,23 @@ func isNoiseToken(s string) bool {
 	default:
 		return false
 	}
+}
+
+func extractIncludePrototype[TContext any](config ExtractionConfig[TContext], ctx TContext) *bool {
+	if config.ExtractIncludePrototype == nil {
+		return nil
+	}
+	return config.ExtractIncludePrototype(ctx)
+}
+
+func triStateBoolSignature(v *bool) string {
+	if v == nil {
+		return "nil"
+	}
+	if *v {
+		return "true"
+	}
+	return "false"
 }
 
 func generateEntriesSignature(entries []contextEntry) string {

@@ -15,9 +15,10 @@ import (
 
 // NodeBinding defines how a specific AST node maps to Sublime Text scopes.
 type NodeBinding[TToken comparable] struct {
-	Scopes      []string            `json:"scopes,omitempty"`
-	MetaScope   string              `json:"meta_scope,omitempty"`
-	TokenScopes map[TToken][]string `json:"token_scopes,omitempty"`
+	Scopes           []string            `json:"scopes,omitempty"`
+	MetaScope        string              `json:"meta_scope,omitempty"`
+	TokenScopes      map[TToken][]string `json:"token_scopes,omitempty"`
+	ExcludePrototype bool                `json:"exclude_prototype,omitempty"`
 }
 
 // SemanticManifest is a generic container for language syntax highlighting rules.
@@ -89,8 +90,9 @@ func SemanticManifestRemapFromStrings(
 		out.NodeBindings = make(map[uint32]NodeBinding[uint32], len(in.NodeBindings))
 		for nodeName, b := range in.NodeBindings {
 			nb := NodeBinding[uint32]{
-				Scopes:    b.Scopes,
-				MetaScope: b.MetaScope,
+				Scopes:           b.Scopes,
+				MetaScope:        b.MetaScope,
+				ExcludePrototype: b.ExcludePrototype,
 			}
 			if len(b.TokenScopes) > 0 {
 				nb.TokenScopes = make(map[uint32][]string, len(b.TokenScopes))
@@ -213,7 +215,10 @@ func buildContextProducerFromManifest[
 			if ctx.NodeKind != nil {
 				if ms, ok := manifestNestMetaOverride(manifest, *ctx.NodeKind); ok {
 					manifestScopeCoverageRecordNestMeta(cov, *ctx.NodeKind)
-					return SublimeContext{MetaScope: ms}
+					return SublimeContext{
+						MetaScope:        ms,
+						IncludePrototype: includePrototypeOverrideFromExclude(manifestExcludePrototype(manifest, *ctx.NodeKind)),
+					}
 				}
 			}
 			return SublimeContext{MetaScope: nestLabelToMetaScope(string(ctx.NestLabel))}
@@ -468,7 +473,10 @@ func resolveNodeBinding[TToken, TNodeKind comparable](
 		return SublimeContext{}, false
 	}
 
-	ctx := SublimeContext{MetaScope: binding.MetaScope}
+	ctx := SublimeContext{
+		MetaScope:        binding.MetaScope,
+		IncludePrototype: includePrototypeOverrideFromExclude(binding.ExcludePrototype),
+	}
 
 	if token != nil && len(binding.TokenScopes) > 0 {
 		if ts, match := binding.TokenScopes[*token]; match && len(ts) > 0 {
@@ -512,6 +520,28 @@ func manifestNestMetaOverride[TToken, TNodeKind comparable](
 		return "", false
 	}
 	return ms, true
+}
+
+func manifestExcludePrototype[TToken, TNodeKind comparable](
+	manifest SemanticManifest[TToken, TNodeKind],
+	nodeKind TNodeKind,
+) bool {
+	binding, exists := manifest.NodeBindings[nodeKind]
+	if !exists {
+		return false
+	}
+	return binding.ExcludePrototype
+}
+
+func includePrototypeOverrideFromExclude(exclude bool) *bool {
+	if !exclude {
+		return nil
+	}
+	return boolPtr(false)
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 // --- UNIVERSAL STRING UTILITIES ---

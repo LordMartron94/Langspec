@@ -29,8 +29,9 @@ SublimeContext carries the scope and optional meta-scope used when building Subl
 rules from the editor IR.
 */
 type SublimeContext struct {
-	Scope     string
-	MetaScope string
+	Scope            string
+	MetaScope        string
+	IncludePrototype *bool
 }
 
 /*
@@ -391,6 +392,9 @@ func RunSublimeGenerator[TObservation cmp.Ordered, TToken ~uint32, TTokenRole, T
 				},
 				ExtractMetaScope: func(ctx SublimeContext) string {
 					return applyScopeSuffix(ctx.MetaScope, cfg.ScopeSuffix)
+				},
+				ExtractIncludePrototype: func(ctx SublimeContext) *bool {
+					return ctx.IncludePrototype
 				},
 			},
 			os.Stderr,
