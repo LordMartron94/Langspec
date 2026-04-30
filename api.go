@@ -863,12 +863,12 @@ func LangParserParseFile[
 	session.begin()
 	defer session.end()
 
-	if !system.FileExists(session.sourceFile) {
-		return nil, nil, nil, fmt.Errorf("source file non-existent: %s", session.sourceFile)
-	}
-
 	syntaxErrors := &syntaxa.SyntaxErrors{
 		Errors: make([]syntaxa.SyntaxError, 0),
+	}
+
+	if !system.FileExists(session.sourceFile) {
+		return nil, nil, syntaxErrors, fmt.Errorf("source file non-existent: %s", session.sourceFile)
 	}
 
 	var streamStatsPtr *syntaxa.ParseStreamStats

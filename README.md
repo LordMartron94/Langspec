@@ -289,5 +289,7 @@ The workspace relies on synchronized git submodules (`lexarch`, `syntaxa`, `auta
 
 LangSpec is under active development. If you encounter edge cases in pattern recursion, Pratt parsing, or recovery, contributions are welcome.
 
+- **Known edge case (metascopes):** Metascope behavior is currently reliable only when the related LangSpec construct is marked as a `nest`. In other structures it can be inconsistent (hit and miss).
+- **Maintenance stance:** Pull requests to improve or fix this are appreciated. I do not plan to spend time fixing this myself in the foreseeable future because the issue is complex and currently minor in practice.
 - **Pull Requests:** Keep them focused. Include a clear description and testing methodology. Do not use `*_test.go` files for general tests; follow the project's custom test framework conventions (`_tests.go`).
 - **Issues:** Provide a minimal `.lspec` reproduction for bug reports.

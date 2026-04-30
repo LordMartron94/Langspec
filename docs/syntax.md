@@ -453,6 +453,9 @@ nest @P {
 
 The lexer must produce your `TokPairReference` (or equivalent) for `@P`; the name after `@` must match **PairName** exactly. The parser lowers this to the same nested structure as `nest TokOpen TokClose { … }`.
 
+**Known edge case (metascopes):**
+Metascope behavior currently works reliably only when the relevant construct is marked as a `nest`. In other situations it can be inconsistent (hit and miss). Pull requests to improve this are welcome; this is not planned for near-term maintainer work because the fix is complex and the impact is relatively minor.
+
 ### 7.4 Parse templates (parameterized fragments)
 
 A **template** is a named, parameterized parse fragment. It does not become its own parse rule in the lowered grammar; **call sites are expanded by substitution** (the body is cloned, and each `$parameter` is replaced by the corresponding argument) before compilation.
