@@ -66,6 +66,10 @@ The core pipeline operates as: **raw source → lexing → parsing → Lossless 
 
 LangSpec uses a custom meta-language to define both lexing and parsing rules in a single `.lspec` file.
 
+For the foreseeable future, LangSpec does not plan to support authoring language definitions in alternative meta-grammars (for example EBNF) as first-class inputs. Translating those formats into `.lspec` is complex, usually loses semantic intent, and offers little practical benefit compared with writing the specification directly in the LangSpec DSL.
+
+The recommended path is: if you want to use LangSpec, write your grammar in `.lspec`. This keeps access to the full feature set and the built-in semantic validation pipeline that makes specs safer and more predictable.
+
 - **[Read the full Syntax Reference](docs/syntax.md)** for detailed rules on patterns, expressions, and grammar constructs (including **`pair` declarations** and **`nest @PairName`** with a dedicated `TokPairReference` lexer rule).
 - **[View a real-world example](examples/lspec.lspec)** to see how LangSpec defines its own syntax.
 - **[View the collection of my own syntaxes created with LangSpec](https://github.com/LordMartron94/Lingua)** to see how my other grammars (whether DSL or real) are built using LangSpec
@@ -291,5 +295,6 @@ LangSpec is under active development. If you encounter edge cases in pattern rec
 
 - **Known edge case (metascopes):** Metascope behavior is currently reliable only when the related LangSpec construct is marked as a `nest`. In other structures it can be inconsistent (hit and miss).
 - **Maintenance stance:** Pull requests to improve or fix this are appreciated. I do not plan to spend time fixing this myself in the foreseeable future because the issue is complex and currently minor in practice.
+- **Meta-grammar adapters:** Core LangSpec currently focuses on the `.lspec` DSL only. If you want EBNF (or another meta-grammar), external adapter tooling and pull requests are welcome.
 - **Pull Requests:** Keep them focused. Include a clear description and testing methodology. Do not use `*_test.go` files for general tests; follow the project's custom test framework conventions (`_tests.go`).
 - **Issues:** Provide a minimal `.lspec` reproduction for bug reports.

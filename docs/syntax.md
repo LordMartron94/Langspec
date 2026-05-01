@@ -2,6 +2,10 @@
 
 The LangSpec Domain Specific Language (DSL) defines the complete lexical and syntactic structure of a target language in a single `.lspec` file. 
 
+For the foreseeable future, LangSpec supports the LangSpec DSL (`.lspec`) as the authoring format. Alternative meta-grammars (such as EBNF) are not planned as first-class compiler inputs because translating them into `.lspec` is complex and generally provides little benefit while reducing access to LangSpec-specific features and semantic validation guarantees.
+
+If you want to use LangSpec, write your grammar in the LangSpec DSL. Adapter efforts for other meta-grammars are still welcome as external tooling or pull requests.
+
 A `.lspec` file evaluates sequentially and expects up to six distinct sections. Only the **Header**, **LEX**, and **PARSE** sections are strictly required.
 
 ## 1. Document Structure
