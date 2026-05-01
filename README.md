@@ -9,6 +9,7 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
 ## Table of Contents
 
 - [Getting started (walkthrough)](docs/WALKTHROUGH.md)
+- [Install dependency repositories](#install-dependency-repositories)
 - [Sublime syntax generation algorithm](docs/sublime-syntax-generation.md)
 - [LangSpec core vs. the LangSpec DSL](#langspec-core-vs-the-langspec-dsl)
 - [Architecture & Pipeline](#architecture--pipeline)
@@ -21,6 +22,26 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
   - [Sublime Text Syntax](#sublime-text-syntax)
 - [Packages & API](#packages--api)
 - [Contributing](#contributing)
+
+---
+
+## Install dependency repositories
+
+LangSpec includes an interactive helper script at `scripts/install_dependencies.sh` to clone the required sibling repositories from `https://github.com/LordMartron94/{REPO_NAME}`.
+
+- Run the script from `libs/langspec`:
+
+```bash
+./scripts/install_dependencies.sh
+```
+
+- Enter the target clone directory when prompted (relative or absolute path).
+- The script clones each configured repository into a sanitized lowercase directory name.
+- After cloning, update your `go.work` file manually to include those modules.
+
+Treat `scripts/install_dependencies.sh` in the LangSpec repository as an upstream template/reference.
+
+For real projects, keep your maintained installer variant outside the LangSpec clone (for example in your own repository), because local edits inside `libs/langspec` are expected to be overwritten by upstream syncs/updates.
 
 ---
 
