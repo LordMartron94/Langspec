@@ -18,6 +18,7 @@ Validation logic is intentionally excluded from the `.lspec` grammar. Validation
 - [Validation](#validation)
 - [Tooling & Integration](#tooling--integration)
   - [Codegen vs runtime](#codegen-vs-runtime)
+  - [Toolchain-only workflow](#toolchain-only-workflow)
   - [Go Bindings](#go-bindings)
   - [Sublime Text Syntax](#sublime-text-syntax)
 - [Packages & API](#packages--api)
@@ -256,11 +257,47 @@ go run ./libs/langspec/cmd/langspec-toolchain -spec path/to/lang.lspec
 
 From inside `libs/langspec`, use `go run ./cmd/langspec-toolchain -spec path/to/lang.lspec` instead.
 
-It uses **`cliutil`**: same scratch allocator and `RunToolchains` wiring you would write in a custom `main`.
+### Toolchain-only workflow
+
+Some projects use LangSpec only for **generated artifacts** (for example Sublime Text syntax YAML, `go_bindings`, or `.tmPreferences` from `PRAGMA`). They do not embed `LangParser` or call `LangParserParseFile` at runtime. That is a supported mode: configure tools in `PRAGMA`, then run the **toolchains** CLI.
+
+Important distinction: toolchain-only still **compiles your `.lspec`** inside the LangSpec process so lexer/parser data can drive Sublime IR and bindings. You are skipping **runtime parsing in your app**, not skipping the spec compiler or the Go modules needed to build `langspec`.
+
+- **PRAGMA** enables each tool (`tool.sublime`, `tool.go_bindings`, `tool.tm_comments`, …).
+- **`-toolchains`** on `langspec-toolchain` is an optional comma-separated filter (for example `sublime,tm_comments`) so only those named steps run among what PRAGMA enables.
+
+**Sublime without `configuration-path` in PRAGMA:** if `tool.sublime` has `enable = true` and `output-path` but no `configuration-path` (typical when the manifest is maintained outside the spec), pass **`-sublime-json-config`** to `langspec-toolchain` or **`--sublime-json-config`** to `run_toolchains.sh`. That loads the same JSON shape as `configuration-path` would, but uses the bootstrap **in-memory** Sublime path (`WithSublimeToolchain`).
+
+**Complex Go-based providers (no JSON):** `scripts/run_toolchains.sh` also supports a Go-config mode so you can run configs that carry custom override factories (for example Lingua configs). Use:
+
+```bash
+./scripts/run_toolchains.sh \
+  --go-config-file libs/lingua/go/gomod_config.go \
+  --go-config-function GoModConfig
+```
+
+This mode writes a **small** temporary `main` under `${TMPDIR}` that calls **`cliutil.RunInMemorySublimeToolchainsFromAny`**, where the heavy lifting (typed manifest adaptation and the reflect bridge for dynamic configs) lives in LangSpec and is covered by `cliutil` tests. Lingua’s `lingua/internal/generation` package is now a thin shim over the same `cliutil` APIs.
+
+Reference wrapper (interactive if run with no arguments, otherwise `--spec` / `--toolchains` / optional `--sublime-json-config`, or `--go-config-*` for Go-provider mode):
+
+```bash
+./scripts/run_toolchains.sh --spec path/to/lang.lspec
+./scripts/run_toolchains.sh --spec path/to/lang.lspec --toolchains sublime
+./scripts/run_toolchains.sh --spec path/to/lang.lspec --toolchains sublime --sublime-json-config path/to/sublime.json
+./scripts/run_toolchains.sh --go-config-file libs/lingua/go/gomod_config.go --go-config-function GoModConfig
+```
+
+If the script is not under `<langspec>/scripts/`, set **`LANGSPEC_ROOT`** to the directory that contains LangSpec’s `go.mod`.
+
+Building `langspec` still requires the same sibling-module **`go.work`** setup as a full integration (see [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) for workspace layout). For cloning those repos, see [Install dependency repositories](#install-dependency-repositories).
+
+Treat `scripts/run_toolchains.sh` like other LangSpec repo scripts: copy it into your own project if you need a long-lived customized version; edits inside the LangSpec submodule are likely to be overwritten when you sync upstream.
+
+It uses **`cliutil`**: scratch allocator, `RunToolchains`, and (for Go-config mode) **`RunInMemorySublimeToolchains` / `RunInMemorySublimeToolchainsFromAny`** — the same surfaces you can import from your own `main` instead of using the script.
 
 **Typed manifests (generated `Token`/`Node`):** the `go run` binary must **not** import your compiler package on the first step, or the package will not compile until bindings exist. Use **two** minimal `main` packages (e.g. `cmd/gen/bindings` then `cmd/gen/toolchains`), each a few lines calling `cliutil.NewGenerator` and `RunGoBindingsOnly` / `RunToolchains` with options from your package.
 
-JSON-driven Sublime requires `tool.sublime` with `configuration-path` set in PRAGMA. In-memory Sublime (no JSON) requires `RunToolchainsFromSpecFile` (or `cliutil.Generator.RunToolchains`) with `WithSublimeToolchain` from a second generator binary that imports your compiler.
+JSON-driven Sublime can use `tool.sublime` with `configuration-path` in PRAGMA, **or** omit `configuration-path` and pass **`-sublime-json-config`** to `langspec-toolchain` (same JSON file, in-memory bootstrap path). Fully custom in-Go manifests (no JSON on disk) use **`cliutil.RunInMemorySublimeToolchains`** (typed) or **`cliutil.RunInMemorySublimeToolchainsFromAny`** (script-style), or call `bootstrap.RunToolchainsFromSpecFile` with `bootstrap.WithSublimeToolchain` directly from your own generator `main`.
 
 ### Go Bindings
 

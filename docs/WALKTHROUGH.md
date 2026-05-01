@@ -47,6 +47,8 @@ When working with LangSpec, "compiling" usually means one of two things:
 1. **Compile the Go code** — Build the `langspec` packages and tools into your project like any other Go library.
 2. **Compile a `.lspec` file** — Run the LangSpec DSL compiler to convert a text specification into lexer/parser data that your program can execute. In code, this is handled by `bootstrap.CompileParserFromSpec` (for a runtime parser). Note that this process does not generate Go code or Sublime files automatically unless you explicitly run the **toolchains**.
 
+If you only need generated artifacts (Sublime syntax, Go bindings, TM comments, and similar) and do not plan to embed a runtime `LangParser` in your application, you can skip `hello-lspec` and the parse-session steps below: enable the relevant `PRAGMA` tools in your `.lspec`, then run `go run ./cmd/langspec-toolchain -spec your.lspec` from the LangSpec module (optionally with `-toolchains` to filter steps, and `-sublime-json-config` when Sublime is enabled without `configuration-path` in PRAGMA), or use the `scripts/run_toolchains.sh` helper described in the LangSpec **README** under *Toolchain-only workflow* (Go-config mode delegates to `langspec/cliutil` for in-memory Sublime runs, including Lingua-style configs).
+
 ---
 
 ## 3. Compile the Go code (sanity check)
