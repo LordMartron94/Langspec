@@ -87,6 +87,9 @@ type parseCompileCtx[TNodeKind ~uint32] struct {
 	transparent bool
 	importAlias string
 
+	// Close delimiters of lexically enclosing nests; used for RecoverSyncBoundary on sync rules.
+	enclosingNoConsumeSyncs []lexarch.TokenKind
+
 	sourceMap map[*syntaxa.Grammar[lexarch.TokenKind, TNodeKind]]*Node
 
 	importedRuleLabels    map[string]syntaxa.GrammarLabel
@@ -889,6 +892,35 @@ func collectSyncTokens(ruleNode *Node, sym *semantics.CompiledSymbolTable) []lex
 	return out
 }
 
+func applyRuleSyncRecovery[TNodeKind ~uint32](
+	ctx *parseCompileCtx[TNodeKind],
+	innerRule syntaxa.ParserRule[TNodeKind],
+	syncTokens []lexarch.TokenKind,
+) syntaxa.ParserRule[TNodeKind] {
+	if len(syncTokens) == 0 {
+		return innerRule
+	}
+	if len(ctx.enclosingNoConsumeSyncs) > 0 {
+		return ctx.builder.Rule.RecoverSyncBoundary(innerRule, syncTokens, ctx.enclosingNoConsumeSyncs)
+	}
+	return ctx.builder.Rule.RecoverSync(innerRule, syncTokens...)
+}
+
+func nestInnerCompileCtx[TNodeKind ~uint32](
+	parent *parseCompileCtx[TNodeKind],
+	closeToken uint32,
+) parseCompileCtx[TNodeKind] {
+	subCtx := *parent
+	subCtx.rootLevel = false
+	if closeToken != 0 {
+		subCtx.enclosingNoConsumeSyncs = append(
+			append([]lexarch.TokenKind(nil), parent.enclosingNoConsumeSyncs...),
+			lexarch.TokenKind(closeToken),
+		)
+	}
+	return subCtx
+}
+
 func getParserSpecInfo[TNodeKind ~uint32](
 	rootNode *Node,
 	env *SemanticEnv,
@@ -1142,7 +1174,7 @@ func compileParseRuleDefinition[TNodeKind ~uint32](ctx *parseCompileCtx[TNodeKin
 		}
 	}
 	if syncTokens := collectSyncTokens(ruleNode, ctx.sym); len(syncTokens) > 0 {
-		compiledExpr = ctx.builder.Rule.RecoverSync(compiledExpr, syncTokens...)
+		compiledExpr = applyRuleSyncRecovery(ctx, compiledExpr, syncTokens)
 	}
 	return ctx.builder.Rule.Define(compiledExpr), ""
 }
@@ -1619,9 +1651,10 @@ delimitersDone:
 		panic("compiler error: nest must use explicit open/close tokens, a pair reference (@Name), or template parameters (Pair or Token Token)")
 	}
 
-	innerRule := extractNestInnerRule(ctx, node)
+	subCtx := nestInnerCompileCtx(ctx, closeToken)
+	innerRule := extractNestInnerRule(&subCtx, node)
 	if syncTokens := collectSyncTokens(node, ctx.sym); len(syncTokens) > 0 {
-		innerRule = ctx.builder.Rule.RecoverSync(innerRule, syncTokens...)
+		innerRule = applyRuleSyncRecovery(&subCtx, innerRule, syncTokens)
 	}
 	if ctx.rootLevel {
 		if ctx.transparent {
@@ -1809,15 +1842,12 @@ func buildExternalTemplateCompileEnv(importedRoot *Node, callerEnv *SemanticEnv)
 }
 
 func extractNestInnerRule[TNodeKind ~uint32](ctx *parseCompileCtx[TNodeKind], node *Node) syntaxa.ParserRule[TNodeKind] {
-	subCtx := *ctx
-	subCtx.rootLevel = false
-
 	if bodyNode := node.FindFirstKind(dslspec.NodeParseNestBody); bodyNode != nil {
-		return compileParseExpression(&subCtx, bodyNode.RequireSingleChild())
+		return compileParseExpression(ctx, bodyNode.RequireSingleChild())
 	}
 
 	if refNode := node.FindFirstKind(dslspec.NodeParseExpressionReference); refNode != nil {
-		return compileParseExpression(&subCtx, refNode)
+		return compileParseExpression(ctx, refNode)
 	}
 
 	panic("compiler error: nest must contain a body or a reference")
