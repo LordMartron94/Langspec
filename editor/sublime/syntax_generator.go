@@ -772,9 +772,14 @@ func buildTransitionsRemapped[TObservation cmp.Ordered, TToken ~uint32, TTokenRo
 	sourceLabel string,
 	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) []contextEntry {
+	dynamicASTs := collectDynamicPatternASTs(transitions)
 	entries := make([]contextEntry, 0, len(transitions))
 	for _, t := range transitions {
-		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative, sourceLabel, peekOpt))
+		literalGuard := ""
+		if word, ok := transitionWordLiteral(t); ok {
+			literalGuard = synthesizeLiteralBoundaryGuardForWord(word, dynamicASTs)
+		}
+		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative, sourceLabel, peekOpt, literalGuard))
 	}
 	return entries
 }
@@ -785,6 +790,7 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TToken ~uint32, TTo
 	labelToRepresentative map[string]string,
 	sourceLabel string,
 	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
+	literalGuard string,
 ) contextEntry {
 	var regexStr string
 	if t.RegexPattern != nil {
@@ -795,6 +801,10 @@ func buildSingleTransitionRemapped[TObservation cmp.Ordered, TToken ~uint32, TTo
 		if err != nil {
 			panic(fmt.Errorf("engine error encountered while converting pattern to RegEx: %w", err))
 		}
+	}
+
+	if !t.IsLookahead && literalGuard != "" {
+		regexStr = applyLiteralBoundaryGuard(regexStr, literalGuard)
 	}
 
 	if t.IsLookahead {
