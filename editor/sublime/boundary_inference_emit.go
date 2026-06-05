@@ -31,20 +31,79 @@ func collectDynamicPatternASTs[TObservation cmp.Ordered, TContext any](
 }
 
 /*
-synthesizeLiteralBoundaryGuardForWord returns (?![FirstChars(w,R1|R2|...)]) for one word literal w.
+synthesizeTransitionLiteralGuard returns a single (?![...]) negative lookahead that makes a literal
+transition safe under Sublime Text's first-match (leftmost-PEG) regex engine, which — unlike the
+runtime DFA lexer — does not perform maximal munch.
 
-For each dynamic regex R in the context, FirstChars(w,R) is computed via DFA prefix continuation
-(pattern.PatternLiteralBoundaryChars). Only R that can extend w beyond |w| contribute; unrelated
-rules yield empty and are skipped. This is a sound one-character over-approximation: coaccessible
-continuation symbols are exact for a single negative-lookahead step, but pathological regexes may
-still over-approximate. Guards apply only to [A-Za-z0-9_] word literals, not punctuation or strings.
+[Context]
+Two independent disambiguation hazards exist when a context emits a pure-literal match:
+  1. Word boundary: a keyword literal (e.g. `in`) must not fire inside a longer identifier matched
+     by a dynamic sibling pattern (e.g. `inputs`). Resolved via DFA prefix continuation against the
+     context's dynamic patterns (pattern.PatternLiteralBoundaryChars).
+  2. Prefix overlap: a literal that is a strict prefix of a sibling literal (e.g. `""` vs `"""`, or
+     `"` vs `""`) must not fire when the longer literal applies. Sublime tries rules top-to-bottom
+     and takes the first match, so the shorter prefix would otherwise win and shadow the longer one.
+     Resolved by forbidding the differentiating next characters of every longer sibling literal.
+Both hazards reduce to "the literal must not be immediately followed by character X", so their
+forbidden-character alphabets are unioned into one lookahead. Word boundary inference applies only to
+[A-Za-z0-9_] literals; prefix-overlap inference applies to every pure literal, punctuation included.
+
+[Side Effects]
+Pure function. Does not mutate inputs.
 */
-func synthesizeLiteralBoundaryGuardForWord(
+func synthesizeTransitionLiteralGuard[TObservation cmp.Ordered, TContext any](
+	tr editor.EditorTransition[TObservation, TContext],
+	dynamicASTs []pattern.RegulaAST[rune],
+	contextLiterals []string,
+) string {
+	if transitionExcludedFromBoundaryInference(tr) {
+		return ""
+	}
+	literal, ok := transitionPureLiteralString(tr)
+	if !ok {
+		return ""
+	}
+
+	var alphabets []pattern.PatternAlphabet[rune]
+	if isWordLiteralText(literal) {
+		if alpha, ok := literalBoundaryAlphabetForWord(literal, dynamicASTs); ok {
+			alphabets = append(alphabets, alpha)
+		}
+	}
+	if alpha, ok := literalPrefixOverlapAlphabet(literal, contextLiterals); ok {
+		alphabets = append(alphabets, alpha)
+	}
+	if len(alphabets) == 0 {
+		return ""
+	}
+
+	guard, err := pattern.PatternAlphabetToNegativeLookahead(pattern.PatternAlphabetUnion(alphabets...))
+	if err != nil {
+		return ""
+	}
+	return guard
+}
+
+/*
+literalBoundaryAlphabetForWord returns the union of characters that any dynamic sibling pattern can
+use to extend word w beyond |w|, i.e. the characters w must not be followed by to remain a standalone
+keyword. Returns false when no dynamic pattern can extend w.
+
+[Algorithmic Approach]
+For each dynamic regex R, FirstChars(w,R) is computed via DFA prefix continuation
+(pattern.PatternLiteralBoundaryChars). This is a sound one-character over-approximation: coaccessible
+continuation symbols are exact for a single negative-lookahead step, though pathological regexes may
+over-approximate.
+
+[Side Effects]
+Pure function. Does not mutate inputs.
+*/
+func literalBoundaryAlphabetForWord(
 	word string,
 	dynamicASTs []pattern.RegulaAST[rune],
-) string {
+) (pattern.PatternAlphabet[rune], bool) {
 	if word == "" || len(dynamicASTs) == 0 {
-		return ""
+		return pattern.PatternAlphabet[rune]{}, false
 	}
 
 	var parts []pattern.PatternAlphabet[rune]
@@ -56,20 +115,81 @@ func synthesizeLiteralBoundaryGuardForWord(
 		parts = append(parts, alpha)
 	}
 	if len(parts) == 0 {
-		return ""
+		return pattern.PatternAlphabet[rune]{}, false
 	}
-	combined := parts[0]
-	for i := 1; i < len(parts); i++ {
-		combined = pattern.PatternAlphabetUnion(combined, parts[i])
-	}
-	guard, err := pattern.PatternAlphabetToNegativeLookahead(combined)
-	if err != nil {
-		return ""
-	}
-	return guard
+	return pattern.PatternAlphabetUnion(parts...), true
 }
 
-func transitionWordLiteral[TObservation cmp.Ordered, TContext any](
+/*
+literalPrefixOverlapAlphabet returns the set of characters that immediately follow literal in any
+sibling literal that has literal as a strict prefix. Forbidding these characters via a negative
+lookahead prevents the shorter literal from shadowing a longer sibling under Sublime's first-match
+engine (e.g. `""` must not match the opening of `"""`). Returns false when literal is not a strict
+prefix of any sibling.
+
+[Side Effects]
+Pure function. Does not mutate inputs.
+*/
+func literalPrefixOverlapAlphabet(
+	literal string,
+	siblingLiterals []string,
+) (pattern.PatternAlphabet[rune], bool) {
+	if literal == "" {
+		return pattern.PatternAlphabet[rune]{}, false
+	}
+
+	seen := map[rune]bool{}
+	var ranges []pattern.CharRange[rune]
+	for _, sibling := range siblingLiterals {
+		if len(sibling) <= len(literal) || !strings.HasPrefix(sibling, literal) {
+			continue
+		}
+		next := []rune(sibling[len(literal):])[0]
+		if seen[next] {
+			continue
+		}
+		seen[next] = true
+		ranges = append(ranges, pattern.CharRange[rune]{Lo: next, Hi: next})
+	}
+	if len(ranges) == 0 {
+		return pattern.PatternAlphabet[rune]{}, false
+	}
+	return pattern.PatternAlphabetCollect(boundaryRegexFactory.Class(ranges...))
+}
+
+/*
+collectPureLiteralStrings returns the raw literal text of every pure-literal transition eligible for
+boundary inference, used as the sibling set for prefix-overlap disambiguation. Lookahead transitions
+and transitions already carrying a negative lookahead are excluded, mirroring
+transitionExcludedFromBoundaryInference.
+
+[Side Effects]
+Pure function. Does not mutate inputs.
+*/
+func collectPureLiteralStrings[TObservation cmp.Ordered, TContext any](
+	transitions []editor.EditorTransition[TObservation, TContext],
+) []string {
+	var out []string
+	for _, tr := range transitions {
+		if transitionExcludedFromBoundaryInference(tr) {
+			continue
+		}
+		if literal, ok := transitionPureLiteralString(tr); ok {
+			out = append(out, literal)
+		}
+	}
+	return out
+}
+
+/*
+transitionPureLiteralString extracts the raw literal text of a pure-literal transition, decoded from
+the source runes rather than the regex form so that prefix comparison and next-character extraction
+are not corrupted by regex escaping. Returns false for non-literal, non-rune, or empty transitions.
+
+[Side Effects]
+Pure function. Does not mutate inputs.
+*/
+func transitionPureLiteralString[TObservation cmp.Ordered, TContext any](
 	tr editor.EditorTransition[TObservation, TContext],
 ) (string, bool) {
 	if !observationIsRune[TObservation]() {
@@ -77,9 +197,6 @@ func transitionWordLiteral[TObservation cmp.Ordered, TContext any](
 	}
 	if tr.RegexPattern != nil {
 		if !regexPatternIsPlainLiteral(*tr.RegexPattern) {
-			return "", false
-		}
-		if !isWordLiteralText(*tr.RegexPattern) {
 			return "", false
 		}
 		return *tr.RegexPattern, true
@@ -91,22 +208,15 @@ func transitionWordLiteral[TObservation cmp.Ordered, TContext any](
 	if !ok {
 		return "", false
 	}
-	word := patternLiteralString(ast)
-	if word == "" || !isWordLiteralText(word) {
+
+	var runes []rune
+	ast.Accept(pattern.RegulaVisitor[rune]{
+		VisitLiteral: func(values []rune) { runes = append(runes, values...) },
+	})
+	if len(runes) == 0 {
 		return "", false
 	}
-	return word, true
-}
-
-func patternLiteralString(ast pattern.RegulaAST[rune]) string {
-	// PatternIsPureLiteral implies literal runes only; read via ToRegEx is wrong.
-	// Walk not exported — use Regex from literals by compiling small helper in pattern package.
-	re, err := ast.ToRegEx()
-	if err != nil {
-		return ""
-	}
-	// ToRegEx on pure literal may escape; for ASCII keywords re equals text.
-	return re
+	return string(runes), true
 }
 
 func isWordLiteralText(s string) bool {

@@ -773,12 +773,10 @@ func buildTransitionsRemapped[TObservation cmp.Ordered, TToken ~uint32, TTokenRo
 	peekOpt *PeekEmitConfig[TObservation, TToken, TTokenRole],
 ) []contextEntry {
 	dynamicASTs := collectDynamicPatternASTs(transitions)
+	contextLiterals := collectPureLiteralStrings(transitions)
 	entries := make([]contextEntry, 0, len(transitions))
 	for _, t := range transitions {
-		literalGuard := ""
-		if word, ok := transitionWordLiteral(t); ok {
-			literalGuard = synthesizeLiteralBoundaryGuardForWord(word, dynamicASTs)
-		}
+		literalGuard := synthesizeTransitionLiteralGuard(t, dynamicASTs, contextLiterals)
 		entries = append(entries, buildSingleTransitionRemapped(t, config, labelToRepresentative, sourceLabel, peekOpt, literalGuard))
 	}
 	return entries
