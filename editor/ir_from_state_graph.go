@@ -643,6 +643,11 @@ func buildAmbientTransitionsForToken[
 			pat = *override.Pattern
 		}
 
+		var regexPat *string
+		if override.PatternRegex != nil {
+			regexPat = override.PatternRegex
+		}
+
 		matchCtx := config.contextProducer(edCtx)
 		if override.MatchContext != nil {
 			matchCtx = *override.MatchContext
@@ -651,6 +656,7 @@ func buildAmbientTransitionsForToken[
 		if override.ForeignPayload != nil {
 			t := EditorTransition[TObservation, TContext]{
 				OnPattern:      pat,
+				RegexPattern:   regexPat,
 				MatchContext:   matchCtx,
 				Captures:       override.Captures,
 				Operation:      STACK_EMBED,
@@ -665,6 +671,7 @@ func buildAmbientTransitionsForToken[
 			bodyState := getOrCreateDelimitedState(override.DelimitedPayload, delimitedStates, sanitizer)
 			t := EditorTransition[TObservation, TContext]{
 				OnPattern:    pat,
+				RegexPattern: regexPat,
 				MatchContext: matchCtx,
 				Captures:     override.Captures,
 				Operation:    STACK_PUSH,
@@ -677,6 +684,7 @@ func buildAmbientTransitionsForToken[
 
 		t := EditorTransition[TObservation, TContext]{
 			OnPattern:    pat,
+			RegexPattern: regexPat,
 			MatchContext: matchCtx,
 			Captures:     override.Captures,
 			Operation:    STACK_NONE,

@@ -227,16 +227,18 @@ func buildContextsMap[TObservation cmp.Ordered, TToken ~uint32, TTokenRole compa
 			})
 		}
 
-		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
-			mergedMeta := mergeInheritedSetChainMetaScope(metaScope, incomingMetaEdges[label])
-			metaScope = mergedMeta
+		metaScope := mergeInheritedSetChainMetaScope(
+			config.ExtractMetaScope(state.Context),
+			incomingMetaEdges[label],
+		)
+		if metaScope != "" {
 			// Always emit meta_scope on each parse context that has semantic meta.
 			// SET-chain suppression was removed: Sublime does not reliably inherit a
 			// parent context's meta_scope onto matches in a child context reached only
 			// via set:, so skipping meta_scope on those targets left tail tokens unscoped.
 			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}
-		if includePrototype := extractIncludePrototype(config, state.Context); includePrototype != nil {
+		if includePrototype := includePrototypeForState(state, config); includePrototype != nil {
 			entries = append([]contextEntry{{MetaIncludePrototype: includePrototype}}, entries...)
 		}
 
@@ -484,7 +486,7 @@ func localStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	sb.WriteString(metaScope)
 	sb.WriteString("||")
 	sb.WriteString("include_prototype=")
-	sb.WriteString(triStateBoolSignature(extractIncludePrototype(config, state.Context)))
+	sb.WriteString(triStateBoolSignature(includePrototypeForState(state, config)))
 	sb.WriteString("||")
 
 	if state.ImmediatePushTarget != nil {
@@ -516,7 +518,7 @@ func fullStateEmissionSignature[TObservation cmp.Ordered, TContext any](
 	sb.WriteString(metaScope)
 	sb.WriteString("||")
 	sb.WriteString("include_prototype=")
-	sb.WriteString(triStateBoolSignature(extractIncludePrototype(config, state.Context)))
+	sb.WriteString(triStateBoolSignature(includePrototypeForState(state, config)))
 	sb.WriteString("||")
 
 	if state.ImmediatePushTarget != nil {
@@ -908,10 +910,11 @@ func buildLexModeContexts[TObservation cmp.Ordered, TToken ~uint32, TTokenRole c
 		var lExtra map[string][]contextEntry
 		entries, lExtra = mergeIdenticalMatchesToBranchPoints(entries, label, usedNames)
 		maps.Copy(branchExtras, lExtra)
-		if metaScope := config.ExtractMetaScope(state.Context); metaScope != "" {
+		metaScope := config.ExtractMetaScope(state.Context)
+		if metaScope != "" {
 			entries = append([]contextEntry{{MetaScope: &metaScope}}, entries...)
 		}
-		if includePrototype := extractIncludePrototype(config, state.Context); includePrototype != nil {
+		if includePrototype := includePrototypeForState(state, config); includePrototype != nil {
 			entries = append([]contextEntry{{MetaIncludePrototype: includePrototype}}, entries...)
 		}
 		if state.HasFallthroughPop {
@@ -965,8 +968,9 @@ func validateContextReferences(contextsMap map[string][]contextEntry) {
 }
 
 type incomingMetaEdge struct {
-	SourceMeta string
-	Operation  editor.StackOperation
+	SourceLabel string
+	SourceMeta  string
+	Operation   editor.StackOperation
 }
 
 func buildIncomingMetaEdges[TObservation cmp.Ordered, TContext any](
@@ -983,9 +987,14 @@ func buildIncomingMetaEdges[TObservation cmp.Ordered, TContext any](
 				if remapped, ok := labelToRepresentative[targetLabel]; ok {
 					targetLabel = remapped
 				}
+				sourceLabel := determineContextLabel(sourceState.Label)
+				if remapped, ok := labelToRepresentative[sourceLabel]; ok {
+					sourceLabel = remapped
+				}
 				incoming[targetLabel] = append(incoming[targetLabel], incomingMetaEdge{
-					SourceMeta: sourceMeta,
-					Operation:  tr.Operation,
+					SourceLabel: sourceLabel,
+					SourceMeta:  sourceMeta,
+					Operation:   tr.Operation,
 				})
 			}
 		}
@@ -1284,6 +1293,26 @@ func extractIncludePrototype[TContext any](config ExtractionConfig[TContext], ct
 		return nil
 	}
 	return config.ExtractIncludePrototype(ctx)
+}
+
+// includePrototypeForState resolves whether a emitted context should set
+// meta_include_prototype: false using only data on the state itself: the state's
+// semantic context and its outgoing transition match contexts (client manifest).
+// Prototype exclusion is never inferred from unrelated incoming SET edges.
+func includePrototypeForState[TObservation cmp.Ordered, TContext any](
+	state editor.EditorState[TObservation, TContext],
+	config ExtractionConfig[TContext],
+) *bool {
+	if local := extractIncludePrototype(config, state.Context); local != nil {
+		return local
+	}
+	for _, tr := range state.Transitions {
+		if mc := extractIncludePrototype(config, tr.MatchContext); mc != nil && !*mc {
+			disabled := false
+			return &disabled
+		}
+	}
+	return nil
 }
 
 func triStateBoolSignature(v *bool) string {

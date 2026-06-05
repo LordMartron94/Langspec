@@ -37,13 +37,14 @@ runtime DFA lexer — does not perform maximal munch.
 
 [Context]
 Two independent disambiguation hazards exist when a context emits a pure-literal match:
-  1. Word boundary: a keyword literal (e.g. `in`) must not fire inside a longer identifier matched
-     by a dynamic sibling pattern (e.g. `inputs`). Resolved via DFA prefix continuation against the
-     context's dynamic patterns (pattern.PatternLiteralBoundaryChars).
-  2. Prefix overlap: a literal that is a strict prefix of a sibling literal (e.g. `""` vs `"""`, or
-     `"` vs `""`) must not fire when the longer literal applies. Sublime tries rules top-to-bottom
-     and takes the first match, so the shorter prefix would otherwise win and shadow the longer one.
-     Resolved by forbidding the differentiating next characters of every longer sibling literal.
+ 1. Word boundary: a keyword literal (e.g. `in`) must not fire inside a longer identifier matched
+    by a dynamic sibling pattern (e.g. `inputs`). Resolved via DFA prefix continuation against the
+    context's dynamic patterns (pattern.PatternLiteralBoundaryChars).
+ 2. Prefix overlap: a literal that is a strict prefix of a sibling literal (e.g. `""` vs `"""`, or
+    `"` vs `""`) must not fire when the longer literal applies. Sublime tries rules top-to-bottom
+    and takes the first match, so the shorter prefix would otherwise win and shadow the longer one.
+    Resolved by forbidding the differentiating next characters of every longer sibling literal.
+
 Both hazards reduce to "the literal must not be immediately followed by character X", so their
 forbidden-character alphabets are unioned into one lookahead. Word boundary inference applies only to
 [A-Za-z0-9_] literals; prefix-overlap inference applies to every pure literal, punctuation included.

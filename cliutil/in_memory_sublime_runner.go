@@ -80,9 +80,10 @@ func AdaptInMemorySublimeManifest[T TokenConstraint, N NodeConstraint](in toolch
 
 	for k, v := range in.NodeBindings {
 		binding := toolchain.NodeBinding[string]{
-			Scopes:      v.Scopes,
-			MetaScope:   v.MetaScope,
-			TokenScopes: make(map[string][]string),
+			Scopes:           v.Scopes,
+			MetaScope:        v.MetaScope,
+			ExcludePrototype: v.ExcludePrototype,
+			TokenScopes:      make(map[string][]string),
 		}
 		for tk, tv := range v.TokenScopes {
 			binding.TokenScopes[manifestTokenKeyForInMemoryRunner(tk)] = tv
