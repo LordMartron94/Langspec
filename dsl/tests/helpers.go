@@ -27,7 +27,7 @@ func setupTestCompiler() (
 			panic("too much memory for a test")
 		}
 		return newSize
-	})
+	}, "langspec test")
 
 	scratchAllocFn = func(sizeBytes, alignment uint64) memcore.MarkRaw {
 		return memforge.DynamicLinearAllocatorMallocUnsafe(scratchAllocator, sizeBytes, alignment)

@@ -14,7 +14,7 @@ func semanticIRTestAllocatorCreate() (func(uint64, uint64) memcore.MarkRaw, func
 			return currentCap * 2
 		}
 		return neededCap
-	})
+	}, "semantic ir test")
 	alloc := func(sizeBytes, alignment uint64) memcore.MarkRaw {
 		return memforge.DynamicLinearAllocatorMallocUnsafe(scratch, sizeBytes, alignment)
 	}

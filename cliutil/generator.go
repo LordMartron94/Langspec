@@ -29,7 +29,7 @@ func NewGenerator(specPath string) *Generator {
 			panic("langspec/cliutil: allocator too large")
 		}
 		return newSize
-	})
+	}, "langspec cliutil")
 
 	allocFn := func(sizeBytes, alignment uint64) memcore.MarkRaw {
 		return memforge.DynamicLinearAllocatorMallocUnsafe(scratch, sizeBytes, alignment)

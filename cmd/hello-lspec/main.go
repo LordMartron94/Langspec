@@ -27,7 +27,7 @@ func main() {
 			panic("allocator cap exceeded")
 		}
 		return newSize
-	})
+	}, "hello-lspec")
 	defer memforge.DynamicLinearAllocatorDestroy(scratchAllocator)
 
 	scratchAllocFn := memarch.AllocationFn(func(sizeBytes, alignment uint64) memcore.MarkRaw {
